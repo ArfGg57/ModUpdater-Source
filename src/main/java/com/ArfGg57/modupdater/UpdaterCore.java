@@ -39,9 +39,11 @@ public class UpdaterCore {
             }
 
             int modsTasks = 0;
+            JSONArray mods = new JSONArray(); // Initialize empty array
             if (latestConfig.has("mods_json_url")) {
-                JSONArray modsArr = FileUtils.readJsonArrayFromUrl(latestConfig.getString("mods_json_url"));
-                modsTasks = modsArr.length();
+                gui.show("Fetching mods list...");
+                mods = FileUtils.readJsonArrayFromUrl(latestConfig.getString("mods_json_url"));
+                modsTasks = mods.length();
             }
 
             int configTasks = latestConfig.has("configs_zip_url") && latestConfig.getString("configs_zip_url").length() > 0 ? 1 : 0;
@@ -51,7 +53,8 @@ public class UpdaterCore {
             }
 
             final int totalTasks = deleteTasks + modsTasks + configTasks + filesTasks;
-            int completedTasks = 0;
+            // Use a final array wrapper so the value can be safely modified inside the inner class/callback.
+            final int[] completedTasks = new int[] { 0 };
 
             // 3. Multi-version delete
             if (latestConfig.has("delete_history_urls")) {
@@ -61,41 +64,37 @@ public class UpdaterCore {
                     gui.show("Fetching delete list: " + url);
                     JSONArray deleteList = FileUtils.readJsonArrayFromUrl(url);
                     FileUtils.deleteFiles(deleteList, latestConfig.optBoolean("backup_before_delete", true), gui);
-                    completedTasks++;
-                    updateProgress(completedTasks, totalTasks);
+                    completedTasks[0]++;
+                    updateProgress(completedTasks[0], totalTasks);
                 }
             }
 
             // 4. Download mods
-            if (latestConfig.has("mods_json_url")) {
-                String modsUrl = latestConfig.getString("mods_json_url");
-                gui.show("Fetching mods list...");
-                JSONArray mods = FileUtils.readJsonArrayFromUrl(modsUrl);
-                // Downloader will update GUI overall progress per-mod; to integrate with totalTasks,
-                // we allow Downloader to handle per-mod progress and also bump completedTasks as each mod finishes.
+            if (modsTasks > 0) {
+                // Downloader will update GUI overall progress per-mod and use the callback
+                // to update the UpdaterCore's global progress count.
                 Downloader.downloadModsWithCallback(mods, gui, new Downloader.ProgressCallback() {
                     @Override
-                    public void onItemComplete() {
-                        // This callback will be invoked by Downloader when each mod finishes.
-                        // We increment the completedTasks from here via a synchronized approach below.
+                    // Use synchronized to ensure thread-safe updates to the completedTasks counter
+                    public synchronized void onItemComplete() {
+                        completedTasks[0]++;
+                        updateProgress(completedTasks[0], totalTasks);
                     }
                 });
-                // After downloadMods returns, we assume modsTasks completed (Downloader sets GUI overall percent)
-                completedTasks += modsTasks;
-                updateProgress(completedTasks, totalTasks);
+                // When downloadModsWithCallback returns, ALL mods are done.
             }
 
             // 5. Download and extract configs
-            if (latestConfig.has("configs_zip_url") && latestConfig.getString("configs_zip_url").length() > 0) {
+            if (configTasks > 0) {
                 String cfgUrl = latestConfig.getString("configs_zip_url");
                 gui.show("Downloading configs...");
                 FileUtils.downloadAndExtractZip(cfgUrl, "config/", true, gui);
-                completedTasks++;
-                updateProgress(completedTasks, totalTasks);
+                completedTasks[0]++;
+                updateProgress(completedTasks[0], totalTasks);
             }
 
             // 6. Extra files (optional)
-            if (latestConfig.has("files")) {
+            if (filesTasks > 0) {
                 JSONArray files = latestConfig.getJSONArray("files");
                 for (int i = 0; i < files.length(); i++) {
                     JSONObject file = files.getJSONObject(i);
@@ -106,15 +105,15 @@ public class UpdaterCore {
                             file.optBoolean("overwrite", true),
                             gui
                     );
-                    completedTasks++;
-                    updateProgress(completedTasks, totalTasks);
+                    completedTasks[0]++;
+                    updateProgress(completedTasks[0], totalTasks);
                 }
             }
 
             // 7. Update local version
             FileUtils.writeVersion(localVersionPath, remoteVersion);
             gui.setProgress(100);
-            gui.show("Update complete!");
+            gui.show("Update complete! Please restart Minecraft.");
 
         } catch (Exception e) {
             gui.show("Update failed: " + e.getMessage());
@@ -127,6 +126,7 @@ public class UpdaterCore {
             gui.setProgress(100);
             return;
         }
+        // Ensure percent calculation is done using long to prevent overflow
         int percent = (int) ((completed * 100L) / total);
         if (percent < 0) percent = 0;
         if (percent > 100) percent = 100;
