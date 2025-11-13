@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module external.linked.project.id="ModUpdater-Source:test" external.linked.project.path="$MODULE_DIR$/../.." external.root.project.path="$MODULE_DIR$/../.." external.system.id="GRADLE" external.system.module.group="com.ArfGg57.modupdater" external.system.module.type="sourceSet" external.system.module.version="1.0" type="JAVA_MODULE" version="4">
+  <component name="NewModuleRootManager" inherit-compiler-output="true">
+    <exclude-output />
+    <content url="file://$MODULE_DIR$/../../src/test" />
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+    <orderEntry type="module" module-name="ModUpdater-Source.main" />
+    <orderEntry type="module-library">
+      <library name="Gradle: json-20180813.jar">
+        <CLASSES>
+          <root url="jar://$MODULE_DIR$/../../libs/json-20180813.jar!/" />
+        </CLASSES>
+        <JAVADOC />
+        <SOURCES />
+      </library>
+    </orderEntry>
+    <orderEntry type="library" name="Gradle: :forgeBin:1.7.10-10.13.4.1614-1.7.10" level="project" />
+    <orderEntry type="module" module-name="ModUpdater-Source.api" scope="PROVIDED" />
+    <orderEntry type="module-library" scope="RUNTIME">
+      <library>
+        <CLASSES>
+          <root url="file://$USER_HOME$/Downloads/gradle-4.5/caches/minecraft/net/minecraftforge/forge/1.7.10-10.13.4.1614-1.7.10/start" />
+        </CLASSES>
+        <JAVADOC />
+        <SOURCES />
+      </library>
+    </orderEntry>
+  </component>
+  <component name="TestModuleProperties" production-module="ModUpdater-Source.main" />
+</module>
