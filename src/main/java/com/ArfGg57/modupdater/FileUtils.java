@@ -30,13 +30,25 @@ public class FileUtils {
         return new JSONObject(s);
     }
 
+    /**
+     * Reads JSON from a URL without a specific API key (used for Modrinth, direct URLs).
+     */
     public static JSONObject readJsonFromUrl(String urlStr) throws Exception {
-        String s = readUrlToString(urlStr);
+        String s = readUrlToString(urlStr, null); // Pass null for API key
         return new JSONObject(new JSONTokener(s));
     }
 
+    /**
+     * Reads JSON from a URL with an optional API key (used for CurseForge proxy).
+     */
+    public static JSONObject readJsonFromUrl(String urlStr, String apiKey) throws Exception {
+        String s = readUrlToString(urlStr, apiKey);
+        return new JSONObject(new JSONTokener(s));
+    }
+
+
     public static JSONArray readJsonArrayFromUrl(String urlStr) throws Exception {
-        String s = readUrlToString(urlStr);
+        String s = readUrlToString(urlStr, null); // Pass null for API key
         return new JSONArray(new JSONTokener(s));
     }
 
@@ -55,9 +67,10 @@ public class FileUtils {
         }
     }
 
-    // 🛑 CRITICAL FIX: Changed from simple url.openStream() to HttpURLConnection
-    // to allow setting User-Agent and timeouts for API access.
-    private static String readUrlToString(String urlStr) throws Exception {
+    /**
+     * The core network reader. Accepts an optional apiKey to set the Authorization header.
+     */
+    private static String readUrlToString(String urlStr, String apiKey) throws Exception {
         HttpURLConnection connection = null;
         try {
             URL url = new URL(urlStr);
@@ -68,6 +81,14 @@ public class FileUtils {
             connection.setRequestProperty("User-Agent", API_USER_AGENT);
             connection.setConnectTimeout(API_TIMEOUT);
             connection.setReadTimeout(API_TIMEOUT);
+            connection.setInstanceFollowRedirects(true); // Ensure redirects are followed
+
+            // --- API Key Logic (NEW) ---
+            if (apiKey != null && !apiKey.isEmpty()) {
+                // Assuming the Curse.Tools proxy uses the standard Bearer token format
+                connection.setRequestProperty("Authorization", "Bearer " + apiKey);
+            }
+            // ---------------------------
 
             int responseCode = connection.getResponseCode();
 
@@ -81,6 +102,9 @@ public class FileUtils {
             // Read the successful response stream
             return readStream(connection.getInputStream());
 
+        } catch (IOException e) {
+            // Catch all IO exceptions (like connection refused, connection timed out, SSL failures)
+            throw new IOException("Failed to connect to " + urlStr + ". Check network/firewall.", e);
         } finally {
             if (connection != null) {
                 connection.disconnect();
