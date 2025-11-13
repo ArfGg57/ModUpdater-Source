@@ -1,30 +1,59 @@
 ModUpdater
 
-ModUpdater is a Minecraft/Forge 1.7.10 updater that automatically installs mods, removes obsolete files, and updates configuration files.
+ModUpdater is a Forge 1.7.10 Java mod that automates modpack updates. It downloads mods, deletes obsolete files, extracts new configs, and handles multi-version updates.
 
-It relies on a Modpack Repository containing all mods, configs, and manifests.
+The project uses a two-repo system:
 
-Configuration
-Local Config (config/modupdater_config.json)
+ModUpdater – the lightweight updater mod installed in Minecraft.
+
+ModpackRepo – contains all mods, configs, zips, and JSON manifests for each version.
+
+Repository Structure
+1️⃣ ModUpdater (Updater Mod Repository)
+ModUpdater/
+├── build.gradle                     # Gradle build file
+├── settings.gradle                  # Gradle settings
+├── src/
+│   └── main/
+│       ├── java/
+│       │   └── com/yourname/modupdater/
+│       │       ├── ModUpdater.java        # Forge @Mod entry point
+│       │       ├── UpdaterCore.java       # Main orchestrator
+│       │       ├── Downloader.java        # HTTP downloads + CurseForge/Modrinth stubs
+│       │       ├── FileUtils.java         # Delete, backup, unzip, prune
+│       │       └── GuiUpdater.java        # Swing GUI for progress/status
+│       └── resources/
+│           └── META-INF/mods.toml        # Forge mod metadata
+├── config_example/
+│   └── modupdater_config.json           # Local config pointing to ModpackRepo
+├── README.md
+└── LICENSE
+
+
+modupdater_config.json points to the remote latest_config.json in the modpack repo:
+
 {
 "remote_config_url": "https://raw.githubusercontent.com/YourName/ModpackRepo/main/latest_config.json"
 }
 
+2️⃣ ModpackRepo (Modpack Repository)
+ModpackRepo/
+├── latest_config.json                   # Central manifest for the updater
+└── versions/
+├── 1.1/
+│   ├── mods.json
+│   ├── delete.json
+│   └── configs.zip
+├── 1.2/
+│   ├── mods.json
+│   ├── delete.json
+│   └── configs.zip
+└── 1.3/
+├── mods.json
+├── delete.json
+└── configs.zip
 
-Purpose: Points the updater to the remote latest_config.json.
-
-Only this file is needed locally to let ModUpdater know where to fetch the latest version.
-
-Version Tracking (modpack_version.txt)
-
-Contains the current installed modpack version, e.g.:
-
-1.2
-
-
-ModUpdater uses this to determine if an update is needed.
-
-Remote Manifest (latest_config.json)
+3️⃣ latest_config.json Example
 {
 "version": "1.3",
 "mods_json_url": "https://raw.githubusercontent.com/YourName/ModpackRepo/main/versions/1.3/mods.json",
@@ -47,23 +76,23 @@ Remote Manifest (latest_config.json)
 }
 
 
-Fields:
+Fields explained:
 
-version → Latest modpack version
+version → latest version string
 
-mods_json_url → URL to the version-specific mods.json
+mods_json_url → points to the latest mods.json
 
-configs_zip_url → URL to the version-specific configs zip
+configs_zip_url → points to the latest configs.zip
 
-delete_history_urls → URLs to delete.json for old versions (multi-version cleanup)
+delete_history_urls → handles multi-version cleanup (oldest → newest)
 
-files → Optional extra files (zips, resource packs)
+files → optional extra files or zips
 
-backup_before_delete → Backup files before deletion
+backup_before_delete → backup old files before deletion
 
-prune_mods → Remove mods not listed in mods.json
+prune_mods → remove mods not listed in mods.json (optional)
 
-Mods List (mods.json per version)
+4️⃣ mods.json Example (per version)
 [
 {
 "source": "url",
@@ -81,11 +110,9 @@ Mods List (mods.json per version)
 ]
 
 
-Must list all mods for that version to ensure clients skipping versions update correctly.
+Must include all mods for that version to ensure clients skipping versions get fully updated.
 
-Supports url, curseforge, and modrinth sources.
-
-Delete List (delete.json per version)
+5️⃣ delete.json Example (per version)
 [
 "mods/oldmod-1.0.jar",
 "mods/legacy_folder/",
@@ -93,54 +120,65 @@ Delete List (delete.json per version)
 ]
 
 
-Lists files and directories to remove before installing new mods/configs.
+Lists files/directories to delete before extracting new configs/mods.
 
-Multi-version delete ensures skipped updates are cleaned properly.
+Multi-version delete ensures skipped versions are cleaned properly.
 
-Configs Zip (configs.zip per version)
+6️⃣ configs.zip Contents
 
-Contains all updated/new config files for the version.
+Contains all updated/new config files for that version.
 
 Extraction rules:
 
-overwrite=true → Replace existing configs
+overwrite=true → replaces existing configs
 
-overwrite=false → Keep existing configs
+overwrite=false → keeps existing configs
 
-Works together with delete.json to remove obsolete configs.
+Works with delete.json to remove obsolete configs.
 
-Update Flow
+7️⃣ Update Flow
 
-Read local version (modpack_version.txt)
+Check local version (modpack_version.txt)
 
-Download latest_config.json
+Download latest_config.json from GitHub
 
-If local < remote:
+Compare versions → if local < remote:
 
 Apply multi-version deletes (delete_history_urls)
 
-Download and install mods from mods.json
+Download & install mods from mods.json
 
-Extract configs.zip
+Download & extract configs.zip
 
 Download extra files (optional)
 
 Optionally prune mods
 
-Update modpack_version.txt to the new version
+Write local version = remote version
 
 GUI shows: Update complete
 
 Else → GUI shows: Up to date
 
-Backups
+8️⃣ File Classes / Responsibilities
+Class	Responsibility
+ModUpdater.java	Forge entry point, launches updater + GUI
+UpdaterCore.java	Orchestrates full update workflow
+Downloader.java	Downloads HTTP files, CurseForge/Modrinth stubs
+FileUtils.java	Delete, backup, unzip, prune, extra files
+GuiUpdater.java	Swing GUI: status + progress
+9️⃣ Backups
 
 Stored in modupdater_backups/backup-<timestamp>.zip
 
-Protects user-edited configs/mods before deletion
+Only deletes files that exist and are listed in delete.json
 
-Extra Files
+Protects user-edited configs/mods before removal
 
-Can include zips, single files, or resource packs.
+🔟 Extra Files (from latest_config.json)
+
+Can include zips, single files, or resource packs
 
 Fields: url, destination, extract, overwrite
+
+Flexible system for installing additional files beyond mods/configs
