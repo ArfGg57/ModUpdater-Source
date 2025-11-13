@@ -6,7 +6,6 @@
 /.metadata
 /.classpath
 /.project
-/libs
 
 # idea
 /out
@@ -24,6 +23,7 @@
 
 # other
 /run
+/libs
 
 # CurseForge configuration
 /curseforge.properties
