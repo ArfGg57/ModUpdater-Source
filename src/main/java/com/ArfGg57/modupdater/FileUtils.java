@@ -295,18 +295,49 @@ public class FileUtils {
 
     // Fixed resource leaks by using try-with-resources
     public static void writeVersion(String path, String version) throws Exception {
-        try (FileOutputStream fos = new FileOutputStream(new File(path))) {
-            File out = new File(path);
-            if (!out.getParentFile().exists()) out.getParentFile().mkdirs();
-            fos.write(version.getBytes("UTF-8"));
+        File out = new File(path);
+        if (!out.getParentFile().exists()) out.getParentFile().mkdirs();
+
+        try (FileOutputStream fos = new FileOutputStream(out)) {
+            // NOTE: JSON files require quotes around simple string values
+            String jsonVersion = "\"" + version + "\"";
+            fos.write(jsonVersion.getBytes("UTF-8"));
         }
     }
 
     public static String readVersion(String path) {
         try {
-            return readFileToString(path).trim();
+            // Read file content, trim, and then remove the surrounding JSON quotes (")
+            String content = readFileToString(path).trim();
+            if (content.startsWith("\"") && content.endsWith("\"")) {
+                return content.substring(1, content.length() - 1);
+            }
+            return content; // Return as is if not quoted
         } catch (Exception e) {
             return "0.0";
+        }
+    }
+
+    /**
+     * Ensures the directory structure for the given path exists, and the file itself exists with default content.
+     */
+    public static void ensureFileAndDirectoryExist(String path, String defaultContent) throws IOException {
+        File file = new File(path);
+        File parentDir = file.getParentFile();
+
+        // 1. Ensure parent directories exist
+        if (parentDir != null && !parentDir.exists()) {
+            if (!parentDir.mkdirs()) {
+                throw new IOException("Failed to create directory: " + parentDir.getAbsolutePath());
+            }
+        }
+
+        // 2. Ensure file exists, writing default content if necessary
+        if (!file.exists()) {
+            try (FileOutputStream fos = new FileOutputStream(file)) {
+                // Write the default content (e.g., {"remote_config_url":""} or "")
+                fos.write(defaultContent.getBytes("UTF-8"));
+            }
         }
     }
 }
