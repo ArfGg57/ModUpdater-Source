@@ -1,0 +1,15 @@
+[
+  {
+    "modid": "modupdater",
+    "name": "Mod Updater",
+    "description": "Automatically updates your modpack.",
+    "version": "1.0",
+    "authorList": ["ArfGg57"],
+    "credits": "",
+    "url": "",
+    "updateUrl": "",
+    "logoFile": "",
+    "screenshots": [],
+    "dependencies": []
+  }
+]
