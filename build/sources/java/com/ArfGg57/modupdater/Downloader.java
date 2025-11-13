@@ -11,7 +11,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Downloader with retries, file:// support, progress reporting and a callback hook.
+ * Downloader with retries, file:// support, progress reporting, and a callback hook.
  */
 public class Downloader {
 
@@ -26,72 +26,94 @@ public class Downloader {
 
     /**
      * Download mods and update GUI progress per-item.
-     * Simpler: does not call back to UpdaterCore.
      */
     public static void downloadMods(final JSONArray mods, final GuiUpdater gui) {
         downloadModsWithCallback(mods, gui, null);
     }
 
     /**
-     * Download mods and call callback.onItemComplete() after each finished mod (success or fail).
+     * Download mods and call callback.onItemComplete() after each finished mod.
      */
     public static void downloadModsWithCallback(final JSONArray mods, final GuiUpdater gui, final ProgressCallback callback) {
-        if (mods == null) {
-            gui.show("No mods to download (mods == null).");
+        if (mods == null || mods.length() == 0) {
+            gui.show("No mods to download.");
             gui.setProgress(100);
             return;
         }
 
-        final int total = mods.length();
-        if (total == 0) {
-            gui.show("No mods listed to download.");
-            gui.setProgress(100);
-            return;
-        }
-
-        gui.show("Starting download of " + total + " mods.");
+        gui.show("Starting download of " + mods.length() + " mods.");
         ExecutorService executor = Executors.newFixedThreadPool(THREAD_COUNT);
         final int[] completed = new int[] {0};
 
-        for (int i = 0; i < total; i++) {
+        for (int i = 0; i < mods.length(); i++) {
             final JSONObject mod = mods.getJSONObject(i);
             final int index = i;
-            executor.submit(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        String source = mod.optString("source", "url");
-                        if ("url".equals(source)) {
-                            String url = mod.getString("url");
-                            String fileName = extractFileName(url);
-                            gui.show("[" + (index+1) + "/" + total + "] Downloading " + fileName);
-                            downloadWithRetries(url, "mods/" + fileName, gui);
-                        } else if ("curseforge".equals(source)) {
-                            JSONObject cf = mod.getJSONObject("curseforge");
-                            gui.show("[" + (index+1) + "/" + total + "] (CurseForge placeholder) addon " + cf.optInt("addonId"));
-                            // TODO: implement CurseForge logic
-                        } else if ("modrinth".equals(source)) {
-                            JSONObject mr = mod.getJSONObject("modrinth");
-                            gui.show("[" + (index+1) + "/" + total + "] (Modrinth placeholder) addon " + mr.optString("addonId"));
-                            // TODO: implement Modrinth logic
-                        } else {
-                            gui.show("[" + (index+1) + "/" + total + "] Unknown source: " + source);
+            executor.submit(() -> {
+                try {
+                    String source = mod.optString("source", "url");
+
+                    if ("url".equals(source)) {
+                        String url = mod.getString("url");
+                        String fileName = extractFileName(url);
+                        gui.show("[" + (index + 1) + "/" + mods.length() + "] Downloading " + fileName);
+                        downloadWithRetries(url, "mods/" + fileName, gui);
+
+                    } else if ("curseforge".equals(source)) {
+                        JSONObject cf = mod.getJSONObject("curseforge");
+                        int addonId = cf.getInt("addonId");
+                        long fileId = cf.getLong("fileId");
+
+                        String apiUrl = "https://addons-ecs.forgesvc.net/api/v2/addon/" + addonId + "/files/" + fileId;
+                        try {
+                            JSONObject fileData = FileUtils.readJsonFromUrl(apiUrl);
+                            String downloadUrl = fileData.getString("downloadUrl");
+                            String fileName = fileData.getString("fileName");
+                            gui.show("[" + (index + 1) + "/" + mods.length() + "] Downloading CurseForge mod: " + fileName);
+                            downloadWithRetries(downloadUrl, "mods/" + fileName, gui);
+                        } catch (Exception e) {
+                            gui.show("Failed to download CurseForge mod: addon " + addonId + ", file " + fileId + " - " + e.getMessage());
+                            e.printStackTrace();
                         }
-                    } catch (Exception e) {
-                        gui.show("Error downloading mod index " + index + ": " + e.getClass().getName() + " - " + e.getMessage());
-                        e.printStackTrace();
-                    } finally {
-                        synchronized (completed) {
-                            completed[0] = completed[0] + 1;
-                            int overallPercent = (int) ((completed[0] * 100L) / total);
-                            gui.setProgress(overallPercent);
-                            gui.show("Overall mods progress: " + overallPercent + "% (" + completed[0] + "/" + total + ")");
+
+                    } else if ("modrinth".equals(source)) {
+                        JSONObject mr = mod.getJSONObject("modrinth");
+                        String versionId = mr.getString("versionId");
+                        String projectId = mr.optString("projectId", "unknown");
+
+                        String apiUrl = "https://api.modrinth.com/v2/version/" + versionId;
+                        try {
+                            JSONObject versionData = FileUtils.readJsonFromUrl(apiUrl);
+                            JSONArray filesArr = versionData.getJSONArray("files");
+                            if (filesArr.length() > 0) {
+                                JSONObject fileObj = filesArr.getJSONObject(0);
+                                String downloadUrl = fileObj.getString("url");
+                                String fileName = fileObj.getString("filename");
+                                gui.show("[" + (index + 1) + "/" + mods.length() + "] Downloading Modrinth mod: " + fileName);
+                                downloadWithRetries(downloadUrl, "mods/" + fileName, gui);
+                            } else {
+                                gui.show("Modrinth version has no files: " + versionId);
+                            }
+                        } catch (Exception e) {
+                            gui.show("Failed to download Modrinth mod: project " + projectId + ", version " + versionId + " - " + e.getMessage());
+                            e.printStackTrace();
                         }
-                        if (callback != null) {
-                            try {
-                                callback.onItemComplete();
-                            } catch (Throwable ignored) {}
-                        }
+
+                    } else {
+                        gui.show("[" + (index + 1) + "/" + mods.length() + "] Unknown source: " + source);
+                    }
+
+                } catch (Exception e) {
+                    gui.show("Error downloading mod index " + index + ": " + e.getMessage());
+                    e.printStackTrace();
+                } finally {
+                    synchronized (completed) {
+                        completed[0]++;
+                        int overallPercent = (int)((completed[0] * 100L) / mods.length());
+                        gui.setProgress(overallPercent);
+                        gui.show("Overall progress: " + overallPercent + "% (" + completed[0] + "/" + mods.length() + ")");
+                    }
+                    if (callback != null) {
+                        try { callback.onItemComplete(); } catch (Throwable ignored) {}
                     }
                 }
             });
@@ -106,7 +128,7 @@ public class Downloader {
         gui.show("All mods processed.");
     }
 
-    // --- Helper download methods with retries and protocol support ---
+    // --- Helper download methods ---
 
     private static String extractFileName(String urlStr) {
         try {
@@ -122,9 +144,6 @@ public class Downloader {
         }
     }
 
-    /**
-     * Made public so other helpers (FileUtils) can use it.
-     */
     public static void downloadWithRetries(String urlStr, String destination, GuiUpdater gui) throws Exception {
         int attempt = 0;
         Exception lastEx = null;
