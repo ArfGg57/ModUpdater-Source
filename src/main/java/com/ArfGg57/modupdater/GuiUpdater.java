@@ -19,6 +19,7 @@ public class GuiUpdater {
         frame.add(progressBar, java.awt.BorderLayout.SOUTH);
         frame.setSize(420, 110);
         frame.setLocationRelativeTo(null);
+        // We use DISPOSE_ON_CLOSE so the window can be programmatically closed
         frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
         // In a headless dev server this may throw; wrap to avoid crash
         try {
@@ -51,5 +52,19 @@ public class GuiUpdater {
             });
         } catch (Throwable ignored) {}
         System.out.println("Progress: " + percent + "%");
+    }
+
+    /**
+     * Closes the GUI frame.
+     */
+    public void close() {
+        try {
+            SwingUtilities.invokeLater(new Runnable() {
+                @Override
+                public void run() {
+                    frame.dispose();
+                }
+            });
+        } catch (Throwable ignored) {}
     }
 }

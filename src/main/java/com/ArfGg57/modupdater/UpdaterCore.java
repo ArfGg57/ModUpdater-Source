@@ -113,11 +113,18 @@ public class UpdaterCore {
             // 7. Update local version
             FileUtils.writeVersion(localVersionPath, remoteVersion);
             gui.setProgress(100);
-            gui.show("Update complete! Please restart Minecraft.");
+            gui.show("Update complete! Closing GUI now."); // Changed message
+
+            // --- Removed 3-second wait ---
 
         } catch (Exception e) {
             gui.show("Update failed: " + e.getMessage());
             e.printStackTrace();
+        } finally {
+            // This is critical: ensure the GUI closes immediately after the try block finishes
+            if (gui != null) {
+                gui.close();
+            }
         }
     }
 
