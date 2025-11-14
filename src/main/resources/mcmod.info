@@ -1,16 +1,15 @@
-{
+[
+  {
     "modid": "modupdater",
     "name": "Mod Updater",
     "description": "Automatically updates your modpack.",
     "version": "1.1",
-    "authorList": [
-        "ArfGg57"
-    ],
+    "authorList": ["ArfGg57"],
     "credits": "",
     "url": "",
     "updateUrl": "",
     "logoFile": "",
     "screenshots": [],
-    "dependencies": [],
-    "fmlcoreplugin": "com.ArfGg57.modupdater.ModUpdater"
-}
+    "dependencies": []
+  }
+]
