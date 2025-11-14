@@ -1,0 +1,46 @@
+buildscript {
+    repositories {
+        mavenCentral()
+        maven { url = "https://maven.minecraftforge.net/" }
+    }
+}
+
+apply plugin: 'java'
+
+group = 'com.ArfGg57.modupdater'
+version = '1.0'
+archivesBaseName = 'modupdater-launcher'
+
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+
+repositories {
+    mavenCentral()
+    maven { url = 'https://maven.minecraftforge.net/' }
+    maven { url = 'https://libraries.minecraft.net' } // <- add this
+}
+
+dependencies {
+    compile project(':modupdater-core')
+    compile 'net.minecraft:launchwrapper:1.12'
+}
+
+// Build a fat jar by including all compile-time dependencies' contents.
+// This jar will include your UpdaterTweaker and the modupdater-core classes and json lib.
+jar {
+    manifest {
+        attributes(
+                'Implementation-Title': archivesBaseName,
+                'Implementation-Version': version,
+                'TweakClass': 'com.ArfGg57.modupdater.tweak.UpdaterTweaker' // used by LaunchWrapper
+        )
+    }
+
+    from {
+        // Unpack and include dependency jars and class files
+        configurations.compile.collect { zipTree(it) }
+    }
+
+    // Exclude signature files to avoid JAR signature issues
+    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
+}

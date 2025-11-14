@@ -1,0 +1,55 @@
+buildscript {
+    repositories {
+        mavenCentral()
+        maven { url = "https://maven.minecraftforge.net/" }
+    }
+    dependencies {
+        classpath 'com.anatawa12.forge:ForgeGradle:1.2-1.1.+'
+    }
+}
+
+apply plugin: 'forge'
+
+group = 'com.ArfGg57.modupdater'
+version = '1.1'
+archivesBaseName = 'modupdater'
+
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+
+minecraft {
+    version = '1.7.10-10.13.4.1614-1.7.10'
+    runDir = 'run'
+}
+
+repositories {
+    mavenCentral()
+    maven { url = 'https://maven.minecraftforge.net/' }
+}
+
+dependencies {
+    compile project(':modupdater-core')
+}
+
+// Merge dependencies (core + jars in core/libs) into final mod JAR
+jar {
+    from {
+        // include all compile-time dependencies and flatten them into the jar
+        configurations.compile.collect { zipTree(it) }
+    }
+    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
+}
+
+// process resources (mcmod.info)
+processResources {
+    inputs.property "version", project.version
+    inputs.property "mcversion", project.minecraft.version
+
+    from(sourceSets.main.resources.srcDirs) {
+        include 'mcmod.info'
+        expand 'version': project.version, 'mcversion': project.minecraft.version
+    }
+    from(sourceSets.main.resources.srcDirs) {
+        exclude 'mcmod.info'
+    }
+}

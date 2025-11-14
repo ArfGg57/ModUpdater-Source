@@ -1,0 +1,16 @@
+apply plugin: 'java'
+
+group = 'com.ArfGg57.modupdater'
+version = '1.0'
+
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // include any jars you put in modupdater-core/libs (org.json)
+    compile fileTree(dir: 'libs', include: ['*.jar'])
+}
