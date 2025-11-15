@@ -7,59 +7,47 @@ import org.json.JSONTokener;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.List;
+import java.util.*;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 /**
- * File utilities: read JSON, delete with backup, unzip, version read/write.
- * Implemented using java.io so it's compatible with Java 7+.
+ * File utilities: JSON/network, backup, atomic move, unzip, simple version compare.
  */
 public class FileUtils {
 
-    // These constants are critical for API stability (CurseForge/Modrinth)
-    private static final String API_USER_AGENT = "ModUpdater/1.7.10-ArfGg57";
-    private static final int API_TIMEOUT = 10000; // 10 seconds
+    public static final String CF_PROXY_BASE_URL = "https://api.curse.tools/v1/cf";
+    public static final String CF_API_KEY = null;
 
-    // --- JSON utilities ---
+    private static final String API_USER_AGENT = "ModUpdater/1.7.10-ArfGg57";
+    private static final int API_TIMEOUT = 10000;
+
+    // --- JSON helpers ---
     public static JSONObject readJson(String path) throws Exception {
         String s = readFileToString(path);
-        return new JSONObject(s);
-    }
-
-    /**
-     * Reads JSON from a URL without a specific API key (used for Modrinth, direct URLs).
-     */
-    public static JSONObject readJsonFromUrl(String urlStr) throws Exception {
-        String s = readUrlToString(urlStr, null); // Pass null for API key
         return new JSONObject(new JSONTokener(s));
     }
 
-    /**
-     * Reads JSON from a URL with an optional API key (used for CurseForge proxy).
-     */
+    public static JSONObject readJsonFromUrl(String urlStr) throws Exception {
+        String s = readUrlToString(urlStr, null);
+        return new JSONObject(new JSONTokener(s));
+    }
+
     public static JSONObject readJsonFromUrl(String urlStr, String apiKey) throws Exception {
         String s = readUrlToString(urlStr, apiKey);
         return new JSONObject(new JSONTokener(s));
     }
 
-
     public static JSONArray readJsonArrayFromUrl(String urlStr) throws Exception {
-        String s = readUrlToString(urlStr, null); // Pass null for API key
+        String s = readUrlToString(urlStr, null);
         return new JSONArray(new JSONTokener(s));
     }
 
     private static String readFileToString(String path) throws IOException {
         File f = new File(path);
         if (!f.exists()) throw new FileNotFoundException("File not found: " + f.getAbsolutePath());
-
-        // Use try-with-resources for resource safety
         try (FileInputStream fis = new FileInputStream(f);
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-
             byte[] buf = new byte[8192];
             int r;
             while ((r = fis.read(buf)) != -1) baos.write(buf, 0, r);
@@ -67,170 +55,264 @@ public class FileUtils {
         }
     }
 
-    /**
-     * The core network reader. Accepts an optional apiKey to set the Authorization header.
-     */
     private static String readUrlToString(String urlStr, String apiKey) throws Exception {
         HttpURLConnection connection = null;
         try {
             URL url = new URL(urlStr);
             connection = (HttpURLConnection) url.openConnection();
-
-            // Set mandatory headers and timeouts
             connection.setRequestMethod("GET");
             connection.setRequestProperty("User-Agent", API_USER_AGENT);
             connection.setConnectTimeout(API_TIMEOUT);
             connection.setReadTimeout(API_TIMEOUT);
-            connection.setInstanceFollowRedirects(true); // Ensure redirects are followed
-
-            // --- API Key Logic (NEW) ---
-            if (apiKey != null && !apiKey.isEmpty()) {
-                // Assuming the Curse.Tools proxy uses the standard Bearer token format
-                connection.setRequestProperty("Authorization", "Bearer " + apiKey);
-            }
-            // ---------------------------
+            connection.setInstanceFollowRedirects(true);
+            if (apiKey != null && !apiKey.isEmpty()) connection.setRequestProperty("Authorization", "Bearer " + apiKey);
 
             int responseCode = connection.getResponseCode();
-
-            // Check for successful HTTP response code (200-299)
             if (responseCode < 200 || responseCode >= 400) {
-                // Try reading error stream for more details if available
-                String errorDetails = readStream(connection.getErrorStream());
-                throw new IOException("HTTP Error " + responseCode + " for " + urlStr + ". Details: " + errorDetails);
+                String err = readStream(connection.getErrorStream());
+                throw new IOException("HTTP Error " + responseCode + " for " + urlStr + ". Details: " + err);
             }
 
-            // Read the successful response stream
             return readStream(connection.getInputStream());
-
         } catch (IOException e) {
-            // Catch all IO exceptions (like connection refused, connection timed out, SSL failures)
-            throw new IOException("Failed to connect to " + urlStr + ". Check network/firewall.", e);
+            throw new IOException("Failed to connect to " + urlStr + ". " + e.getMessage(), e);
         } finally {
-            if (connection != null) {
-                connection.disconnect();
-            }
+            if (connection != null) connection.disconnect();
         }
     }
 
-    /** Helper method to read an InputStream fully into a String. */
-    private static String readStream(java.io.InputStream stream) throws IOException {
-        if (stream == null) {
-            return "";
-        }
-        StringBuilder content = new StringBuilder();
-        // Use try-with-resources to ensure BufferedReader is closed
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream))) {
+    private static String readStream(InputStream stream) throws IOException {
+        if (stream == null) return "";
+        StringBuilder sb = new StringBuilder();
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(stream, "UTF-8"))) {
             String line;
-            while ((line = reader.readLine()) != null) {
-                content.append(line);
-            }
+            while ((line = r.readLine()) != null) sb.append(line).append('\n');
         }
-        return content.toString();
+        return sb.toString();
     }
 
+    // --- version helpers (simple semver-ish compare) ---
+    public static int compareVersions(String a, String b) {
+        if (a == null) a = "0.0.0";
+        if (b == null) b = "0.0.0";
+        String[] as = a.split("\\.");
+        String[] bs = b.split("\\.");
+        int n = Math.max(as.length, bs.length);
+        for (int i = 0; i < n; i++) {
+            int ai = (i < as.length) ? safeParseInt(as[i]) : 0;
+            int bi = (i < bs.length) ? safeParseInt(bs[i]) : 0;
+            if (ai < bi) return -1;
+            if (ai > bi) return 1;
+        }
+        return 0;
+    }
 
-    // --- Delete / backup ---
-    public static void deleteFiles(JSONArray paths, boolean backup, GuiUpdater gui) throws Exception {
-        // FIX: The loop condition was incorrectly placed in the initialization block.
-        // It must be 'for (int i = 0; i < paths.length(); i++)'
-        for (int i = 0; i < paths.length(); i++) {
-            String p = paths.getString(i);
-            File target = new File(p);
-            if (!target.exists()) {
-                gui.show("Not found (skip): " + p);
-                continue;
-            }
+    private static int safeParseInt(String s) {
+        try { return Integer.parseInt(s.replaceAll("\\D.*", "")); } catch (Exception e) { return 0; }
+    }
 
-            if (backup) {
-                backupFile(target, gui);
-            }
-
-            // If directory: collect subtree and delete children first
-            if (target.isDirectory()) {
-                List<File> all = listFilesRecursively(target);
-                // Sort descending so children are deleted before parents
-                Collections.sort(all, new Comparator<File>() {
-                    @Override
-                    public int compare(File a, File b) {
-                        return b.getAbsolutePath().compareTo(a.getAbsolutePath());
-                    }
-                });
-                for (File f : all) {
-                    deleteSilently(f, gui);
-                }
-                // finally delete the directory itself
-                deleteSilently(target, gui);
-            } else {
-                deleteSilently(target, gui);
+    // --- ensure file/dir exists ---
+    public static void ensureFileAndDirectoryExist(String path, String defaultContent) throws IOException {
+        File file = new File(path);
+        File parent = file.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) throw new IOException("Failed to create dir: " + parent.getAbsolutePath());
+        if (!file.exists()) {
+            try (FileOutputStream fos = new FileOutputStream(file)) {
+                fos.write(defaultContent.getBytes("UTF-8"));
             }
         }
     }
 
-    private static void deleteSilently(File f, GuiUpdater gui) {
+    // --- applied version read/write (simple JSON string) ---
+    public static String readAppliedVersion(String path) {
         try {
-            if (f.exists()) {
+            String s = readFileToString(path).trim();
+            if (s.startsWith("\"") && s.endsWith("\"")) return s.substring(1, s.length() - 1);
+            return s;
+        } catch (Exception e) {
+            return "0.0.0";
+        }
+    }
+
+    public static void writeAppliedVersion(String path, String version) throws IOException {
+        File file = new File(path);
+        File parent = file.getParentFile();
+        if (parent != null && !parent.exists()) parent.mkdirs();
+        try (FileOutputStream fos = new FileOutputStream(file)) {
+            String json = "\"" + version + "\"";
+            fos.write(json.getBytes("UTF-8"));
+        }
+    }
+
+    // --- download with verification (basic) ---
+    public static boolean downloadWithVerification(String urlStr, File tmpDest, String expectedSha256, GuiUpdater gui, int maxRetries) {
+        int attempt = 0;
+        Exception last = null;
+        while (attempt < maxRetries) {
+            attempt++;
+            InputStream in = null;
+            OutputStream out = null;
+            try {
+                URL url = new URL(urlStr);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestProperty("User-Agent", API_USER_AGENT);
+                conn.setConnectTimeout(API_TIMEOUT);
+                conn.setReadTimeout(API_TIMEOUT);
+                conn.setInstanceFollowRedirects(true);
+
+                int code = conn.getResponseCode();
+                if (code >= 400) throw new IOException("HTTP " + code);
+
+                if (tmpDest.getParentFile() != null && !tmpDest.getParentFile().exists()) tmpDest.getParentFile().mkdirs();
+                in = conn.getInputStream();
+                out = new FileOutputStream(tmpDest);
+                byte[] buf = new byte[8192];
+                int r;
+                while ((r = in.read(buf)) != -1) out.write(buf, 0, r);
+                out.flush();
+                conn.disconnect();
+
+                if (expectedSha256 != null && !expectedSha256.trim().isEmpty()) {
+                    String actual = HashUtils.sha256Hex(tmpDest);
+                    if (!hashEquals(expectedSha256, actual)) {
+                        gui.show("Downloaded file hash mismatch (attempt " + attempt + "): " + tmpDest.getPath());
+                        tmpDest.delete();
+                        throw new IOException("Hash mismatch");
+                    }
+                }
+                return true;
+            } catch (Exception e) {
+                last = e;
+                gui.show("Download attempt " + attempt + " failed: " + e.getMessage());
+                try { Thread.sleep(1000L * attempt); } catch (InterruptedException ignored) {}
+                if (tmpDest.exists()) tmpDest.delete();
+            } finally {
+                try { if (in != null) in.close(); } catch (Exception ignored) {}
+                try { if (out != null) out.close(); } catch (Exception ignored) {}
+            }
+        }
+        if (last != null) {
+            gui.show("Download failed after retries: " + last.getMessage());
+        }
+        return false;
+    }
+
+    // --- atomic move with retries and fallback ---
+    public static void atomicMoveWithRetries(File src, File dst, int maxRetries, long retryDelayMs) throws IOException {
+        if (src == null || dst == null) throw new IllegalArgumentException("src/dst null");
+        if (!src.exists()) throw new FileNotFoundException("Source not found: " + src.getAbsolutePath());
+
+        IOException lastEx = null;
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                File parent = dst.getParentFile();
+                if (parent != null && !parent.exists()) parent.mkdirs();
+
+                // fastest: simple rename
+                if (src.renameTo(dst)) return;
+
+                // try NIO atomic move
+                try {
+                    java.nio.file.Path srcP = src.toPath();
+                    java.nio.file.Path dstP = dst.toPath();
+                    java.nio.file.Files.move(srcP, dstP, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+                    return;
+                } catch (java.nio.file.AtomicMoveNotSupportedException amnse) {
+                    // fall back
+                } catch (Throwable t) {
+                    lastEx = new IOException("NIO move failed: " + t.getMessage(), t);
+                }
+
+                // fallback: copy and delete
+                try (InputStream in = new FileInputStream(src);
+                     OutputStream out = new FileOutputStream(dst)) {
+                    byte[] buf = new byte[8192];
+                    int r;
+                    while ((r = in.read(buf)) != -1) out.write(buf, 0, r);
+                }
+                if (!src.delete()) {
+                    throw new IOException("Copied but failed to delete source: " + src.getAbsolutePath());
+                }
+                return;
+            } catch (IOException e) {
+                lastEx = e;
+                try { Thread.sleep(retryDelayMs); } catch (InterruptedException ignored) {}
+            }
+        }
+        throw new IOException("Failed to move file after retries: " + src.getAbsolutePath() + " -> " + dst.getAbsolutePath(), lastEx);
+    }
+
+    // --- backup & restore helpers (simple copy preserving relative path) ---
+    public static void backupPathTo(File src, File backupRoot) {
+        try {
+            if (!backupRoot.exists()) backupRoot.mkdirs();
+            String rel = safeRelativePath(src);
+            File dst = new File(backupRoot, rel);
+            if (dst.getParentFile() != null && !dst.getParentFile().exists()) dst.getParentFile().mkdirs();
+            copyFile(src, dst);
+        } catch (Exception e) {
+            // best-effort
+        }
+    }
+
+    public static void deleteSilently(File f, GuiUpdater gui) {
+        if (f == null) return;
+        try {
+            if (!f.exists()) {
+                if (gui != null) gui.show("Delete skip (not found): " + f.getPath());
+                return;
+            }
+
+            // If directory, delete recursively
+            if (f.isDirectory()) {
+                File[] children = f.listFiles();
+                if (children != null) {
+                    for (File c : children) {
+                        deleteSilently(c, gui);
+                    }
+                }
                 boolean ok = f.delete();
-                gui.show("Deleted: " + f.getAbsolutePath() + (ok ? "" : " (delete returned false)"));
+                if (gui != null) gui.show("Deleted directory: " + f.getAbsolutePath() + (ok ? "" : " (delete returned false)"));
+            } else {
+                boolean ok = f.delete();
+                if (gui != null) gui.show("Deleted: " + f.getAbsolutePath() + (ok ? "" : " (delete returned false)"));
             }
         } catch (Exception e) {
-            gui.show("Error deleting " + f.getAbsolutePath() + ": " + e.getMessage());
+            if (gui != null) gui.show("Error deleting " + f.getAbsolutePath() + ": " + e.getMessage());
         }
     }
 
-    private static List<File> listFilesRecursively(File dir) {
-        List<File> out = new ArrayList<File>();
-        File[] children = dir.listFiles();
-        if (children != null) {
-            for (int i = 0; i < children.length; i++) {
-                File c = children[i];
-                out.add(c);
-                if (c.isDirectory()) {
-                    out.addAll(listFilesRecursively(c));
-                }
+    public static void pruneBackups(String backupBasePath, int keep, GuiUpdater gui) {
+        try {
+            File base = new File(backupBasePath);
+            if (!base.exists()) return;
+            File[] children = base.listFiles(File::isDirectory);
+            if (children == null || children.length <= keep) return;
+            List<File> list = new ArrayList<>(Arrays.asList(children));
+            Collections.sort(list, (a,b)-> b.getName().compareTo(a.getName())); // newest first
+            for (int i = keep; i < list.size(); i++) {
+                deleteRecursively(list.get(i));
+                gui.show("Pruned old backup: " + list.get(i).getPath());
             }
+        } catch (Exception ignored) {}
+    }
+
+    private static void deleteRecursively(File f) {
+        if (f.isDirectory()) {
+            File[] c = f.listFiles();
+            if (c != null) for (File ch : c) deleteRecursively(ch);
         }
-        return out;
+        f.delete();
     }
 
-    /**
-     * Backup a file or directory to modupdater_backups preserving relative path.
-     */
-    public static void backupFile(File fileOrDir, GuiUpdater gui) throws Exception {
-        File backupRoot = new File("modupdater_backups");
-        if (!backupRoot.exists()) backupRoot.mkdirs();
-
-        // If it's a directory, zip/recursive copy would be better; keep simple: copy children
-        if (fileOrDir.isDirectory()) {
-            List<File> all = listFilesRecursively(fileOrDir);
-            for (File f : all) {
-                if (f.isDirectory()) continue;
-                File dest = new File(backupRoot, safeRelativePath(f));
-                if (!dest.getParentFile().exists()) dest.getParentFile().mkdirs();
-                copyFile(f, dest);
-                gui.show("Backed up: " + f.getAbsolutePath() + " -> " + dest.getAbsolutePath());
-            }
-        } else {
-            File dest = new File(backupRoot, safeRelativePath(fileOrDir));
-            if (!dest.getParentFile().exists()) dest.getParentFile().mkdirs();
-            copyFile(fileOrDir, dest);
-            gui.show("Backed up: " + fileOrDir.getAbsolutePath() + " -> " + dest.getAbsolutePath());
-        }
+    // --- utilities ---
+    public static boolean hashEquals(String a, String b) {
+        if (a == null || b == null) return false;
+        return a.trim().equalsIgnoreCase(b.trim());
     }
 
-    /**
-     * Create a safe relative path for backup (replace leading separators).
-     */
-    private static String safeRelativePath(File f) throws IOException {
-        String abs = f.getAbsolutePath();
-        // Replace drive letters and separators to create a filesystem-safe relative path
-        String safe = abs.replace(":", "").replace("\\", "/");
-        // Remove any leading slashes
-        while (safe.startsWith("/")) safe = safe.substring(1);
-        return safe;
-    }
-
-    // Fixed resource leaks by using try-with-resources
     private static void copyFile(File src, File dst) throws IOException {
+        if (src.isDirectory()) return;
         try (InputStream in = new FileInputStream(src);
              OutputStream out = new FileOutputStream(dst)) {
             byte[] buf = new byte[8192];
@@ -239,18 +321,51 @@ public class FileUtils {
         }
     }
 
-    // --- Download & unzip helpers ---
-
-    public static void downloadAndExtractZip(String urlStr, String destDir, boolean overwrite, GuiUpdater gui) throws Exception {
-        File tmp = File.createTempFile("modupdater_cfg", ".zip");
-        Downloader.downloadWithRetries(urlStr, tmp.getAbsolutePath(), gui); // use Downloader helper
-        unzip(tmp, new File(destDir), overwrite, gui);
-        tmp.delete();
+    private static String safeRelativePath(File f) {
+        String abs = f.getAbsolutePath().replace(':', '_').replace('\\', '/').replaceAll("^/+", "");
+        return abs;
     }
 
-    // Fixed resource leaks by using try-with-resources
+    public static String extractFileNameFromUrl(String urlStr) {
+        try {
+            URL u = new URL(urlStr);
+            String path = u.getPath();
+            int idx = path.lastIndexOf('/');
+            if (idx >= 0 && idx < path.length() - 1) return path.substring(idx + 1);
+            return path;
+        } catch (Exception e) {
+            int idx = urlStr.lastIndexOf('/');
+            if (idx >= 0 && idx < urlStr.length() - 1) return urlStr.substring(idx + 1);
+            return urlStr;
+        }
+    }
+
+    public static List<File> findFilesForNumberId(File dir, String numberId) {
+        List<File> out = new ArrayList<>();
+        File[] children = dir.listFiles();
+        if (children == null) return out;
+        for (File f : children) {
+            if (!f.isFile()) continue;
+            String name = f.getName();
+            if (name.endsWith(".tmp")) continue; // skip tmp files
+            if (numberId != null && !numberId.isEmpty()) {
+                if (name.startsWith(numberId + "-")) out.add(f);
+            } else {
+                // if no numberId, match exact or anything
+                out.add(f);
+            }
+        }
+        return out;
+    }
+
+    public static String joinUrl(String base, String name) {
+        if (base == null) base = "";
+        if (!base.endsWith("/")) base = base + "/";
+        return base + name;
+    }
+
+    // --- unzip (keeps behavior: do not overwrite) ---
     public static void unzip(File zipFile, File destDir, boolean overwrite, GuiUpdater gui) throws Exception {
-        // Use try-with-resources for ZipInputStream
         try (ZipInputStream zis = new ZipInputStream(new FileInputStream(zipFile))) {
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
@@ -260,83 +375,16 @@ public class FileUtils {
                     continue;
                 }
                 if (!out.getParentFile().exists()) out.getParentFile().mkdirs();
-
-                // --- STRICTLY NEVER OVERWRITE ---
-                if (out.exists()) {
-                    // If the file already exists, we skip it entirely to prevent overwriting.
+                if (out.exists() && !overwrite) {
                     gui.show("Skipped existing file (will not overwrite): " + out.getAbsolutePath());
                     continue;
                 }
-                // --- END STRICTLY NEVER OVERWRITE ---
-
-                // Write the file (only if it doesn't exist)
-                FileOutputStream fos = null;
-                try {
-                    fos = new FileOutputStream(out);
+                try (FileOutputStream fos = new FileOutputStream(out)) {
                     byte[] buf = new byte[8192];
                     int len;
                     while ((len = zis.read(buf)) != -1) fos.write(buf, 0, len);
-                } finally {
-                    if (fos != null) try { fos.close(); } catch (Exception ignored) {}
                 }
                 gui.show("Extracted: " + out.getAbsolutePath());
-            }
-        }
-    }
-
-    public static void downloadFile(String urlStr, String dest, boolean extract, boolean overwrite, GuiUpdater gui) throws Exception {
-        Downloader.downloadWithRetries(urlStr, dest, gui);
-        if (extract && dest.toLowerCase().endsWith(".zip")) {
-            unzip(new File(dest), new File(new File(dest).getParent()), overwrite, gui);
-        }
-    }
-
-    // --- Version read/write ---
-
-    // Fixed resource leaks by using try-with-resources
-    public static void writeVersion(String path, String version) throws Exception {
-        File out = new File(path);
-        if (!out.getParentFile().exists()) out.getParentFile().mkdirs();
-
-        try (FileOutputStream fos = new FileOutputStream(out)) {
-            // NOTE: JSON files require quotes around simple string values
-            String jsonVersion = "\"" + version + "\"";
-            fos.write(jsonVersion.getBytes("UTF-8"));
-        }
-    }
-
-    public static String readVersion(String path) {
-        try {
-            // Read file content, trim, and then remove the surrounding JSON quotes (")
-            String content = readFileToString(path).trim();
-            if (content.startsWith("\"") && content.endsWith("\"")) {
-                return content.substring(1, content.length() - 1);
-            }
-            return content; // Return as is if not quoted
-        } catch (Exception e) {
-            return "0.0";
-        }
-    }
-
-    /**
-     * Ensures the directory structure for the given path exists, and the file itself exists with default content.
-     */
-    public static void ensureFileAndDirectoryExist(String path, String defaultContent) throws IOException {
-        File file = new File(path);
-        File parentDir = file.getParentFile();
-
-        // 1. Ensure parent directories exist
-        if (parentDir != null && !parentDir.exists()) {
-            if (!parentDir.mkdirs()) {
-                throw new IOException("Failed to create directory: " + parentDir.getAbsolutePath());
-            }
-        }
-
-        // 2. Ensure file exists, writing default content if necessary
-        if (!file.exists()) {
-            try (FileOutputStream fos = new FileOutputStream(file)) {
-                // Write the default content (e.g., {"remote_config_url":""} or "")
-                fos.write(defaultContent.getBytes("UTF-8"));
             }
         }
     }
