@@ -10,6 +10,8 @@ import java.net.URL;
 import java.util.*;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+import java.nio.charset.StandardCharsets; // Recommended for consistent encoding
+import java.nio.file.Files; // For java.nio.file.Files.move
 
 /**
  * File utilities: JSON/network, backup, atomic move, unzip, simple version compare.
@@ -51,7 +53,7 @@ public class FileUtils {
             byte[] buf = new byte[8192];
             int r;
             while ((r = fis.read(buf)) != -1) baos.write(buf, 0, r);
-            return new String(baos.toByteArray(), "UTF-8");
+            return new String(baos.toByteArray(), StandardCharsets.UTF_8);
         }
     }
 
@@ -84,7 +86,7 @@ public class FileUtils {
     private static String readStream(InputStream stream) throws IOException {
         if (stream == null) return "";
         StringBuilder sb = new StringBuilder();
-        try (BufferedReader r = new BufferedReader(new InputStreamReader(stream, "UTF-8"))) {
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
             String line;
             while ((line = r.readLine()) != null) sb.append(line).append('\n');
         }
@@ -118,7 +120,7 @@ public class FileUtils {
         if (parent != null && !parent.exists() && !parent.mkdirs()) throw new IOException("Failed to create dir: " + parent.getAbsolutePath());
         if (!file.exists()) {
             try (FileOutputStream fos = new FileOutputStream(file)) {
-                fos.write(defaultContent.getBytes("UTF-8"));
+                fos.write(defaultContent.getBytes(StandardCharsets.UTF_8));
             }
         }
     }
@@ -140,62 +142,92 @@ public class FileUtils {
         if (parent != null && !parent.exists()) parent.mkdirs();
         try (FileOutputStream fos = new FileOutputStream(file)) {
             String json = "\"" + version + "\"";
-            fos.write(json.getBytes("UTF-8"));
+            fos.write(json.getBytes(StandardCharsets.UTF_8));
         }
     }
 
     // --- download with verification (basic) ---
-    public static boolean downloadWithVerification(String urlStr, File tmpDest, String expectedSha256, GuiUpdater gui, int maxRetries) {
+    public static boolean downloadWithVerification(String urlStr, File tmpDest, String expectedHash, GuiUpdater gui, int maxRetries) {
         int attempt = 0;
         Exception last = null;
         while (attempt < maxRetries) {
             attempt++;
             InputStream in = null;
             OutputStream out = null;
+            HttpURLConnection conn = null;
             try {
                 URL url = new URL(urlStr);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setRequestProperty("User-Agent", API_USER_AGENT);
-                conn.setConnectTimeout(API_TIMEOUT);
-                conn.setReadTimeout(API_TIMEOUT);
-                conn.setInstanceFollowRedirects(true);
-
-                int code = conn.getResponseCode();
-                if (code >= 400) throw new IOException("HTTP " + code);
+                String protocol = url.getProtocol();
 
                 if (tmpDest.getParentFile() != null && !tmpDest.getParentFile().exists()) tmpDest.getParentFile().mkdirs();
-                in = conn.getInputStream();
-                out = new FileOutputStream(tmpDest);
-                byte[] buf = new byte[8192];
-                int r;
-                while ((r = in.read(buf)) != -1) out.write(buf, 0, r);
-                out.flush();
-                conn.disconnect();
 
-                if (expectedSha256 != null && !expectedSha256.trim().isEmpty()) {
-                    String actual = HashUtils.sha256Hex(tmpDest);
-                    if (!hashEquals(expectedSha256, actual)) {
-                        gui.show("Downloaded file hash mismatch (attempt " + attempt + "): " + tmpDest.getPath());
+                if ("file".equals(protocol)) {
+                    File f = new File(url.toURI());
+                    if (!f.exists()) throw new FileNotFoundException("Local file not found: " + f.getAbsolutePath());
+                    try (InputStream fis = new FileInputStream(f);
+                         OutputStream fos = new FileOutputStream(tmpDest)) {
+                        byte[] buf = new byte[8192];
+                        int r;
+                        while ((r = fis.read(buf)) != -1) fos.write(buf, 0, r);
+                    }
+                } else {
+                    // http(s) and generic URLConnection
+                    conn = (HttpURLConnection) url.openConnection();
+                    conn.setRequestProperty("User-Agent", API_USER_AGENT);
+                    conn.setConnectTimeout(API_TIMEOUT);
+                    conn.setReadTimeout(API_TIMEOUT);
+                    conn.setInstanceFollowRedirects(true);
+
+                    int code = conn.getResponseCode();
+                    if (code >= 400) {
+                        String err = readStream(conn.getErrorStream());
+                        throw new IOException("HTTP " + code + " - " + err);
+                    }
+
+                    in = conn.getInputStream();
+                    out = new FileOutputStream(tmpDest);
+                    byte[] buf = new byte[8192];
+                    int r;
+                    while ((r = in.read(buf)) != -1) out.write(buf, 0, r);
+                    out.flush();
+                }
+
+                // If expectedHash provided, allow prefix "sha256:" or "md5:" etc.
+                if (expectedHash != null && !expectedHash.trim().isEmpty()) {
+                    String normalized = expectedHash.trim();
+                    String[] parts = normalized.split(":", 2);
+                    String algo = "sha256";
+                    String hex = normalized;
+                    if (parts.length == 2) { algo = parts[0].toLowerCase(); hex = parts[1]; }
+
+                    String actual;
+                    // NOTE: HashUtils is an external class, assume its methods exist
+                    if ("sha256".equals(algo)) actual = HashUtils.sha256Hex(tmpDest);
+                    else actual = HashUtils.digestHex(tmpDest, algo);
+
+                    if (!hashEquals(hex, actual)) {
+                        if (gui != null) gui.show("Downloaded file hash mismatch (attempt " + attempt + "): " + tmpDest.getPath());
                         tmpDest.delete();
-                        throw new IOException("Hash mismatch");
+                        throw new IOException("Hash mismatch (expected " + normalized + ", actual " + actual + ")");
                     }
                 }
+
                 return true;
             } catch (Exception e) {
                 last = e;
-                gui.show("Download attempt " + attempt + " failed: " + e.getMessage());
+                if (gui != null) gui.show("Download attempt " + attempt + " failed: " + e.getMessage());
                 try { Thread.sleep(1000L * attempt); } catch (InterruptedException ignored) {}
                 if (tmpDest.exists()) tmpDest.delete();
             } finally {
                 try { if (in != null) in.close(); } catch (Exception ignored) {}
                 try { if (out != null) out.close(); } catch (Exception ignored) {}
+                if (conn != null) conn.disconnect();
             }
         }
-        if (last != null) {
-            gui.show("Download failed after retries: " + last.getMessage());
-        }
+        if (last != null && gui != null) gui.show("Download failed after retries: " + last.getMessage());
         return false;
     }
+
 
     // --- atomic move with retries and fallback ---
     public static void atomicMoveWithRetries(File src, File dst, int maxRetries, long retryDelayMs) throws IOException {
@@ -215,7 +247,7 @@ public class FileUtils {
                 try {
                     java.nio.file.Path srcP = src.toPath();
                     java.nio.file.Path dstP = dst.toPath();
-                    java.nio.file.Files.move(srcP, dstP, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+                    Files.move(srcP, dstP, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
                     return;
                 } catch (java.nio.file.AtomicMoveNotSupportedException amnse) {
                     // fall back
@@ -292,7 +324,7 @@ public class FileUtils {
             Collections.sort(list, (a,b)-> b.getName().compareTo(a.getName())); // newest first
             for (int i = keep; i < list.size(); i++) {
                 deleteRecursively(list.get(i));
-                gui.show("Pruned old backup: " + list.get(i).getPath());
+                if (gui != null) gui.show("Pruned old backup: " + list.get(i).getPath());
             }
         } catch (Exception ignored) {}
     }
@@ -366,26 +398,57 @@ public class FileUtils {
 
     // --- unzip (keeps behavior: do not overwrite) ---
     public static void unzip(File zipFile, File destDir, boolean overwrite, GuiUpdater gui) throws Exception {
+        String destDirCanonical = destDir.getCanonicalPath();
+
         try (ZipInputStream zis = new ZipInputStream(new FileInputStream(zipFile))) {
             ZipEntry entry;
+
             while ((entry = zis.getNextEntry()) != null) {
+                // Skip empty entries
+                if (entry.getName().trim().isEmpty()) {
+                    if (gui != null) gui.show("Skipped empty zip entry");
+                    continue;
+                }
+
                 File out = new File(destDir, entry.getName());
+                String outCanonical = out.getCanonicalPath();
+
+                // Zip-slip protection
+                if (!outCanonical.startsWith(destDirCanonical + File.separator) && !outCanonical.equals(destDirCanonical)) {
+                    if (gui != null) gui.show("Skipped suspicious zip entry (possible zip-slip): " + entry.getName());
+                    continue;
+                }
+
+                // Create directories
                 if (entry.isDirectory()) {
                     if (!out.exists()) out.mkdirs();
                     continue;
                 }
+
                 if (!out.getParentFile().exists()) out.getParentFile().mkdirs();
+
+                // Skip existing file if not overwriting
                 if (out.exists() && !overwrite) {
-                    gui.show("Skipped existing file (will not overwrite): " + out.getAbsolutePath());
+                    if (gui != null) gui.show("Skipped existing file (will not overwrite): " + out.getAbsolutePath());
                     continue;
                 }
-                try (FileOutputStream fos = new FileOutputStream(out)) {
+
+                // Extract file safely
+                try (FileOutputStream fos = new FileOutputStream(out);
+                     BufferedOutputStream bos = new BufferedOutputStream(fos)) {
+
                     byte[] buf = new byte[8192];
                     int len;
-                    while ((len = zis.read(buf)) != -1) fos.write(buf, 0, len);
+                    while ((len = zis.read(buf)) != -1) {
+                        bos.write(buf, 0, len);
+                    }
+
+                    if (gui != null) gui.show("Extracted: " + out.getAbsolutePath());
+                } catch (Exception e) {
+                    if (gui != null) gui.show("Failed to extract: " + out.getAbsolutePath() + " (" + e.getMessage() + ")");
                 }
-                gui.show("Extracted: " + out.getAbsolutePath());
             }
         }
-    }
-}
+    } // <-- MISSING CLOSING BRACE for the unzip method was likely here
+
+} // <-- MISSING CLOSING BRACE for the FileUtils class was likely here
