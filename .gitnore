@@ -24,6 +24,7 @@
 # other
 /run
 /libs
+build_command.txt
 
 # CurseForge configuration
 /curseforge.properties
