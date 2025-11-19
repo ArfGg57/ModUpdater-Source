@@ -270,13 +270,13 @@ public class UpdaterCore {
             }
             gui.show("Scanning " + installLocations.size() + " install location(s)...");
             
-            // Build a set of all filenames that should exist (from metadata entries that are valid)
-            Set<String> validFilenames = new HashSet<>();
-            for (ModMetadata.ModEntry entry : modMetadata.getAllMods()) {
-                if (validNumberIds.contains(entry.numberId)) {
-                    if (entry.fileName != null && !entry.fileName.isEmpty()) {
-                        validFilenames.add(entry.fileName);
-                    }
+            // Build a map of expected hashes for current mods (from mods.json)
+            Map<String, String> expectedHashByNumberId = new HashMap<>();
+            for (JSONObject m : modHandleMap.values()) {
+                String numberId = m.optString("numberId", "");
+                String hash = m.optString("hash", "");
+                if (!numberId.isEmpty() && !hash.isEmpty()) {
+                    expectedHashByNumberId.put(numberId, hash);
                 }
             }
             
@@ -296,6 +296,7 @@ public class UpdaterCore {
                     boolean isTrackedByModUpdater = false;
                     String belongsToNumberId = null;
                     boolean isStillValid = false;
+                    boolean wasRenamed = false;
                     
                     // Check metadata - only consider files that ModUpdater installed
                     for (ModMetadata.ModEntry entry : modMetadata.getAllMods()) {
@@ -332,6 +333,35 @@ public class UpdaterCore {
                         }
                     }
                     
+                    // IMPROVED: If not tracked by filename or prefix, check by hash
+                    // This handles the case where a user renamed a mod file
+                    if (!isTrackedByModUpdater) {
+                        try {
+                            String fileHash = HashUtils.sha256Hex(file);
+                            // Check if this hash matches any mod in metadata
+                            for (ModMetadata.ModEntry entry : modMetadata.getAllMods()) {
+                                if (entry.hash != null && !entry.hash.isEmpty() && 
+                                    FileUtils.hashEquals(entry.hash, fileHash)) {
+                                    // Found a renamed file!
+                                    isTrackedByModUpdater = true;
+                                    belongsToNumberId = entry.numberId;
+                                    wasRenamed = true;
+                                    // Check if this mod is still in the current mods.json
+                                    if (validNumberIds.contains(belongsToNumberId)) {
+                                        isStillValid = true;
+                                        // Update metadata with the new filename
+                                        gui.show("Detected renamed mod: " + entry.fileName + " -> " + file.getName() + " (numberId=" + belongsToNumberId + ")");
+                                        entry.fileName = file.getName();
+                                    }
+                                    break;
+                                }
+                            }
+                        } catch (Exception ex) {
+                            // If we can't hash the file, just skip the hash check
+                            // and treat it as unmanaged
+                        }
+                    }
+                    
                     // ONLY delete if:
                     // 1. File is tracked by ModUpdater (in metadata or has numberId prefix from metadata)
                     // 2. AND the mod is no longer in mods.json OR will be replaced by a different version
@@ -345,6 +375,9 @@ public class UpdaterCore {
                     } else if (!isTrackedByModUpdater) {
                         // File is not tracked by ModUpdater - leave it alone
                         gui.show("Skipping unmanaged file (not installed by ModUpdater): " + file.getName());
+                    } else if (wasRenamed && isStillValid) {
+                        // Renamed file was detected and is still valid - already updated in metadata above
+                        gui.show("Renamed mod tracked in metadata: " + file.getName());
                     }
                 }
             }
