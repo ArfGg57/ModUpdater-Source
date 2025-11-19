@@ -516,15 +516,18 @@ public class UpdaterCore {
                             for (File candidate : allFiles) {
                                 if (!candidate.isFile()) continue;
                                 if (candidate.getName().endsWith(".tmp")) continue;
-                                // Skip files that are already tracked by other mods in metadata
-                                boolean alreadyTracked = false;
+                                // Skip files that are already tracked by OTHER mods in metadata (different numberId)
+                                boolean alreadyTrackedByOtherMod = false;
                                 for (ModMetadata.ModEntry entry : modMetadata.getAllMods()) {
                                     if (entry.fileName != null && entry.fileName.equals(candidate.getName())) {
-                                        alreadyTracked = true;
-                                        break;
+                                        // Only skip if tracked by a DIFFERENT mod (different numberId)
+                                        if (!entry.numberId.equals(numberId)) {
+                                            alreadyTrackedByOtherMod = true;
+                                            break;
+                                        }
                                     }
                                 }
-                                if (alreadyTracked) continue;
+                                if (alreadyTrackedByOtherMod) continue;
                                 
                                 // Check hash
                                 String candidateHash = HashUtils.sha256Hex(candidate);
