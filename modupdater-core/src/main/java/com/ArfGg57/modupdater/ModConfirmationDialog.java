@@ -1072,12 +1072,12 @@ public class ModConfirmationDialog {
         }
     }
 
-    // Added: start the updater on a background thread (calls UpdaterCore.runUpdateSelected with the current mods list)
+    // Added: start the updater on a background thread (calls UpdaterCore.runUpdate with the current configuration)
     private void startUpdater() {
         if (core == null) return;
         new Thread(() -> {
             try {
-                core.runUpdateSelected(modsToDownload);
+                core.runUpdate();
             } catch (Throwable t) {
                 t.printStackTrace();
             }
@@ -1088,7 +1088,7 @@ public class ModConfirmationDialog {
     // Standalone Test
     // -----------------------------
     public static void main(String[] args){
-        SwingUtilities.invokeLater(()->{
+        SwingUtilities.invokeLater(() ->{
             ModConfirmationDialog dlg = new ModConfirmationDialog(
                     "https://raw.githubusercontent.com/ArfGg57/ModUpdater-Config/main/mods.json",
                     "https://raw.githubusercontent.com/ArfGg57/ModUpdater-Config/main/files.json",

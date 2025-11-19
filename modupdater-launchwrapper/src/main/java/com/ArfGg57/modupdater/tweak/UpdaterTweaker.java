@@ -9,6 +9,7 @@ import net.minecraft.launchwrapper.LaunchClassLoader;
 import javax.swing.SwingUtilities;
 import java.io.File;
 import java.lang.reflect.InvocationTargetException;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -34,19 +35,10 @@ public class UpdaterTweaker implements ITweaker {
         int exitCode = 0;
 
         try {
-            // populate the lists (may perform network I/O)
-            core.populateConfirmationLists();
-
-            final List<ModEntry> mods = core.getModsForUI();
-            final List<String> files = core.getFilesForUI();
-            final List<String> deletes = core.getDeletesForUI();
-
-            System.out.println("DEBUG: mods size = " + (mods == null ? "null" : mods.size()));
-            System.out.println("DEBUG: files size = " + (files == null ? "null" : files.size()));
-            System.out.println("DEBUG: deletes size = " + (deletes == null ? "null" : deletes.size()));
-            if (mods != null && !mods.isEmpty()) {
-                System.out.println("DEBUG: first mod: " + mods.get(0).displayName + " / " + mods.get(0).downloadUrl);
-            }
+            // Build empty lists; the dialog will enrich them using remote config and local state
+            final List<ModEntry> mods = new ArrayList<>();
+            final List<String> files = new ArrayList<>();
+            final List<String> deletes = new ArrayList<>();
 
             // Build the dialog first so it can enrich lists (detect missing files) before deciding to show
             final ModConfirmationDialog[] dlgHolder = new ModConfirmationDialog[1];
@@ -67,7 +59,7 @@ public class UpdaterTweaker implements ITweaker {
                 } else {
                     // User agreed: run the updater synchronously to block game launch until finished
                     System.out.println("ModUpdater: user agreed. Running updater synchronously before launch...");
-                    core.runUpdateSelected(mods);
+                    core.runUpdate();
                 }
             } else {
                 System.out.println("ModUpdater: No updates detected after enrichment. Skipping confirmation GUI.");
