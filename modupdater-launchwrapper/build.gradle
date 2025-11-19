@@ -21,8 +21,8 @@ repositories {
 }
 
 dependencies {
-    compile project(':modupdater-core')
-    compile 'net.minecraft:launchwrapper:1.12'
+    implementation project(':modupdater-core')
+    implementation 'net.minecraft:launchwrapper:1.12'
 }
 
 // Build a fat jar by including all compile-time dependencies' contents.
@@ -38,7 +38,7 @@ jar {
 
     from {
         // Unpack and include dependency jars and class files
-        configurations.compile.collect { zipTree(it) }
+        configurations.runtimeClasspath.collect { zipTree(it) }
     }
 
     // Exclude signature files to avoid JAR signature issues
