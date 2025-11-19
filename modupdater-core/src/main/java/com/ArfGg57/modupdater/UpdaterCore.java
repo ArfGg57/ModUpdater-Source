@@ -425,8 +425,42 @@ public class UpdaterCore {
                                 gui.show("Mod OK (no hash check): " + existingFile.getPath());
                             }
                         } else {
-                            gui.show("Mod in metadata but file missing; will redownload: " + installedFileName);
-                            needDownload = true;
+                            // IMPROVED: File from metadata doesn't exist - maybe user renamed it?
+                            // Try to find it by hash before downloading
+                            if (!expectedHash.isEmpty()) {
+                                gui.show("Mod in metadata but file missing: " + installedFileName + "; scanning for renamed file...");
+                                File[] allFiles = targetDir.listFiles();
+                                boolean found = false;
+                                if (allFiles != null) {
+                                    for (File candidate : allFiles) {
+                                        if (!candidate.isFile()) continue;
+                                        if (candidate.getName().endsWith(".tmp")) continue;
+                                        String candidateHash = HashUtils.sha256Hex(candidate);
+                                        if (FileUtils.hashEquals(expectedHash, candidateHash)) {
+                                            gui.show("Found renamed mod by hash: " + candidate.getName());
+                                            existingFile = candidate;
+                                            // Update metadata with new filename
+                                            modMetadata.recordMod(numberId, candidate.getName(), expectedHash, source);
+                                            // Rename to expected name if different
+                                            if (!candidate.getName().equals(finalName)) {
+                                                FileUtils.backupPathTo(candidate, backupRoot);
+                                                FileUtils.atomicMoveWithRetries(candidate, target, 5, 200);
+                                                gui.show("Renamed mod to: " + target.getPath());
+                                                modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                            }
+                                            found = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (!found) {
+                                    gui.show("Could not find renamed file; will redownload: " + installedFileName);
+                                    needDownload = true;
+                                }
+                            } else {
+                                gui.show("Mod in metadata but file missing; will redownload: " + installedFileName);
+                                needDownload = true;
+                            }
                         }
                     } else {
                         needDownload = true;
@@ -539,7 +573,8 @@ public class UpdaterCore {
                     }
 
                     // backup & delete existing files for this numberId
-                    List<File> existingFiles = FileUtils.findFilesForNumberId(targetDir, numberId);
+                    // FIXED: Use metadata to find old files, not just numberId prefix
+                    List<File> existingFiles = findFilesForNumberIdViaMetadata(targetDir, numberId, modMetadata);
                     for (File f : existingFiles) {
                         try {
                             if (f.getCanonicalPath().equals(tmp.getCanonicalPath())) {
@@ -550,6 +585,7 @@ public class UpdaterCore {
                             gui.show("Warning resolving path, skipping delete of: " + f.getPath());
                             continue;
                         }
+                        gui.show("Removing old version: " + f.getPath());
                         FileUtils.backupPathTo(f, backupRoot);
                         FileUtils.deleteSilently(f, gui);
                     }
@@ -642,5 +678,42 @@ public class UpdaterCore {
         if (percent < 0) percent = 0;
         if (percent > 100) percent = 100;
         gui.setProgress(percent);
+    }
+
+    /**
+     * Find all files in the directory that belong to a given numberId.
+     * Uses metadata to identify files, and also checks for legacy numberId- prefix.
+     */
+    private List<File> findFilesForNumberIdViaMetadata(File dir, String numberId, ModMetadata metadata) {
+        List<File> out = new ArrayList<>();
+        if (dir == null || !dir.isDirectory() || numberId == null || numberId.isEmpty()) {
+            return out;
+        }
+        
+        // First, check metadata for files tracked under this numberId
+        ModMetadata.ModEntry entry = metadata.getMod(numberId);
+        if (entry != null && entry.fileName != null && !entry.fileName.isEmpty()) {
+            File f = new File(dir, entry.fileName);
+            if (f.exists() && f.isFile()) {
+                out.add(f);
+            }
+        }
+        
+        // Also check for legacy files with numberId- prefix (backwards compatibility)
+        File[] children = dir.listFiles();
+        if (children != null) {
+            for (File f : children) {
+                if (!f.isFile()) continue;
+                if (f.getName().endsWith(".tmp")) continue;
+                if (f.getName().startsWith(numberId + "-")) {
+                    // Avoid duplicates
+                    if (!out.contains(f)) {
+                        out.add(f);
+                    }
+                }
+            }
+        }
+        
+        return out;
     }
 }
