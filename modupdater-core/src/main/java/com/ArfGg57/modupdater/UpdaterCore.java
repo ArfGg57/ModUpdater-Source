@@ -131,23 +131,35 @@ public class UpdaterCore {
             // 2) Files phase: handle verify + apply
             Map<String, JSONObject> fileHandleMap = new LinkedHashMap<>();
             for (JSONObject f : filesToVerify) {
-                String key = f.optString("url", "") + "|" + f.optString("name", "");
+                // CHANGED: Use file_name instead of name for deduplication key
+                String key = f.optString("url", "") + "|" + f.optString("file_name", "");
                 fileHandleMap.put(key, f);
             }
             for (JSONObject f : filesToApply) {
-                String key = f.optString("url", "") + "|" + f.optString("name", "");
+                // CHANGED: Use file_name instead of name for deduplication key
+                String key = f.optString("url", "") + "|" + f.optString("file_name", "");
                 fileHandleMap.put(key, f);
             }
 
             for (JSONObject f : fileHandleMap.values()) {
                 String url = f.getString("url");
                 String downloadPath = f.optString("downloadPath", "config/");
-                String name = f.optString("name", "").trim();
+                // CHANGED: Use file_name instead of name to match schema
+                String customFileName = f.optString("file_name", "").trim();
                 boolean overwrite = f.optBoolean("overwrite", true);
                 boolean extract = f.optBoolean("extract", false);
                 String expectedHash = f.optString("hash", null);
 
-                String fileName = name.isEmpty() ? FileUtils.extractFileNameFromUrl(url) : name;
+                // Determine actual filename to use
+                String fileName;
+                if (!customFileName.isEmpty()) {
+                    // Use custom file_name from config
+                    fileName = customFileName;
+                } else {
+                    // Extract from URL
+                    fileName = FileUtils.extractFileNameFromUrl(url);
+                }
+                
                 File dest = new File(downloadPath, fileName);
                 boolean needDownload = false;
 
@@ -163,8 +175,9 @@ public class UpdaterCore {
                     } else if (!overwrite) {
                         gui.show("Existing file preserved (overwrite=false): " + dest.getPath());
                     } else {
-                        gui.show("No hash provided; re-downloading for safety: " + dest.getPath());
-                        needDownload = true;
+                        // CHANGED: Don't re-download if file exists and no hash provided
+                        // This prevents unnecessary re-downloads of files with custom names
+                        gui.show("File exists (no hash to verify): " + dest.getPath());
                     }
                 } else {
                     gui.show("File missing; will download: " + dest.getPath());
