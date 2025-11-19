@@ -219,12 +219,24 @@ public class UpdaterCore {
                 }
             }
 
-            // Step 1: Clean up mods folder - remove any files not in current mods.json
-            gui.show("Scanning mods folder for outdated files...");
+            // Step 1: Clean up mods folder - remove ONLY ModUpdater-managed files that are outdated
+            // CHANGED: Only delete files that are in metadata AND not in current mods.json
+            // This prevents deletion of user-added mods or mods from other sources
+            gui.show("Scanning mods folder for outdated ModUpdater-managed files...");
             Set<String> validNumberIds = modHandleMap.keySet();
             Set<String> installLocations = new HashSet<>();
             for (JSONObject m : modHandleMap.values()) {
                 installLocations.add(m.optString("installLocation", "mods"));
+            }
+            
+            // Build a set of all filenames that should exist (from metadata entries that are valid)
+            Set<String> validFilenames = new HashSet<>();
+            for (ModMetadata.ModEntry entry : modMetadata.getAllMods()) {
+                if (validNumberIds.contains(entry.numberId)) {
+                    if (entry.fileName != null && !entry.fileName.isEmpty()) {
+                        validFilenames.add(entry.fileName);
+                    }
+                }
             }
             
             for (String installLocation : installLocations) {
@@ -238,40 +250,59 @@ public class UpdaterCore {
                     if (!file.isFile()) continue;
                     if (file.getName().endsWith(".tmp")) continue; // skip temp files
                     
-                    // Check if this file belongs to a valid mod
-                    boolean isValid = false;
+                    // Check if this file is tracked in metadata
+                    boolean isTrackedByModUpdater = false;
                     String belongsToNumberId = null;
+                    boolean isStillValid = false;
                     
-                    // First check metadata
+                    // Check metadata - only consider files that ModUpdater installed
                     for (ModMetadata.ModEntry entry : modMetadata.getAllMods()) {
                         if (entry.fileName != null && entry.fileName.equals(file.getName())) {
+                            isTrackedByModUpdater = true;
                             belongsToNumberId = entry.numberId;
+                            // Check if this mod is still in the current mods.json
                             if (validNumberIds.contains(belongsToNumberId)) {
-                                isValid = true;
+                                isStillValid = true;
                             }
                             break;
                         }
                     }
                     
-                    // Also check by numberId prefix (for backwards compatibility)
-                    if (!isValid && belongsToNumberId == null) {
-                        for (String numberId : validNumberIds) {
-                            if (!numberId.isEmpty() && file.getName().startsWith(numberId + "-")) {
-                                isValid = true;
+                    // Also check by numberId prefix (for backwards compatibility with old installations)
+                    if (!isTrackedByModUpdater) {
+                        // Build set of all numberIds from metadata (Java 8 compatible)
+                        Set<String> metadataNumberIds = new HashSet<>();
+                        for (ModMetadata.ModEntry entry : modMetadata.getAllMods()) {
+                            if (entry.numberId != null && !entry.numberId.isEmpty()) {
+                                metadataNumberIds.add(entry.numberId);
+                            }
+                        }
+                        for (String numberId : metadataNumberIds) {
+                            if (file.getName().startsWith(numberId + "-")) {
+                                isTrackedByModUpdater = true;
                                 belongsToNumberId = numberId;
+                                // Check if this mod is still in the current mods.json
+                                if (validNumberIds.contains(numberId)) {
+                                    isStillValid = true;
+                                }
                                 break;
                             }
                         }
                     }
                     
-                    // If file is not valid, remove it
-                    if (!isValid) {
-                        gui.show("Removing outdated/untracked mod: " + file.getPath());
+                    // ONLY delete if:
+                    // 1. File is tracked by ModUpdater (in metadata or has numberId prefix from metadata)
+                    // 2. AND the mod is no longer in mods.json OR will be replaced by a different version
+                    if (isTrackedByModUpdater && !isStillValid) {
+                        gui.show("Removing outdated ModUpdater-managed mod: " + file.getPath());
                         FileUtils.backupPathTo(file, backupRoot);
                         FileUtils.deleteSilently(file, gui);
                         if (belongsToNumberId != null) {
                             modMetadata.removeMod(belongsToNumberId);
                         }
+                    } else if (!isTrackedByModUpdater) {
+                        // File is not tracked by ModUpdater - leave it alone
+                        gui.show("Skipping unmanaged file (not installed by ModUpdater): " + file.getName());
                     }
                 }
             }
@@ -329,14 +360,21 @@ public class UpdaterCore {
                     continue;
                 }
 
-                // Determine final filename: use file_name from config, or displayName, or numberId-sourceFilename
+                // Determine final filename: CHANGED - no longer add numberId prefix
+                // Priority: file_name from config, or sourceFilename, or displayName
                 String finalName;
                 if (!fileName.isEmpty()) {
+                    // Use custom file_name from config
                     finalName = fileName;
+                } else if (filenameFromSource != null && !filenameFromSource.isEmpty()) {
+                    // Use filename from source (URL/API)
+                    finalName = filenameFromSource;
                 } else if (!displayName.isEmpty()) {
-                    finalName = numberId + "-" + displayName + ".jar";
+                    // Fallback to display name with .jar extension
+                    finalName = displayName.endsWith(".jar") ? displayName : displayName + ".jar";
                 } else {
-                    finalName = numberId + "-" + filenameFromSource;
+                    // Last resort fallback
+                    finalName = "mod_" + numberId + ".jar";
                 }
                 
                 File targetDir = new File(installLocation);
@@ -381,7 +419,8 @@ public class UpdaterCore {
                         needDownload = true;
                     }
                 } else {
-                    // Not in metadata or doesn't match - check by numberId prefix (backwards compatibility)
+                    // Not in metadata or doesn't match
+                    // First check by numberId prefix (backwards compatibility with old installations)
                     List<File> existing = FileUtils.findFilesForNumberId(targetDir, numberId);
                     if (!existing.isEmpty()) {
                         existingFile = existing.get(0);
@@ -420,6 +459,45 @@ public class UpdaterCore {
                         } else {
                             gui.show("Mod present at target (no hash): " + target.getPath());
                             modMetadata.recordMod(numberId, finalName, "", source);
+                        }
+                    } else if (!expectedHash.isEmpty()) {
+                        // IMPROVED: Scan directory for renamed mods by hash
+                        // This handles the case where user renamed a mod file
+                        gui.show("Mod not found by name; scanning directory for matching hash...");
+                        File[] allFiles = targetDir.listFiles();
+                        if (allFiles != null) {
+                            for (File candidate : allFiles) {
+                                if (!candidate.isFile()) continue;
+                                if (candidate.getName().endsWith(".tmp")) continue;
+                                // Skip files that are already tracked by other mods in metadata
+                                boolean alreadyTracked = false;
+                                for (ModMetadata.ModEntry entry : modMetadata.getAllMods()) {
+                                    if (entry.fileName != null && entry.fileName.equals(candidate.getName())) {
+                                        alreadyTracked = true;
+                                        break;
+                                    }
+                                }
+                                if (alreadyTracked) continue;
+                                
+                                // Check hash
+                                String candidateHash = HashUtils.sha256Hex(candidate);
+                                if (FileUtils.hashEquals(expectedHash, candidateHash)) {
+                                    gui.show("Found renamed mod by hash: " + candidate.getName() + " -> will rename to: " + finalName);
+                                    existingFile = candidate;
+                                    // Record in metadata
+                                    modMetadata.recordMod(numberId, candidate.getName(), expectedHash, source);
+                                    // Rename to expected name
+                                    FileUtils.backupPathTo(existingFile, backupRoot);
+                                    FileUtils.atomicMoveWithRetries(existingFile, target, 5, 200);
+                                    gui.show("Renamed mod to: " + target.getPath());
+                                    modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                    break;
+                                }
+                            }
+                        }
+                        if (existingFile == null) {
+                            gui.show("Mod missing; will download: " + finalName);
+                            needDownload = true;
                         }
                     } else {
                         gui.show("Mod missing; will download: " + finalName);
