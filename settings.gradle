@@ -1,2 +1,3 @@
 rootProject.name = 'ModUpdater-Source'
-include 'modupdater-core', 'modupdater-standalone', 'modupdater-launchwrapper'
+include 'modupdater-core', 'modupdater-launchwrapper'
+// include 'modupdater-standalone' // Temporarily disabled due to ForgeGradle dependency issues
