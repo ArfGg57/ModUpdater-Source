@@ -11,7 +11,7 @@ public class ModUpdater {
         try {
             // Run update synchronously in preInit; GUI will appear (after Minecraft window)
             UpdaterCore core = new UpdaterCore();
-            core.runUpdate();
+            core.runUpdateSynchronous();
         } catch (Throwable t) {
             System.err.println("FATAL ERROR during ModUpdater preInit:");
             t.printStackTrace();

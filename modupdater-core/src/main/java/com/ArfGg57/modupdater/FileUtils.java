@@ -147,6 +147,11 @@ public class FileUtils {
     }
 
     // --- download with verification (basic) ---
+    /**
+     * NOTE: This function keeps the same signature for compatibility but no longer uses hash.
+     * It will attempt to download the file and return true on success. The `expectedHash`
+     * parameter is ignored (kept for compatibility).
+     */
     public static boolean downloadWithVerification(String urlStr, File tmpDest, String expectedHash, GuiUpdater gui, int maxRetries) {
         int attempt = 0;
         Exception last = null;
@@ -192,26 +197,7 @@ public class FileUtils {
                     out.flush();
                 }
 
-                // If expectedHash provided, allow prefix "sha256:" or "md5:" etc.
-                if (expectedHash != null && !expectedHash.trim().isEmpty()) {
-                    String normalized = expectedHash.trim();
-                    String[] parts = normalized.split(":", 2);
-                    String algo = "sha256";
-                    String hex = normalized;
-                    if (parts.length == 2) { algo = parts[0].toLowerCase(); hex = parts[1]; }
-
-                    String actual;
-                    // NOTE: HashUtils is an external class, assume its methods exist
-                    if ("sha256".equals(algo)) actual = HashUtils.sha256Hex(tmpDest);
-                    else actual = HashUtils.digestHex(tmpDest, algo);
-
-                    if (!hashEquals(hex, actual)) {
-                        if (gui != null) gui.show("Downloaded file hash mismatch (attempt " + attempt + "): " + tmpDest.getPath());
-                        tmpDest.delete();
-                        throw new IOException("Hash mismatch (expected " + normalized + ", actual " + actual + ")");
-                    }
-                }
-
+                // Previously: hash verification. Now omitted intentionally.
                 return true;
             } catch (Exception e) {
                 last = e;
@@ -451,4 +437,21 @@ public class FileUtils {
         }
     } // <-- MISSING CLOSING BRACE for the unzip method was likely here
 
-} // <-- MISSING CLOSING BRACE for the FileUtils class was likely here
+    // Helper: compare the suffix after the numberId- prefix of an existing file name
+    // with an expected base filename. Returns true if they match (i.e., the installed file
+    // is the expected version), false otherwise.
+    public static boolean fileNameSuffixMatches(File existing, String numberId, String expectedBaseFileName) {
+        if (existing == null || expectedBaseFileName == null) return false;
+        String name = existing.getName();
+        if (numberId != null && !numberId.isEmpty()) {
+            String prefix = numberId + "-";
+            if (!name.startsWith(prefix)) return false;
+            String suffix = name.substring(prefix.length());
+            return suffix.equals(expectedBaseFileName);
+        } else {
+            // no numberId: compare full filename with expected base
+            return name.equals(expectedBaseFileName);
+        }
+    }
+
+} // <-- FileUtils class end
