@@ -12,5 +12,5 @@ repositories {
 
 dependencies {
     // include any jars you put in modupdater-core/libs (org.json)
-    compile fileTree(dir: 'libs', include: ['*.jar'])
+    implementation fileTree(dir: 'libs', include: ['*.jar'])
 }

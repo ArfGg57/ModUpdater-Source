@@ -1,0 +1,53 @@
+[
+  {
+    "since": "1.0.0",
+    "numberId": "1",
+    "installLocation": "mods",
+    "file_name": "",
+    "display_name": "JourneyMap",
+    "hash": "",
+    "source": {
+      "type": "curseforge",
+      "projectId": 32274,
+      "fileId": 3867367
+    }
+  },
+  {
+    "since": "1.0.0",
+    "numberId": "2",
+    "installLocation": "mods",
+    "file_name": "",
+    "display_name": "OptiFine",
+    "hash": "",
+    "source": {
+      "type": "url",
+      "url": "https://optifine.net/download?f=OptiFine_1.7.10_HD_U_E7.jar"
+    }
+  },
+  {
+    "since": "1.1.0",
+    "numberId": "3",
+    "installLocation": "mods",
+    "file_name": "",
+    "display_name": "Applied Energistics 2",
+    "hash": "",
+    "source": {
+      "type": "curseforge",
+      "projectId": 223794,
+      "fileId": 2747063
+    }
+  },
+  {
+    "since": "1.1.1",
+    "numberId": "4",
+    "installLocation": "mods",
+    "file_name": "custom-mod-name.jar",
+    "display_name": "",
+    "hash": "",
+    "source": {
+      "type": "modrinth",
+      "projectSlug": "sodium",
+      "versionId": "rAfhHfow"
+    }
+  }
+]

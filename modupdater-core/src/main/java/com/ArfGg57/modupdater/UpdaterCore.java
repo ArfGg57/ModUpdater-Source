@@ -16,6 +16,7 @@ public class UpdaterCore {
     private final String localConfigDir = "config/ModUpdater/";
     private final String remoteConfigPath = localConfigDir + "config.json"; // holds remote_config_url
     private final String localVersionPath = localConfigDir + "modpack_version.json"; // holds applied version
+    private final String modMetadataPath = localConfigDir + "mod_metadata.json"; // tracks installed mods
 
     private GuiUpdater gui;
     private boolean configError = false;
@@ -205,21 +206,82 @@ public class UpdaterCore {
                 updateProgress(completed, totalTasks);
             }
 
-            // 3) Mods phase
+            // 3) Mods phase with metadata tracking
+            gui.show("Initializing mod metadata...");
+            ModMetadata modMetadata = new ModMetadata(modMetadataPath);
+            
+            // Build map of all mods that should be installed (from modsToVerify)
             Map<String, JSONObject> modHandleMap = new LinkedHashMap<>();
             for (JSONObject m : modsToVerify) {
-                String key = m.optString("numberId", "") + "|" + m.optString("name", "");
-                modHandleMap.put(key, m);
-            }
-            for (JSONObject m : modsToApply) {
-                String key = m.optString("numberId", "") + "|" + m.optString("name", "");
-                modHandleMap.put(key, m);
+                String key = m.optString("numberId", "");
+                if (!key.isEmpty()) {
+                    modHandleMap.put(key, m);
+                }
             }
 
+            // Step 1: Clean up mods folder - remove any files not in current mods.json
+            gui.show("Scanning mods folder for outdated files...");
+            Set<String> validNumberIds = modHandleMap.keySet();
+            Set<String> installLocations = new HashSet<>();
+            for (JSONObject m : modHandleMap.values()) {
+                installLocations.add(m.optString("installLocation", "mods"));
+            }
+            
+            for (String installLocation : installLocations) {
+                File targetDir = new File(installLocation);
+                if (!targetDir.exists() || !targetDir.isDirectory()) continue;
+                
+                File[] filesInDir = targetDir.listFiles();
+                if (filesInDir == null) continue;
+                
+                for (File file : filesInDir) {
+                    if (!file.isFile()) continue;
+                    if (file.getName().endsWith(".tmp")) continue; // skip temp files
+                    
+                    // Check if this file belongs to a valid mod
+                    boolean isValid = false;
+                    String belongsToNumberId = null;
+                    
+                    // First check metadata
+                    for (ModMetadata.ModEntry entry : modMetadata.getAllMods()) {
+                        if (entry.fileName != null && entry.fileName.equals(file.getName())) {
+                            belongsToNumberId = entry.numberId;
+                            if (validNumberIds.contains(belongsToNumberId)) {
+                                isValid = true;
+                            }
+                            break;
+                        }
+                    }
+                    
+                    // Also check by numberId prefix (for backwards compatibility)
+                    if (!isValid && belongsToNumberId == null) {
+                        for (String numberId : validNumberIds) {
+                            if (!numberId.isEmpty() && file.getName().startsWith(numberId + "-")) {
+                                isValid = true;
+                                belongsToNumberId = numberId;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // If file is not valid, remove it
+                    if (!isValid) {
+                        gui.show("Removing outdated/untracked mod: " + file.getPath());
+                        FileUtils.backupPathTo(file, backupRoot);
+                        FileUtils.deleteSilently(file, gui);
+                        if (belongsToNumberId != null) {
+                            modMetadata.removeMod(belongsToNumberId);
+                        }
+                    }
+                }
+            }
+
+            // Step 2: Process each mod in mods.json
             for (JSONObject mod : modHandleMap.values()) {
                 String numberId = mod.optString("numberId", "").trim();
                 String installLocation = mod.optString("installLocation", "mods");
-                String name = mod.optString("name", "").trim();
+                String displayName = mod.optString("display_name", "").trim();
+                String fileName = mod.optString("file_name", "").trim();
                 String expectedHash = mod.optString("hash", "").trim();
                 JSONObject source = mod.optJSONObject("source");
                 if (source == null) {
@@ -267,38 +329,102 @@ public class UpdaterCore {
                     continue;
                 }
 
-                String finalName = name.isEmpty() ? (numberId + "-" + filenameFromSource) : name;
+                // Determine final filename: use file_name from config, or displayName, or numberId-sourceFilename
+                String finalName;
+                if (!fileName.isEmpty()) {
+                    finalName = fileName;
+                } else if (!displayName.isEmpty()) {
+                    finalName = numberId + "-" + displayName + ".jar";
+                } else {
+                    finalName = numberId + "-" + filenameFromSource;
+                }
+                
                 File targetDir = new File(installLocation);
                 if (!targetDir.exists()) targetDir.mkdirs();
                 File target = new File(targetDir, finalName);
 
-                List<File> existing = FileUtils.findFilesForNumberId(targetDir, numberId);
-                if (existing.isEmpty() && target.exists()) existing.add(target);
-
+                // Check if mod is already correctly installed using metadata
                 boolean needDownload = false;
-                if (!existing.isEmpty()) {
-                    File existingFile = existing.get(0);
-                    if (!expectedHash.isEmpty()) {
-                        String actual = HashUtils.sha256Hex(existingFile);
-                        if (FileUtils.hashEquals(expectedHash, actual)) {
-                            gui.show("Mod OK: " + existingFile.getPath());
-                            if (!existingFile.getName().equals(finalName)) {
-                                File newLocation = new File(targetDir, finalName);
-                                FileUtils.backupPathTo(existingFile, backupRoot);
-                                FileUtils.atomicMoveWithRetries(existingFile, newLocation, 5, 200);
-                                gui.show("Renamed installed mod to: " + newLocation.getPath());
+                File existingFile = null;
+                
+                // Check metadata first
+                if (modMetadata.isModInstalledAndMatches(numberId, source, expectedHash)) {
+                    String installedFileName = modMetadata.findInstalledFile(numberId);
+                    if (installedFileName != null) {
+                        existingFile = new File(targetDir, installedFileName);
+                        if (existingFile.exists()) {
+                            // Verify hash if provided
+                            if (!expectedHash.isEmpty()) {
+                                String actual = HashUtils.sha256Hex(existingFile);
+                                if (FileUtils.hashEquals(expectedHash, actual)) {
+                                    gui.show("Mod OK (via metadata): " + existingFile.getPath());
+                                    // Rename if needed
+                                    if (!existingFile.getName().equals(finalName)) {
+                                        FileUtils.backupPathTo(existingFile, backupRoot);
+                                        FileUtils.atomicMoveWithRetries(existingFile, target, 5, 200);
+                                        gui.show("Renamed mod to: " + target.getPath());
+                                        modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                        existingFile = target;
+                                    }
+                                } else {
+                                    gui.show("Mod hash mismatch; will redownload: " + existingFile.getPath());
+                                    needDownload = true;
+                                }
+                            } else {
+                                gui.show("Mod OK (no hash check): " + existingFile.getPath());
                             }
                         } else {
-                            gui.show("Mod hash mismatch; will redownload: " + existingFile.getPath());
+                            gui.show("Mod in metadata but file missing; will redownload: " + installedFileName);
                             needDownload = true;
                         }
                     } else {
-                        if (!existingFile.getName().equals(finalName)) needDownload = true;
-                        else gui.show("Mod present (no hash): " + existingFile.getPath());
+                        needDownload = true;
                     }
                 } else {
-                    gui.show("Mod missing; will download: " + finalName);
-                    needDownload = true;
+                    // Not in metadata or doesn't match - check by numberId prefix (backwards compatibility)
+                    List<File> existing = FileUtils.findFilesForNumberId(targetDir, numberId);
+                    if (!existing.isEmpty()) {
+                        existingFile = existing.get(0);
+                        if (!expectedHash.isEmpty()) {
+                            String actual = HashUtils.sha256Hex(existingFile);
+                            if (FileUtils.hashEquals(expectedHash, actual)) {
+                                gui.show("Mod OK (via prefix): " + existingFile.getPath());
+                                // Update metadata
+                                modMetadata.recordMod(numberId, existingFile.getName(), expectedHash, source);
+                                // Rename if needed
+                                if (!existingFile.getName().equals(finalName)) {
+                                    FileUtils.backupPathTo(existingFile, backupRoot);
+                                    FileUtils.atomicMoveWithRetries(existingFile, target, 5, 200);
+                                    gui.show("Renamed mod to: " + target.getPath());
+                                    modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                }
+                            } else {
+                                gui.show("Mod hash mismatch; will redownload: " + existingFile.getPath());
+                                needDownload = true;
+                            }
+                        } else {
+                            gui.show("Mod present (no hash): " + existingFile.getPath());
+                            modMetadata.recordMod(numberId, existingFile.getName(), "", source);
+                        }
+                    } else if (target.exists()) {
+                        // File exists at target location but not tracked
+                        if (!expectedHash.isEmpty()) {
+                            String actual = HashUtils.sha256Hex(target);
+                            if (FileUtils.hashEquals(expectedHash, actual)) {
+                                gui.show("Mod OK at target location: " + target.getPath());
+                                modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                            } else {
+                                gui.show("File at target has wrong hash; will redownload: " + target.getPath());
+                                needDownload = true;
+                            }
+                        } else {
+                            gui.show("Mod present at target (no hash): " + target.getPath());
+                            modMetadata.recordMod(numberId, finalName, "", source);
+                        }
+                    } else {
+                        gui.show("Mod missing; will download: " + finalName);
+                        needDownload = true;
+                    }
                 }
 
                 if (needDownload) {
@@ -321,7 +447,7 @@ public class UpdaterCore {
                         throw new RuntimeException("Failed to download/verify mod: " + downloadUrl);
                     }
 
-                    // backup & delete existing files for this numberId (but don't delete tmp)
+                    // backup & delete existing files for this numberId
                     List<File> existingFiles = FileUtils.findFilesForNumberId(targetDir, numberId);
                     for (File f : existingFiles) {
                         try {
@@ -354,11 +480,23 @@ public class UpdaterCore {
                     // move tmp -> final
                     FileUtils.atomicMoveWithRetries(tmp, target, 5, 200);
                     gui.show("Installed mod: " + target.getPath());
+                    
+                    // Update metadata with actual hash
+                    String actualHash = expectedHash;
+                    if (actualHash.isEmpty()) {
+                        actualHash = HashUtils.sha256Hex(target);
+                    }
+                    modMetadata.recordMod(numberId, finalName, actualHash, source);
                 }
 
                 completed++;
                 updateProgress(completed, totalTasks);
             }
+            
+            // Save metadata
+            gui.show("Saving mod metadata...");
+            modMetadata.save();
+
 
             // commit applied version on full success
             FileUtils.writeAppliedVersion(localVersionPath, remoteVersion);
