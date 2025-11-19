@@ -516,15 +516,18 @@ public class UpdaterCore {
                             for (File candidate : allFiles) {
                                 if (!candidate.isFile()) continue;
                                 if (candidate.getName().endsWith(".tmp")) continue;
-                                // Skip files that are already tracked by other mods in metadata
-                                boolean alreadyTracked = false;
+                                // Skip files that are already tracked by OTHER mods in metadata (different numberId)
+                                boolean alreadyTrackedByOtherMod = false;
                                 for (ModMetadata.ModEntry entry : modMetadata.getAllMods()) {
                                     if (entry.fileName != null && entry.fileName.equals(candidate.getName())) {
-                                        alreadyTracked = true;
-                                        break;
+                                        // Only skip if tracked by a DIFFERENT mod (different numberId)
+                                        if (!entry.numberId.equals(numberId)) {
+                                            alreadyTrackedByOtherMod = true;
+                                            break;
+                                        }
                                     }
                                 }
-                                if (alreadyTracked) continue;
+                                if (alreadyTrackedByOtherMod) continue;
                                 
                                 // Check hash
                                 String candidateHash = HashUtils.sha256Hex(candidate);
@@ -682,7 +685,8 @@ public class UpdaterCore {
 
     /**
      * Find all files in the directory that belong to a given numberId.
-     * Uses metadata to identify files, and also checks for legacy numberId- prefix.
+     * Uses metadata to identify files, checks for legacy numberId- prefix,
+     * and scans by hash if the tracked file is missing (handles renamed files).
      */
     private List<File> findFilesForNumberIdViaMetadata(File dir, String numberId, ModMetadata metadata) {
         List<File> out = new ArrayList<>();
@@ -696,6 +700,28 @@ public class UpdaterCore {
             File f = new File(dir, entry.fileName);
             if (f.exists() && f.isFile()) {
                 out.add(f);
+            } else if (entry.hash != null && !entry.hash.isEmpty()) {
+                // File in metadata doesn't exist - maybe it was renamed
+                // Try to find it by hash
+                File[] allFiles = dir.listFiles();
+                if (allFiles != null) {
+                    for (File candidate : allFiles) {
+                        if (!candidate.isFile()) continue;
+                        if (candidate.getName().endsWith(".tmp")) continue;
+                        try {
+                            String candidateHash = HashUtils.sha256Hex(candidate);
+                            if (FileUtils.hashEquals(entry.hash, candidateHash)) {
+                                // Found the renamed file
+                                if (!out.contains(candidate)) {
+                                    out.add(candidate);
+                                }
+                                break;
+                            }
+                        } catch (Exception ex) {
+                            // Skip files that can't be hashed
+                        }
+                    }
+                }
             }
         }
         
