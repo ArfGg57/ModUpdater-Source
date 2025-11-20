@@ -1,6 +1,7 @@
 package com.ArfGg57.modupdater.ui;
 
 import com.ArfGg57.modupdater.core.UpdaterCore;
+import com.ArfGg57.modupdater.resolver.FilenameResolver;
 import com.ArfGg57.modupdater.util.FileUtils;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -66,6 +67,9 @@ public class ModConfirmationDialog {
     private final List<String> filesToApply;
     private final List<String> filesToDelete;
     private final UpdaterCore core; // may be null for test mode
+    
+    // Filename resolver for consistent filename derivation with UpdaterCore
+    private final FilenameResolver filenameResolver;
 
     // Mapping to hold URL/source data for file entries (keyed by "FILE: <path>")
     // This allows showing a URL/source for file items when we learned it from files.json
@@ -81,6 +85,9 @@ public class ModConfirmationDialog {
         this.modsToDownload = mods == null ? new ArrayList<>() : new ArrayList<>(mods);
         this.filesToApply = files == null ? new ArrayList<>() : new ArrayList<>(files);
         this.filesToDelete = deletes == null ? new ArrayList<>() : new ArrayList<>(deletes);
+        
+        // Initialize FilenameResolver with no logging for dialog (keeps UI clean)
+        this.filenameResolver = new FilenameResolver(null, false);
 
         // Enrich lists with checkCurrentVersion scanning (mods, files, deletes)
         if (this.core != null) {
@@ -103,6 +110,10 @@ public class ModConfirmationDialog {
         this.modsToDownload = loadMods(modsJsonUrl);
         this.filesToApply = loadFiles(filesJsonUrl);
         this.filesToDelete = loadDeletes(deletesJsonUrl);
+        
+        // Initialize FilenameResolver with no logging for dialog (keeps UI clean)
+        this.filenameResolver = new FilenameResolver(null, false);
+        
         // No remote enrichment in test constructor
         setupDialog();
     }
@@ -196,21 +207,16 @@ public class ModConfirmationDialog {
                                 else fileName = "file_" + Integer.toHexString(i);
                             }
 
-                            // Align filename derivation with UpdaterCore (append ext from URL when needed)
-                            String srcName = (url.isEmpty() ? null : FileUtils.extractFileNameFromUrl(url));
+                            // FIXED: Use FilenameResolver to derive filename consistently with UpdaterCore
+                            // This ensures we check for the correct filename on disk
                             String finalName;
-                            if (fileName.isEmpty()) {
-                                finalName = (srcName == null || srcName.isEmpty()) ? (displayName.isEmpty() ? ("file_" + Integer.toHexString(i)) : displayName.replaceAll("\\s","_")) : srcName;
-                            } else if (fileName.indexOf('.') < 0 && srcName != null) {
-                                int dot = srcName.lastIndexOf('.');
-                                if (dot > 0 && dot < srcName.length() - 1) {
-                                    String ext = srcName.substring(dot + 1);
-                                    if (!ext.contains("/") && !ext.contains("\\")) finalName = fileName + "." + ext; else finalName = fileName;
-                                } else {
-                                    finalName = fileName;
-                                }
+                            if (!fileName.isEmpty()) {
+                                // Use custom file_name from config, infer extension if missing
+                                finalName = filenameResolver.resolve(fileName, url, null, FilenameResolver.ArtifactType.FILE);
                             } else {
-                                finalName = fileName;
+                                // Extract from URL with extension inference
+                                String extracted = FileUtils.extractFileNameFromUrl(url);
+                                finalName = filenameResolver.resolve(extracted, url, null, FilenameResolver.ArtifactType.FILE);
                             }
 
                             String entry = "FILE: " + downloadPath + finalName;
@@ -338,51 +344,48 @@ public class ModConfirmationDialog {
                             displayName = "Unnamed File";
                         }
 
-                        // File name priority: API file name -> "Unnamed_File"
-                        String fileName;
-                        if (filenameFromSource != null && !filenameFromSource.isEmpty()) {
-                            fileName = filenameFromSource;
-                        } else if (jsonFileName != null && !jsonFileName.isEmpty()) {
-                            fileName = jsonFileName;
+                        // FIXED: Determine final filename using FilenameResolver to match UpdaterCore behavior
+                        // Priority: file_name from config, or sourceFilename, or displayName
+                        String finalName;
+                        if (!jsonFileName.isEmpty()) {
+                            // Use custom file_name from config, infer extension if missing
+                            finalName = filenameResolver.resolve(jsonFileName, downloadUrl, null, FilenameResolver.ArtifactType.MOD);
+                        } else if (filenameFromSource != null && !filenameFromSource.isEmpty()) {
+                            // Use filename from source (URL/API), infer extension if missing
+                            finalName = filenameResolver.resolve(filenameFromSource, downloadUrl, null, FilenameResolver.ArtifactType.MOD);
+                        } else if (!displayName.isEmpty()) {
+                            // Fallback to display name with extension inference
+                            finalName = filenameResolver.resolve(displayName, downloadUrl, null, FilenameResolver.ArtifactType.MOD);
                         } else {
-                            fileName = "Unnamed_File";
+                            // Last resort fallback
+                            finalName = "mod_" + numberId + ".jar";
                         }
 
-
-                        // build a key for dedupe: prefer displayName + fileName
-                        String modKey = "MODNAME:" + displayName + "|" + fileName;
+                        // build a key for dedupe: prefer displayName + finalName
+                        String modKey = "MODNAME:" + displayName + "|" + finalName;
                         if (addKeys.contains(modKey)) continue;
 
-                        // check existence using FileUtils helper
+                        // check existence using the resolved finalName
                         java.io.File targetDir = new java.io.File(installLocation);
                         List<java.io.File> existing = FileUtils.findFilesForNumberId(targetDir, numberId);
                         boolean needs = false;
                         if (existing.isEmpty()) {
-                            // nothing found by numberId; check for file with fileName
-                            java.io.File possible = new java.io.File(installLocation, fileName);
+                            // nothing found by numberId; check for file with finalName
+                            java.io.File possible = new java.io.File(installLocation, finalName);
                             if (!possible.exists()) needs = true;
                         } else {
                             // Without hash: compare filename suffix (the part after numberId-)
-                            if (filenameFromSource != null && !filenameFromSource.isEmpty()) {
-                                boolean matches = FileUtils.fileNameSuffixMatches(existing.get(0), numberId, filenameFromSource);
-                                if (!matches) {
-                                    needs = true;
-                                    System.out.println("[ModConfirmationDialog] Mod filename mismatch; will propose re-download: " + existing.get(0).getPath());
-                                }
-                            } else if (jsonFileName != null && !jsonFileName.isEmpty()) {
-                                boolean matches = FileUtils.fileNameSuffixMatches(existing.get(0), numberId, jsonFileName);
-                                if (!matches) {
-                                    needs = true;
-                                    System.out.println("[ModConfirmationDialog] Mod filename mismatch; will propose re-download: " + existing.get(0).getPath());
-                                }
-                            } else {
-                                // No reliable name available from source; if file exists we conservatively do NOT propose re-download.
+                            // Use finalName (which has been resolved with FilenameResolver) for comparison
+                            boolean matches = FileUtils.fileNameSuffixMatches(existing.get(0), numberId, finalName);
+                            if (!matches) {
+                                needs = true;
+                                System.out.println("[ModConfirmationDialog] Mod filename mismatch; will propose re-download: " + existing.get(0).getPath());
                             }
                         }
 
                         if (needs) {
                             // create ModEntry so existing UpdaterCore code remains compatible (if used)
-                            ModEntry me = new ModEntry(displayName, downloadUrl, fileName, srcDisplay, mod.optString("numberId", ""), installLocation);
+                            ModEntry me = new ModEntry(displayName, downloadUrl, finalName, srcDisplay, mod.optString("numberId", ""), installLocation);
                             modsToDownload.add(me);
                             addKeys.add(modKey);
                         }
@@ -1025,24 +1028,18 @@ public class ModConfirmationDialog {
                 JSONObject f = arr.getJSONObject(i);
                 String url = f.optString("url", "").trim();
                 String downloadPath = f.optString("downloadPath", "config/");
-                String name = f.optString("file_name", "").trim();
+                String fileName = f.optString("file_name", "").trim();
                 String disp = f.optString("display_name", "").trim();
-                String derived = name;
-                if ((derived == null || derived.isEmpty()) && !url.isEmpty()) derived = FileUtils.extractFileNameFromUrl(url);
-
-                // If file_name lacks extension, derive from URL filename
-                if (derived != null && !derived.isEmpty() && !derived.contains(".")) {
-                    String fromUrl = (url.isEmpty() ? null : FileUtils.extractFileNameFromUrl(url));
-                    if (fromUrl != null) {
-                        int dot = fromUrl.lastIndexOf('.');
-                        if (dot > 0 && dot < fromUrl.length() - 1) {
-                            String ext = fromUrl.substring(dot + 1);
-                            if (!ext.contains("/") && !ext.contains("\\")) {
-                                derived = derived + "." + ext;
-                            }
-                        }
-                    }
+                
+                // FIXED: Use FilenameResolver to derive filename consistently with UpdaterCore
+                String derived;
+                if (!fileName.isEmpty()) {
+                    derived = filenameResolver.resolve(fileName, url, null, FilenameResolver.ArtifactType.FILE);
+                } else {
+                    String extracted = FileUtils.extractFileNameFromUrl(url);
+                    derived = filenameResolver.resolve(extracted, url, null, FilenameResolver.ArtifactType.FILE);
                 }
+                
                 if (derived == null || derived.isEmpty()) continue;
 
                 String key1 = "FILE: " + downloadPath + derived;
@@ -1050,8 +1047,8 @@ public class ModConfirmationDialog {
                 if (!disp.isEmpty()) fileEntryToDisplayName.put(key1, disp);
 
                 // If JSON also has a different explicit name, store that key as well
-                if (!name.isEmpty() && !name.equals(derived)) {
-                    String key2 = "FILE: " + downloadPath + name;
+                if (!fileName.isEmpty() && !fileName.equals(derived)) {
+                    String key2 = "FILE: " + downloadPath + fileName;
                     if (!url.isEmpty()) fileEntryToSource.put(key2, url);
                     if (!disp.isEmpty()) fileEntryToDisplayName.put(key2, disp);
                 }
