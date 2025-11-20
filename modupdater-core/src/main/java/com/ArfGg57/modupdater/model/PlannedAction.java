@@ -46,6 +46,7 @@ public class PlannedAction {
         NEW_DOWNLOAD,   // File doesn't exist locally
         UPDATE,         // File exists but version/hash differs
         RENAME,         // File exists with correct hash but wrong name
+        DELETE,         // File should be deleted
         SKIP,           // File exists and overwrite=false
         NO_ACTION,      // File exists with correct version/hash
         DEFERRED        // Action deferred due to file lock

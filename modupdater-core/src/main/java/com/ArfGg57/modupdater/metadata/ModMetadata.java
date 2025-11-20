@@ -18,12 +18,14 @@ public class ModMetadata {
 
     private Map<String, ModEntry> installedMods; // key: numberId (for mods)
     private Map<String, ArtifactEntry> installedFiles; // key: fileName (for auxiliary files)
+    private Set<String> processedDeletes; // Track completed delete operations by path
     private String metadataFilePath;
 
     public ModMetadata(String metadataFilePath) {
         this.metadataFilePath = metadataFilePath;
         this.installedMods = new LinkedHashMap<>();
         this.installedFiles = new LinkedHashMap<>();
+        this.processedDeletes = new LinkedHashSet<>();
         load();
     }
     
@@ -129,6 +131,7 @@ public class ModMetadata {
             if (!file.exists()) {
                 installedMods = new LinkedHashMap<>();
                 installedFiles = new LinkedHashMap<>();
+                processedDeletes = new LinkedHashSet<>();
                 return;
             }
             JSONObject root = FileUtils.readJson(metadataFilePath);
@@ -156,9 +159,21 @@ public class ModMetadata {
                     installedFiles.put(entry.fileName, entry);
                 }
             }
+            
+            // Load processed deletes (new field)
+            JSONArray deletesArray = root.optJSONArray("processedDeletes");
+            if (deletesArray == null) {
+                processedDeletes = new LinkedHashSet<>();
+            } else {
+                processedDeletes = new LinkedHashSet<>();
+                for (int i = 0; i < deletesArray.length(); i++) {
+                    processedDeletes.add(deletesArray.getString(i));
+                }
+            }
         } catch (Exception e) {
             installedMods = new LinkedHashMap<>();
             installedFiles = new LinkedHashMap<>();
+            processedDeletes = new LinkedHashSet<>();
         }
     }
 
@@ -182,6 +197,13 @@ public class ModMetadata {
                 filesArray.put(entry.toJson());
             }
             root.put("files", filesArray);
+            
+            // Save processed deletes
+            JSONArray deletesArray = new JSONArray();
+            for (String deletePath : processedDeletes) {
+                deletesArray.put(deletePath);
+            }
+            root.put("processedDeletes", deletesArray);
 
             File file = new File(metadataFilePath);
             File parent = file.getParentFile();
@@ -303,7 +325,20 @@ public class ModMetadata {
      * @param installLocation Target directory (e.g., "config/")
      */
     public void recordFile(String fileName, String checksum, String url, String installLocation) {
-        ArtifactEntry entry = new ArtifactEntry(fileName, "FILE", null, checksum, url, installLocation);
+        recordFile(fileName, checksum, url, installLocation, null);
+    }
+    
+    /**
+     * Record an auxiliary file installation with version
+     * 
+     * @param fileName The actual filename (not display name)
+     * @param checksum SHA-256 hash of the file
+     * @param url The download URL
+     * @param installLocation Target directory (e.g., "config/")
+     * @param version Optional version string (may be null for files without version)
+     */
+    public void recordFile(String fileName, String checksum, String url, String installLocation, String version) {
+        ArtifactEntry entry = new ArtifactEntry(fileName, "FILE", version, checksum, url, installLocation);
         installedFiles.put(fileName, entry);
     }
     
@@ -342,6 +377,44 @@ public class ModMetadata {
     }
     
     /**
+     * Check if an auxiliary file is installed and matches both version and checksum.
+     * This method supports the overwrite=true logic by checking version changes.
+     * 
+     * @param fileName The filename to check
+     * @param expectedVersion The expected version string (can be null for no version tracking)
+     * @param expectedChecksum The expected SHA-256 hash (can be null/empty)
+     * @return true if file is tracked and both version and checksum match
+     */
+    public boolean isFileInstalledAndMatchesVersion(String fileName, String expectedVersion, String expectedChecksum) {
+        ArtifactEntry entry = installedFiles.get(fileName);
+        if (entry == null) return false;
+        
+        // Check version match (if version tracking is used)
+        if (expectedVersion != null && !expectedVersion.trim().isEmpty()) {
+            // If entry has no version stored, treat as not matching (need to update)
+            if (entry.version == null || entry.version.trim().isEmpty()) {
+                return false;
+            }
+            // If versions differ, not a match
+            if (!expectedVersion.equals(entry.version)) {
+                return false;
+            }
+        }
+        
+        // Check checksum match if provided
+        if (expectedChecksum != null && !expectedChecksum.trim().isEmpty()) {
+            if (entry.checksum == null || entry.checksum.trim().isEmpty()) {
+                return false;
+            }
+            if (!FileUtils.hashEquals(expectedChecksum, entry.checksum)) {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+    
+    /**
      * Remove an auxiliary file from metadata
      * 
      * @param fileName The filename to remove
@@ -357,5 +430,40 @@ public class ModMetadata {
      */
     public Collection<ArtifactEntry> getAllFiles() {
         return new ArrayList<>(installedFiles.values());
+    }
+    
+    // ========== Delete Tracking Methods ==========
+    
+    /**
+     * Mark a delete operation as completed for the given path.
+     * This prevents the delete from being re-proposed or re-executed.
+     * 
+     * @param path The file or folder path that was deleted
+     */
+    public void markDeleteCompleted(String path) {
+        if (path != null && !path.trim().isEmpty()) {
+            processedDeletes.add(path.trim());
+        }
+    }
+    
+    /**
+     * Check if a delete operation has already been completed for the given path.
+     * 
+     * @param path The file or folder path to check
+     * @return true if the delete has already been processed
+     */
+    public boolean isDeleteCompleted(String path) {
+        if (path == null || path.trim().isEmpty()) {
+            return false;
+        }
+        return processedDeletes.contains(path.trim());
+    }
+    
+    /**
+     * Clear all processed delete records.
+     * This is useful for testing or forcing a full re-check.
+     */
+    public void clearProcessedDeletes() {
+        processedDeletes.clear();
     }
 }

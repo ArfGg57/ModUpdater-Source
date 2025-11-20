@@ -14,6 +14,9 @@ A Forge 1.7.10 mod that automatically updates mods, configs, and files from a re
 - ⚡ **NEW:** Early-load coremod for locked file handling
 - 🛡️ **NEW:** Enhanced pending operations system (MOVE/DELETE/REPLACE)
 - 📋 **NEW:** Unified manifest tracking for mods AND auxiliary files
+- ✅ **FIXED:** Idempotent updates - no repeated downloads of unchanged files
+- 🗑️ **FIXED:** Delete tracking - operations only execute once
+- 🔄 **FIXED:** Smart overwrite - only replaces on actual content change
 
 ## Quick Start
 
@@ -52,6 +55,16 @@ The updater now tracks both mods and auxiliary files (configs, resources) in a u
 - Supports migration from previous metadata format
 - No configuration changes needed - works automatically!
 
+### Recent Comprehensive Fixes
+
+Recent updates have fixed several critical issues:
+- **Idempotent Updates**: Files with unchanged checksums are no longer re-downloaded on every run
+- **Smart Overwrite Logic**: `overwrite=true` now only replaces files when content actually changes
+- **Delete Tracking**: Delete operations are marked as completed and never re-proposed
+- **Version Tracking**: Auxiliary files now support optional version tracking in manifest
+
+See [docs/FIXES_COMPREHENSIVE_v3.md](docs/FIXES_COMPREHENSIVE_v3.md) for complete details.
+
 ## Documentation
 
 - **User Guides**
@@ -70,6 +83,7 @@ The updater now tracks both mods and auxiliary files (configs, resources) in a u
   - [Refactoring Guide](docs/REFACTORING_GUIDE.md) - Architecture and design
   - [Security Summary](docs/SECURITY_SUMMARY.md) - Security analysis
   - [Implementation Summary](docs/IMPLEMENTATION_SUMMARY.md) - Implementation details
+  - [Comprehensive Fixes v3](docs/FIXES_COMPREHENSIVE_v3.md) - Recent bug fixes and enhancements
   - [PR Summaries](docs/PR_SUMMARY_REFACTORING.md) - Pull request details
   - [Fix Summaries](docs/FIX_SUMMARY_v2.md) - Bug fix details
 
