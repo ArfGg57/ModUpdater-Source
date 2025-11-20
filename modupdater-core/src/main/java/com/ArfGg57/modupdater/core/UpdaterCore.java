@@ -142,9 +142,9 @@ public class UpdaterCore {
                     for (int i = 0; i < paths.length(); i++) {
                         String p = paths.getString(i);
                         
-                        // FIXED: Check if delete already processed to prevent re-listing
+                        // Check if delete already completed successfully
                         if (modMetadata.isDeleteCompleted(p)) {
-                            gui.show("Delete already processed (skipping): " + p);
+                            gui.show("Delete already completed (skipping): " + p);
                             continue;
                         }
                         
@@ -152,9 +152,16 @@ public class UpdaterCore {
                         if (f.exists()) {
                             gui.show("Backing up then deleting: " + p);
                             FileUtils.backupPathTo(f, backupRoot);
-                            FileUtils.deleteSilently(f, gui);
-                            // Mark as completed whether delete succeeded or not to prevent re-listing
-                            modMetadata.markDeleteCompleted(p);
+                            
+                            // Use pendingOps.deleteWithFallback which returns success status
+                            boolean deleted = pendingOps.deleteWithFallback(f);
+                            
+                            // Only mark as completed if deletion actually succeeded
+                            if (deleted) {
+                                modMetadata.markDeleteCompleted(p);
+                            } else {
+                                gui.show("Delete scheduled for next startup (file locked): " + p);
+                            }
                         } else {
                             gui.show("Delete skip (not present): " + p);
                             // Mark as completed since file doesn't exist anyway
@@ -167,9 +174,9 @@ public class UpdaterCore {
                     for (int i = 0; i < folders.length(); i++) {
                         String p = folders.getString(i);
                         
-                        // FIXED: Check if delete already processed to prevent re-listing
+                        // Check if delete already completed successfully
                         if (modMetadata.isDeleteCompleted(p)) {
-                            gui.show("Delete already processed (skipping): " + p);
+                            gui.show("Delete already completed (skipping): " + p);
                             continue;
                         }
                         
@@ -177,9 +184,16 @@ public class UpdaterCore {
                         if (d.exists()) {
                             gui.show("Backing up then deleting folder: " + p);
                             FileUtils.backupPathTo(d, backupRoot);
-                            FileUtils.deleteSilently(d, gui);
-                            // Mark as completed whether delete succeeded or not to prevent re-listing
-                            modMetadata.markDeleteCompleted(p);
+                            
+                            // Use pendingOps.deleteWithFallback which returns success status
+                            boolean deleted = pendingOps.deleteWithFallback(d);
+                            
+                            // Only mark as completed if deletion actually succeeded
+                            if (deleted) {
+                                modMetadata.markDeleteCompleted(p);
+                            } else {
+                                gui.show("Delete scheduled for next startup (folder locked): " + p);
+                            }
                         } else {
                             gui.show("Folder delete skip (not present): " + p);
                             // Mark as completed since folder doesn't exist anyway
