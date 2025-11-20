@@ -294,7 +294,7 @@ public class DeletionProcessor {
      * @return List of human-readable deletion descriptions
      */
     public List<String> buildDeletionsList(JSONObject deletesRoot, String currentVersion, String targetVersion) {
-        List<String> deletions = new ArrayList<String>();
+        List<String> deletions = new ArrayList<>();
         
         if (deletesRoot == null) {
             return deletions;

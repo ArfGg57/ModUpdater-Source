@@ -21,7 +21,7 @@ public class DeletionConfig {
     
     public DeletionConfig(boolean safetyMode, List<DeletionEntry> deletions) {
         this.safetyMode = safetyMode;
-        this.deletions = deletions != null ? deletions : new ArrayList<DeletionEntry>();
+        this.deletions = deletions != null ? deletions : new ArrayList<>();
     }
     
     public boolean isSafetyMode() {
@@ -40,7 +40,7 @@ public class DeletionConfig {
      */
     public static DeletionConfig fromJson(JSONObject json) {
         boolean safetyMode = json.optBoolean("safetyMode", false);
-        List<DeletionEntry> deletions = new ArrayList<DeletionEntry>();
+        List<DeletionEntry> deletions = new ArrayList<>();
         
         JSONArray deletionsArr = json.optJSONArray("deletions");
         if (deletionsArr != null) {
@@ -67,7 +67,7 @@ public class DeletionConfig {
         
         public DeletionEntry(String version, List<PathEntry> paths) {
             this.version = version;
-            this.paths = paths != null ? paths : new ArrayList<PathEntry>();
+            this.paths = paths != null ? paths : new ArrayList<>();
         }
         
         public String getVersion() {
@@ -84,7 +84,7 @@ public class DeletionConfig {
                 return null; // Invalid entry
             }
             
-            List<PathEntry> paths = new ArrayList<PathEntry>();
+            List<PathEntry> paths = new ArrayList<>();
             JSONArray pathsArr = json.optJSONArray("paths");
             if (pathsArr != null) {
                 for (int i = 0; i < pathsArr.length(); i++) {

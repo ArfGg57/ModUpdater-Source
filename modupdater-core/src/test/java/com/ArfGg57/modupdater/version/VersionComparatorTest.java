@@ -59,7 +59,7 @@ public class VersionComparatorTest {
     
     @Test
     public void testCompareInvalidVersions() {
-        // Malformed versions return 0
+        // Invalid versions are treated as equal (comparison returns 0)
         assertEquals(0, VersionComparator.compare("abc", "1.2.3"));
         assertEquals(0, VersionComparator.compare("1.2.3", "xyz"));
     }
