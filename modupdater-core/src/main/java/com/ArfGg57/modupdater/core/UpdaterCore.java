@@ -160,9 +160,6 @@ public class UpdaterCore {
             if (totalTasks == 0) totalTasks = 1;
             gui.show("Starting update tasks (" + totalTasks + " steps)");
             int completed = 0;
-            
-            // Process any pending operations from previous run (before main scan)
-            pendingOps.processPendingOperations();
 
             // 1) Deletes phase - Use new DeletionProcessor
             gui.show("=== Starting Deletes Phase ===");

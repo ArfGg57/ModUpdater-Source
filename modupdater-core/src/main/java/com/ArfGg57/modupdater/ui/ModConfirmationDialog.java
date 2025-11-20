@@ -635,11 +635,10 @@ public class ModConfirmationDialog {
             // Always close checking dialog
             if (checkingDialog != null) {
                 final CheckingUpdatesDialog finalDialog = checkingDialog;
-                // Wait a moment so user can see final status
-                try {
-                    Thread.sleep(500);
-                } catch (InterruptedException ignored) {}
-                finalDialog.close();
+                // FIXED: Use Timer instead of Thread.sleep to avoid blocking EDT
+                javax.swing.Timer closeTimer = new javax.swing.Timer(500, e -> finalDialog.close());
+                closeTimer.setRepeats(false);
+                closeTimer.start();
             }
         }
     }
