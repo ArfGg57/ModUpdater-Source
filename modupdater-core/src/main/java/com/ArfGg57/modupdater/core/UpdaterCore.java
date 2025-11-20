@@ -108,6 +108,30 @@ public class UpdaterCore {
             gui.show("Starting update tasks (" + totalTasks + " steps)");
             int completed = 0;
 
+            // Initialize metadata and pending operations before any processing
+            gui.show("=== Initializing Metadata and Pending Operations ===");
+            gui.show("Initializing metadata from: " + modMetadataPath);
+            ModMetadata modMetadata = new ModMetadata(modMetadataPath);
+            gui.show("Loaded metadata for " + modMetadata.getAllMods().size() + " mod(s) and " + modMetadata.getAllFiles().size() + " file(s)");
+            
+            // Initialize RenamedFileResolver for centralized hash-based detection
+            RenamedFileResolver fileResolver = new RenamedFileResolver(modMetadata, new RenamedFileResolver.Logger() {
+                public void log(String message) {
+                    gui.show(message);
+                }
+            });
+            
+            // Initialize PendingOperations for locked file handling
+            String pendingOpsPath = localConfigDir + "pending-ops.json";
+            PendingOperations pendingOps = new PendingOperations(pendingOpsPath, new PendingOperations.Logger() {
+                public void log(String message) {
+                    gui.show(message);
+                }
+            });
+            
+            // Process any pending operations from previous run (before main scan)
+            pendingOps.processPendingOperations();
+
             // 1) Deletes phase
             for (JSONObject del : deletesToApply) {
                 String since = del.optString("since", "0.0.0");
@@ -167,30 +191,6 @@ public class UpdaterCore {
                 completed++;
                 updateProgress(completed, totalTasks);
             }
-
-            // Initialize metadata and pending operations before file/mod processing
-            gui.show("=== Initializing Metadata and Pending Operations ===");
-            gui.show("Initializing metadata from: " + modMetadataPath);
-            ModMetadata modMetadata = new ModMetadata(modMetadataPath);
-            gui.show("Loaded metadata for " + modMetadata.getAllMods().size() + " mod(s) and " + modMetadata.getAllFiles().size() + " file(s)");
-            
-            // Initialize RenamedFileResolver for centralized hash-based detection
-            RenamedFileResolver fileResolver = new RenamedFileResolver(modMetadata, new RenamedFileResolver.Logger() {
-                public void log(String message) {
-                    gui.show(message);
-                }
-            });
-            
-            // Initialize PendingOperations for locked file handling
-            String pendingOpsPath = localConfigDir + "pending-ops.json";
-            PendingOperations pendingOps = new PendingOperations(pendingOpsPath, new PendingOperations.Logger() {
-                public void log(String message) {
-                    gui.show(message);
-                }
-            });
-            
-            // Process any pending operations from previous run (before main scan)
-            pendingOps.processPendingOperations();
 
             // 2) Files phase: handle verify + apply with metadata tracking
             gui.show("=== Starting Files Phase ===");
