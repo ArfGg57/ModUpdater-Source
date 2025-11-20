@@ -108,67 +108,7 @@ public class UpdaterCore {
             gui.show("Starting update tasks (" + totalTasks + " steps)");
             int completed = 0;
 
-            // 1) Deletes phase
-            for (JSONObject del : deletesToApply) {
-                String since = del.optString("since", "0.0.0");
-                gui.show("Applying deletes for version " + since);
-
-                JSONArray paths = del.optJSONArray("paths");
-                if (paths != null) {
-                    for (int i = 0; i < paths.length(); i++) {
-                        String p = paths.getString(i);
-                        
-                        // FIXED: Check if delete already processed to prevent re-listing
-                        if (modMetadata.isDeleteCompleted(p)) {
-                            gui.show("Delete already processed (skipping): " + p);
-                            continue;
-                        }
-                        
-                        File f = new File(p);
-                        if (f.exists()) {
-                            gui.show("Backing up then deleting: " + p);
-                            FileUtils.backupPathTo(f, backupRoot);
-                            FileUtils.deleteSilently(f, gui);
-                            // Mark as completed whether delete succeeded or not to prevent re-listing
-                            modMetadata.markDeleteCompleted(p);
-                        } else {
-                            gui.show("Delete skip (not present): " + p);
-                            // Mark as completed since file doesn't exist anyway
-                            modMetadata.markDeleteCompleted(p);
-                        }
-                    }
-                }
-                JSONArray folders = del.optJSONArray("folders");
-                if (folders != null) {
-                    for (int i = 0; i < folders.length(); i++) {
-                        String p = folders.getString(i);
-                        
-                        // FIXED: Check if delete already processed to prevent re-listing
-                        if (modMetadata.isDeleteCompleted(p)) {
-                            gui.show("Delete already processed (skipping): " + p);
-                            continue;
-                        }
-                        
-                        File d = new File(p);
-                        if (d.exists()) {
-                            gui.show("Backing up then deleting folder: " + p);
-                            FileUtils.backupPathTo(d, backupRoot);
-                            FileUtils.deleteSilently(d, gui);
-                            // Mark as completed whether delete succeeded or not to prevent re-listing
-                            modMetadata.markDeleteCompleted(p);
-                        } else {
-                            gui.show("Folder delete skip (not present): " + p);
-                            // Mark as completed since folder doesn't exist anyway
-                            modMetadata.markDeleteCompleted(p);
-                        }
-                    }
-                }
-
-                completed++;
-                updateProgress(completed, totalTasks);
-            }
-
-            // Initialize metadata and pending operations before file/mod processing
+            // Initialize metadata and pending operations before any processing
             gui.show("=== Initializing Metadata and Pending Operations ===");
             gui.show("Initializing metadata from: " + modMetadataPath);
             ModMetadata modMetadata = new ModMetadata(modMetadataPath);
@@ -191,6 +131,85 @@ public class UpdaterCore {
             
             // Process any pending operations from previous run (before main scan)
             pendingOps.processPendingOperations();
+
+            // 1) Deletes phase
+            for (JSONObject del : deletesToApply) {
+                String since = del.optString("since", "0.0.0");
+                gui.show("Applying deletes for version " + since);
+
+                JSONArray paths = del.optJSONArray("paths");
+                if (paths != null) {
+                    for (int i = 0; i < paths.length(); i++) {
+                        String p = paths.getString(i);
+                        
+                        // Check if delete already completed successfully
+                        if (modMetadata.isDeleteCompleted(p)) {
+                            gui.show("Delete already completed (skipping): " + p);
+                            continue;
+                        }
+                        
+                        File f = new File(p);
+                        if (f.exists()) {
+                            gui.show("Backing up then deleting: " + p);
+                            FileUtils.backupPathTo(f, backupRoot);
+                            
+                            // Use pendingOps.deleteWithFallback which returns success status
+                            boolean deleted = pendingOps.deleteWithFallback(f);
+                            
+                            // Only mark as completed if deletion actually succeeded
+                            if (deleted) {
+                                modMetadata.markDeleteCompleted(p);
+                            } else {
+                                gui.show("Delete scheduled for next startup (file locked): " + p);
+                            }
+                        } else {
+                            gui.show("Delete skip (not present): " + p);
+                            // Mark as completed since file doesn't exist anyway
+                            modMetadata.markDeleteCompleted(p);
+                        }
+                    }
+                }
+                JSONArray folders = del.optJSONArray("folders");
+                if (folders != null) {
+                    for (int i = 0; i < folders.length(); i++) {
+                        String p = folders.getString(i);
+                        
+                        // Check if delete already completed successfully
+                        if (modMetadata.isDeleteCompleted(p)) {
+                            gui.show("Delete already completed (skipping): " + p);
+                            continue;
+                        }
+                        
+                        File d = new File(p);
+                        if (d.exists()) {
+                            gui.show("Backing up then deleting folder: " + p);
+                            FileUtils.backupPathTo(d, backupRoot);
+                            
+                            // Use pendingOps.deleteWithFallback which returns success status
+                            boolean deleted = pendingOps.deleteWithFallback(d);
+                            
+                            // Only mark as completed if deletion actually succeeded
+                            if (deleted) {
+                                modMetadata.markDeleteCompleted(p);
+                            } else {
+                                gui.show("Delete scheduled for next startup (folder locked): " + p);
+                            }
+                        } else {
+                            gui.show("Folder delete skip (not present): " + p);
+                            // Mark as completed since folder doesn't exist anyway
+                            modMetadata.markDeleteCompleted(p);
+                        }
+                    }
+                }
+
+                completed++;
+                updateProgress(completed, totalTasks);
+            }
+            
+            // Save metadata after deletes phase to persist delete tracking
+            // This ensures delete operations are not repeated if the program crashes later
+            gui.show("Saving metadata after deletes phase...");
+            modMetadata.save();
 
             // 2) Files phase: handle verify + apply with metadata tracking
             gui.show("=== Starting Files Phase ===");
@@ -215,7 +234,13 @@ public class UpdaterCore {
             }
 
             for (JSONObject f : fileHandleMap.values()) {
-                String url = f.getString("url");
+                String url = f.optString("url", "").trim();
+                if (url.isEmpty()) {
+                    gui.show("WARNING: Skipping file entry with missing URL");
+                    completed++;
+                    updateProgress(completed, totalTasks);
+                    continue;
+                }
                 String downloadPath = f.optString("downloadPath", "config/");
                 // CHANGED: Use file_name instead of name to match schema
                 // IMPORTANT: file_name is for actual filename, NOT display_name
