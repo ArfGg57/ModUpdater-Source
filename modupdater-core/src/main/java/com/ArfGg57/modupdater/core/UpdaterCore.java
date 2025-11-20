@@ -504,6 +504,9 @@ public class UpdaterCore {
                                             if (!pendingOps.moveWithFallback(existingFile, target)) {
                                                 gui.show("RENAME FAILED: File locked, rename scheduled for next startup");
                                                 gui.show("Continuing with existing file (valid): " + existingFile.getPath());
+                                                // FIXED: Update metadata with current filename so we know it's the same file
+                                                modMetadata.recordMod(numberId, existingFile.getName(), expectedHash, source);
+                                                modMetadata.save();
                                                 // Keep using existingFile - no re-download needed
                                             } else {
                                                 gui.show("Successfully renamed mod to: " + target.getPath());
@@ -542,6 +545,8 @@ public class UpdaterCore {
                                         if (!pendingOps.moveWithFallback(renamedFile, target)) {
                                             gui.show("RENAME FAILED: File locked, rename scheduled for next startup");
                                             gui.show("Continuing with existing file (valid): " + renamedFile.getPath());
+                                            // FIXED: Metadata already recorded with renamedFile.getName() above, save it
+                                            modMetadata.save();
                                             // Keep using renamedFile - no re-download needed
                                         } else {
                                             gui.show("Successfully renamed mod to: " + target.getPath());
@@ -582,6 +587,8 @@ public class UpdaterCore {
                                         if (!pendingOps.moveWithFallback(existingFile, target)) {
                                             gui.show("RENAME FAILED: File locked, rename scheduled for next startup");
                                             gui.show("Continuing with existing file (valid): " + existingFile.getPath());
+                                            // FIXED: Metadata already recorded with existingFile.getName() above, save it
+                                            modMetadata.save();
                                             // Keep using existingFile - no re-download needed
                                         } else {
                                             gui.show("Successfully renamed mod to: " + target.getPath());
@@ -649,6 +656,8 @@ public class UpdaterCore {
                             if (!pendingOps.moveWithFallback(existingFile, target)) {
                                 gui.show("RENAME FAILED: File locked, rename scheduled for next startup");
                                 gui.show("Continuing with existing file (valid): " + existingFile.getPath());
+                                // FIXED: Metadata already recorded with renamedFile.getName() above, save it
+                                modMetadata.save();
                                 // Keep using existingFile - no re-download needed
                             } else {
                                 gui.show("Successfully renamed mod to: " + target.getPath());
