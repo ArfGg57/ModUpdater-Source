@@ -5,14 +5,15 @@ A Forge 1.7.10 mod that automatically updates mods, configs, and files from a re
 ## Features
 
 - 🔄 Automatic mod updates from CurseForge, Modrinth, or direct URLs
-- 📦 Config file synchronization
+- 📦 Config file synchronization with intelligent tracking
 - 🔍 Smart rename detection using SHA-256 hashes
 - 🔒 Robust file lock handling for Windows compatibility
 - ✨ Clean, modern UI for update confirmations
 - 📊 Comprehensive logging and error handling
 - 🎯 **NEW:** Intelligent filename extension inference
 - ⚡ **NEW:** Early-load coremod for locked file handling
-- 🛡️ **NEW:** Enhanced pending operations system
+- 🛡️ **NEW:** Enhanced pending operations system (MOVE/DELETE/REPLACE)
+- 📋 **NEW:** Unified manifest tracking for mods AND auxiliary files
 
 ## Quick Start
 
@@ -37,10 +38,19 @@ Saves as `betterleaves.jar` automatically! See [docs/FILENAME_RESOLUTION.md](doc
 
 Optional coremod support for processing pending file operations before mods load:
 - Handles locked files more reliably on Windows
-- Processes deferred operations from previous runs
+- Processes deferred operations from previous runs (MOVE/DELETE/REPLACE)
 - Runs before FML scans mods directory
+- Automatically configured via manifest attributes
 
 See [docs/COREMOD_SETUP.md](docs/COREMOD_SETUP.md) for setup instructions.
+
+### Unified Manifest for Files and Mods
+
+The updater now tracks both mods and auxiliary files (configs, resources) in a unified manifest:
+- Prevents repeated downloads of already-present files
+- Tracks checksums for integrity verification
+- Supports migration from previous metadata format
+- No configuration changes needed - works automatically!
 
 ## Documentation
 

@@ -45,12 +45,43 @@ When Forge starts, you should see log messages like:
 2. On the next game launch, the coremod loads early (before mods are loaded).
 
 3. The coremod reads `pending-ops.json` and attempts to process each operation:
-   - DELETE: Try to delete the file
-   - MOVE: Try to move the file
+   - **DELETE**: Try to delete the file
+   - **MOVE**: Try to move/rename the file
+   - **REPLACE**: Delete old file and install staged replacement
 
 4. Successfully completed operations are removed from `pending-ops.json`.
 
 5. Failed operations remain in the file for the next run.
+
+## Pending Operations Format
+
+The `pending-ops.json` file stores operations in this format:
+
+```json
+{
+  "operations": [
+    {
+      "type": "DELETE",
+      "sourcePath": "/path/to/old-file.jar",
+      "timestamp": 1234567890
+    },
+    {
+      "type": "MOVE",
+      "sourcePath": "/path/to/old-name.jar",
+      "targetPath": "/path/to/new-name.jar",
+      "timestamp": 1234567890
+    },
+    {
+      "type": "REPLACE",
+      "sourcePath": "/path/to/old-version.jar",
+      "targetPath": "/path/to/new-version.jar",
+      "stagedPath": "/path/to/staging/new-version.jar",
+      "checksum": "sha256hash...",
+      "timestamp": 1234567890
+    }
+  ]
+}
+```
 
 ## Technical Notes
 
