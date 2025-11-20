@@ -191,6 +191,11 @@ public class UpdaterCore {
                 completed++;
                 updateProgress(completed, totalTasks);
             }
+            
+            // Save metadata after deletes phase to persist delete tracking
+            // This ensures delete operations are not repeated if the program crashes later
+            gui.show("Saving metadata after deletes phase...");
+            modMetadata.save();
 
             // 2) Files phase: handle verify + apply with metadata tracking
             gui.show("=== Starting Files Phase ===");
@@ -215,7 +220,13 @@ public class UpdaterCore {
             }
 
             for (JSONObject f : fileHandleMap.values()) {
-                String url = f.getString("url");
+                String url = f.optString("url", "").trim();
+                if (url.isEmpty()) {
+                    gui.show("WARNING: Skipping file entry with missing URL");
+                    completed++;
+                    updateProgress(completed, totalTasks);
+                    continue;
+                }
                 String downloadPath = f.optString("downloadPath", "config/");
                 // CHANGED: Use file_name instead of name to match schema
                 // IMPORTANT: file_name is for actual filename, NOT display_name

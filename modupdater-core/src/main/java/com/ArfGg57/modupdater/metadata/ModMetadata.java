@@ -209,9 +209,9 @@ public class ModMetadata {
             File parent = file.getParentFile();
             if (parent != null && !parent.exists()) parent.mkdirs();
             
-            java.io.FileOutputStream fos = new java.io.FileOutputStream(file);
-            fos.write(root.toString(2).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            fos.close();
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(file)) {
+                fos.write(root.toString(2).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
         } catch (Exception e) {
             // best effort
         }
