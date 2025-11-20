@@ -62,7 +62,6 @@ public class ModConfirmationDialog {
     private JList<String> deleteList;
     private DefaultListModel<String> deleteListModel;
 
-    private javax.swing.Timer fadeOutTimer;
     private Point initialClick;
     private boolean agreed = false;
 
@@ -707,28 +706,9 @@ public class ModConfirmationDialog {
             closeDialog();
         });
 
-        fadeOutTimer = new javax.swing.Timer(10, e -> {
-            float op = dialog.getOpacity() - 0.2f;
-            if (op <= 0) {
-                fadeOutTimer.stop();
-                dialog.dispose();
-
-                if (agreed && core != null) {
-                    // Updater is started synchronously by UpdaterTweaker after dialog closes.
-                } else if (!agreed) {
-                    // User clicked Quit - crash the JVM to force game exit
-                    System.err.println("[ModConfirmationDialog] User declined update. Exiting...");
-                    System.exit(1);
-                }
-            } else {
-                dialog.setOpacity(op);
-            }
-        });
-
         dialog.setContentPane(mainPanel);
         dialog.setSize(950,550);
         dialog.setLocationRelativeTo(null);
-        dialog.setOpacity(1.0f);
         dialog.setAlwaysOnTop(true);
     }
 
@@ -1184,15 +1164,17 @@ public class ModConfirmationDialog {
     }
 
 
-    // Added: safely close dialog via fade or immediate disposal
+    // Close dialog immediately without animation
     private void closeDialog() {
-        if (fadeOutTimer != null && !fadeOutTimer.isRunning()) {
-            fadeOutTimer.start();
-        } else {
-            if (dialog != null) {
-                dialog.setVisible(false);
-                dialog.dispose();
-            }
+        if (dialog != null) {
+            dialog.setVisible(false);
+            dialog.dispose();
+        }
+        
+        // Handle exit if user declined
+        if (!agreed) {
+            System.err.println("[ModConfirmationDialog] User declined update. Exiting...");
+            System.exit(1);
         }
     }
 

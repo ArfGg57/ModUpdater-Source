@@ -103,11 +103,7 @@ public class UpdaterCore {
             File backupRoot = new File("modupdater/backup/" + timestamp + "/");
             if (!backupRoot.exists()) backupRoot.mkdirs();
 
-            int totalTasks = deletesToApply.size() + filesToApply.size() + modsToApply.size()
-                    + Math.max(1, modsToVerify.size() + filesToVerify.size());
-            if (totalTasks == 0) totalTasks = 1;
-            gui.show("Starting update tasks (" + totalTasks + " steps)");
-            int completed = 0;
+            gui.show("Calculating tasks to perform...");
 
             // Initialize metadata and pending operations before any processing
             gui.show("=== Initializing Metadata and Pending Operations ===");
@@ -129,6 +125,41 @@ public class UpdaterCore {
                     gui.show(message);
                 }
             });
+            
+            // Process any pending operations from previous run (before main scan)
+            pendingOps.processPendingOperations();
+
+            // Build file and mod maps for deduplication (needed for accurate progress calculation)
+            Map<String, Boolean> fileNeedsApply = new LinkedHashMap<>();
+            for (JSONObject f : filesToApply) {
+                String key = f.optString("url", "") + "|" + f.optString("file_name", "");
+                fileNeedsApply.put(key, true);
+            }
+            
+            Map<String, JSONObject> fileHandleMap = new LinkedHashMap<>();
+            for (JSONObject f : filesToVerify) {
+                String key = f.optString("url", "") + "|" + f.optString("file_name", "");
+                fileHandleMap.put(key, f);
+            }
+            for (JSONObject f : filesToApply) {
+                String key = f.optString("url", "") + "|" + f.optString("file_name", "");
+                fileHandleMap.put(key, f);
+            }
+
+            // Build map of all mods that should be installed
+            Map<String, JSONObject> modHandleMap = new LinkedHashMap<>();
+            for (JSONObject m : modsToVerify) {
+                String key = m.optString("numberId", "");
+                if (!key.isEmpty()) {
+                    modHandleMap.put(key, m);
+                }
+            }
+
+            // FIXED: Calculate totalTasks based on actual work to be done
+            int totalTasks = deletesToApply.size() + fileHandleMap.size() + modHandleMap.size();
+            if (totalTasks == 0) totalTasks = 1;
+            gui.show("Starting update tasks (" + totalTasks + " steps)");
+            int completed = 0;
             
             // Process any pending operations from previous run (before main scan)
             pendingOps.processPendingOperations();
@@ -156,25 +187,6 @@ public class UpdaterCore {
 
             // 2) Files phase: handle verify + apply with metadata tracking
             gui.show("=== Starting Files Phase ===");
-            
-            // Build a map to track which files need to be applied (are in version range)
-            Map<String, Boolean> fileNeedsApply = new LinkedHashMap<>();
-            for (JSONObject f : filesToApply) {
-                String key = f.optString("url", "") + "|" + f.optString("file_name", "");
-                fileNeedsApply.put(key, true);
-            }
-            
-            Map<String, JSONObject> fileHandleMap = new LinkedHashMap<>();
-            for (JSONObject f : filesToVerify) {
-                // CHANGED: Use file_name instead of name for deduplication key
-                String key = f.optString("url", "") + "|" + f.optString("file_name", "");
-                fileHandleMap.put(key, f);
-            }
-            for (JSONObject f : filesToApply) {
-                // CHANGED: Use file_name instead of name for deduplication key
-                String key = f.optString("url", "") + "|" + f.optString("file_name", "");
-                fileHandleMap.put(key, f);
-            }
 
             for (JSONObject f : fileHandleMap.values()) {
                 String url = f.optString("url", "").trim();
@@ -334,15 +346,6 @@ public class UpdaterCore {
 
             // 3) Mods phase with metadata tracking
             gui.show("=== Starting Mods Phase ===");
-            
-            // Build map of all mods that should be installed (from modsToVerify)
-            Map<String, JSONObject> modHandleMap = new LinkedHashMap<>();
-            for (JSONObject m : modsToVerify) {
-                String key = m.optString("numberId", "");
-                if (!key.isEmpty()) {
-                    modHandleMap.put(key, m);
-                }
-            }
             gui.show("Expected mods from mods.json: " + modHandleMap.size());
 
             // Step 1: Clean up mods folder - remove ONLY ModUpdater-managed files that are outdated

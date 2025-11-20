@@ -43,8 +43,6 @@ public class GuiUpdater {
 
     private Point initialClick;
 
-    private Timer fadeOutTimer;
-    private Timer fadeInTimer;
     private Timer progressAnimator;
 
     private int targetProgress = 0;
@@ -142,38 +140,14 @@ public class GuiUpdater {
         mainPanel.add(progressBar, BorderLayout.SOUTH);
 
         // --- Timers for Animations ---
-        fadeOutTimer = new Timer(10, e -> {
-            float opacity = frame.getOpacity();
-            opacity -= 0.25f;
-            if (opacity <= 0) {
-                fadeOutTimer.stop();
-                frame.dispose();
-            } else {
-                frame.setOpacity(opacity);
-            }
-        });
-
-        fadeInTimer = new Timer(10, e -> {
-            float opacity = frame.getOpacity();
-            opacity += 0.25f;
-            if (opacity >= 1) {
-                fadeInTimer.stop();
-                frame.setOpacity(1.0f);
-            } else {
-                frame.setOpacity(opacity);
-            }
-        });
-
         progressAnimator = new Timer(20, e -> updateProgressAnimation());
 
         // Frame
         frame.setContentPane(mainPanel);
         frame.setSize(600, 500);
         frame.setLocationRelativeTo(null);
-        frame.setOpacity(0.0f); // Start invisible
         frame.setAlwaysOnTop(true);
         frame.setVisible(true);
-        fadeInTimer.start(); // Start fade-in
     }
 
     // --- Animation logic for progress bar value ---
@@ -219,11 +193,10 @@ public class GuiUpdater {
     }
 
     public void close() {
-        if (!fadeOutTimer.isRunning()) {
-            progressAnimator.stop();
-            ((InsaneProgressBarUI) progressBar.getUI()).stopAnimation();
-            fadeOutTimer.start();
-        }
+        progressAnimator.stop();
+        ((InsaneProgressBarUI) progressBar.getUI()).stopAnimation();
+        frame.setVisible(false);
+        frame.dispose();
     }
 
     // --- ADDED: Methods required by UpdaterCore ---
@@ -253,19 +226,12 @@ public class GuiUpdater {
         return cancelled;
     }
 
-    // --- Custom Animated ListCellRenderer ---
+    // --- Custom ListCellRenderer (removed fade animation) ---
     private static class AnimatedListRenderer extends JPanel implements ListCellRenderer<String> {
         private final JLabel label;
-        private final Timer fadeTimer;
-
-        private final ConcurrentHashMap<String, Float> itemOpacities = new ConcurrentHashMap<>();
-
-        private final JList<String> listReference;
 
         public AnimatedListRenderer(JList<String> list) {
             super(new BorderLayout());
-
-            this.listReference = list;
 
             label = new JLabel();
             label.setFont(FONT_LOG);
@@ -273,20 +239,6 @@ public class GuiUpdater {
             setBorder(new EmptyBorder(2, 5, 2, 5));
             setOpaque(true);
             add(label, BorderLayout.CENTER);
-
-            fadeTimer = new Timer(10, e -> {
-                if (listReference != null) {
-                    listReference.repaint();
-                }
-
-                boolean needsRepaint = itemOpacities.values().stream().anyMatch(o -> o < 1.0f);
-
-                if (!needsRepaint) {
-                    ((Timer)e.getSource()).stop();
-                }
-            });
-            fadeTimer.setRepeats(true);
-            fadeTimer.start();
         }
 
         @Override
@@ -295,21 +247,8 @@ public class GuiUpdater {
             label.setText(value);
             setBackground(COLOR_LIST_BG);
 
-            Float currentOpacity = itemOpacities.getOrDefault(value, 0.0f);
-
-            if (currentOpacity < 1.0f) {
-                currentOpacity = Math.min(1.0f, currentOpacity + 0.05f);
-                itemOpacities.put(value, currentOpacity);
-                if (!fadeTimer.isRunning()) {
-                    fadeTimer.start();
-                }
-            }
-
             Color baseColor = isSelected ? list.getSelectionForeground() : list.getForeground();
-            int alpha = (int) (currentOpacity * 255);
-            alpha = Math.max(0, Math.min(255, alpha));
-
-            label.setForeground(new Color(baseColor.getRed(), baseColor.getGreen(), baseColor.getBlue(), alpha));
+            label.setForeground(baseColor);
 
             return this;
         }
