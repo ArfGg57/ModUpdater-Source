@@ -14,9 +14,11 @@ A Forge 1.7.10 mod that automatically updates mods, configs, and files from a re
 - ⚡ **NEW:** Early-load coremod for locked file handling
 - 🛡️ **NEW:** Enhanced pending operations system (MOVE/DELETE/REPLACE)
 - 📋 **NEW:** Unified manifest tracking for mods AND auxiliary files
+- 🗑️ **NEW:** Version-specific deletion system with safety mode
 - ✅ **FIXED:** Idempotent updates - no repeated downloads of unchanged files
 - 🗑️ **FIXED:** Delete tracking - operations only execute once
 - 🔄 **FIXED:** Smart overwrite - only replaces on actual content change
+- 🔧 **FIXED:** Rename failures no longer trigger unnecessary re-downloads
 
 ## Quick Start
 
@@ -55,6 +57,16 @@ The updater now tracks both mods and auxiliary files (configs, resources) in a u
 - Supports migration from previous metadata format
 - No configuration changes needed - works automatically!
 
+### Version-Specific Deletion System
+
+The new deletion system provides precise control over file and folder cleanup:
+- **Version range logic**: Deletions only apply when transitioning through specific versions
+- **Safety mode**: Optional restriction to only delete from config/ directory
+- **File vs folder distinction**: Properly handles both types with recursive folder deletion
+- **Legacy format detection**: Automatically detects old format and provides migration guidance
+
+See [docs/CONFIG.md](docs/CONFIG.md) for complete documentation and examples.
+
 ### Recent Comprehensive Fixes
 
 Recent updates have fixed several critical issues:
@@ -62,6 +74,7 @@ Recent updates have fixed several critical issues:
 - **Smart Overwrite Logic**: `overwrite=true` now only replaces files when content actually changes
 - **Delete Tracking**: Delete operations are marked as completed and never re-proposed
 - **Version Tracking**: Auxiliary files now support optional version tracking in manifest
+- **Rename Handling**: Failed renames no longer trigger unnecessary re-downloads
 
 See [docs/FIXES_COMPREHENSIVE_v3.md](docs/FIXES_COMPREHENSIVE_v3.md) for complete details.
 
@@ -70,6 +83,7 @@ See [docs/FIXES_COMPREHENSIVE_v3.md](docs/FIXES_COMPREHENSIVE_v3.md) for complet
 - **User Guides**
   - [Quick Start Guide](docs/QUICK_START.md) - Get started quickly
   - [Mods JSON Schema](docs/MODS_JSON_SCHEMA.md) - Configuration format reference
+  - [Deletion Configuration](docs/CONFIG.md) - Version-specific deletion system
   - [Filename Resolution](docs/FILENAME_RESOLUTION.md) - Extension inference guide
   - [Coremod Setup](docs/COREMOD_SETUP.md) - Early-load configuration
 

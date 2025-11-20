@@ -1,0 +1,25 @@
+{
+  "safetyMode": true,
+  "deletions": [
+    {
+      "version": "1.3.0",
+      "paths": [
+        { "type": "file", "path": "config/old-settings.cfg" },
+        { "type": "folder", "path": "config/deprecated_configs" }
+      ]
+    },
+    {
+      "version": "1.5.0",
+      "paths": [
+        { "type": "file", "path": "config/legacy.json" },
+        { "type": "file", "path": "config/obsolete.txt" }
+      ]
+    },
+    {
+      "version": "2.0.0",
+      "paths": [
+        { "type": "folder", "path": "config/v1-settings" }
+      ]
+    }
+  ]
+}
