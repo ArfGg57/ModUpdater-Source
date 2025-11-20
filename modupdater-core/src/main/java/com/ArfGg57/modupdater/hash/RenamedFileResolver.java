@@ -1,6 +1,6 @@
 package com.ArfGg57.modupdater.hash;
 
-import com.ArfGg57.modupdater.FileUtils;
+import com.ArfGg57.modupdater.util.FileUtils;
 import com.ArfGg57.modupdater.metadata.ModMetadata;
 
 import java.io.File;

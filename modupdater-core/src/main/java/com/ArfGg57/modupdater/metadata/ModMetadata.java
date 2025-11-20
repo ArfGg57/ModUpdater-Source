@@ -1,6 +1,6 @@
 package com.ArfGg57.modupdater.metadata;
 
-import com.ArfGg57.modupdater.FileUtils;
+import com.ArfGg57.modupdater.util.FileUtils;
 import org.json.JSONArray;
 import org.json.JSONObject;
 

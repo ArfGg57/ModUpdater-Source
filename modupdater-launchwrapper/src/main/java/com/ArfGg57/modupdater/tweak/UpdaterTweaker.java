@@ -1,8 +1,8 @@
 package com.ArfGg57.modupdater.tweak;
 
-import com.ArfGg57.modupdater.ModConfirmationDialog;
-import com.ArfGg57.modupdater.ModConfirmationDialog.ModEntry;
-import com.ArfGg57.modupdater.UpdaterCore;
+import com.ArfGg57.modupdater.ui.ModConfirmationDialog;
+import com.ArfGg57.modupdater.ui.ModConfirmationDialog.ModEntry;
+import com.ArfGg57.modupdater.core.UpdaterCore;
 import net.minecraft.launchwrapper.ITweaker;
 import net.minecraft.launchwrapper.LaunchClassLoader;
 

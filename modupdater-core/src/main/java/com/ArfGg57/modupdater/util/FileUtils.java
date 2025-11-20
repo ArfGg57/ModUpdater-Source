@@ -1,5 +1,6 @@
-package com.ArfGg57.modupdater;
+package com.ArfGg57.modupdater.util;
 
+import com.ArfGg57.modupdater.ui.GuiUpdater;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.json.JSONTokener;

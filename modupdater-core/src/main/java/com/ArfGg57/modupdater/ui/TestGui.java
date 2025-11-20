@@ -1,4 +1,4 @@
-package com.ArfGg57.modupdater;
+package com.ArfGg57.modupdater.ui;
 
 public class TestGui {
     public static void main(String[] args) {

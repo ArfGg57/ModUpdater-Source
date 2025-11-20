@@ -1,4 +1,4 @@
-package com.ArfGg57.modupdater;
+package com.ArfGg57.modupdater.ui;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;

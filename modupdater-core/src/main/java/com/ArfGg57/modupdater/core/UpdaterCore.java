@@ -1,9 +1,11 @@
-package com.ArfGg57.modupdater;
+package com.ArfGg57.modupdater.core;
 
 import com.ArfGg57.modupdater.hash.HashUtils;
 import com.ArfGg57.modupdater.hash.RenamedFileResolver;
 import com.ArfGg57.modupdater.metadata.ModMetadata;
 import com.ArfGg57.modupdater.util.PendingOperations;
+import com.ArfGg57.modupdater.util.FileUtils;
+import com.ArfGg57.modupdater.ui.GuiUpdater;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
