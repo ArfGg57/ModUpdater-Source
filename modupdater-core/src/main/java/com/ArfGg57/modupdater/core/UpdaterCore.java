@@ -117,13 +117,24 @@ public class UpdaterCore {
                 if (paths != null) {
                     for (int i = 0; i < paths.length(); i++) {
                         String p = paths.getString(i);
+                        
+                        // FIXED: Check if delete already processed to prevent re-listing
+                        if (modMetadata.isDeleteCompleted(p)) {
+                            gui.show("Delete already processed (skipping): " + p);
+                            continue;
+                        }
+                        
                         File f = new File(p);
                         if (f.exists()) {
                             gui.show("Backing up then deleting: " + p);
                             FileUtils.backupPathTo(f, backupRoot);
                             FileUtils.deleteSilently(f, gui);
+                            // Mark as completed whether delete succeeded or not to prevent re-listing
+                            modMetadata.markDeleteCompleted(p);
                         } else {
                             gui.show("Delete skip (not present): " + p);
+                            // Mark as completed since file doesn't exist anyway
+                            modMetadata.markDeleteCompleted(p);
                         }
                     }
                 }
@@ -131,13 +142,24 @@ public class UpdaterCore {
                 if (folders != null) {
                     for (int i = 0; i < folders.length(); i++) {
                         String p = folders.getString(i);
+                        
+                        // FIXED: Check if delete already processed to prevent re-listing
+                        if (modMetadata.isDeleteCompleted(p)) {
+                            gui.show("Delete already processed (skipping): " + p);
+                            continue;
+                        }
+                        
                         File d = new File(p);
                         if (d.exists()) {
                             gui.show("Backing up then deleting folder: " + p);
                             FileUtils.backupPathTo(d, backupRoot);
                             FileUtils.deleteSilently(d, gui);
+                            // Mark as completed whether delete succeeded or not to prevent re-listing
+                            modMetadata.markDeleteCompleted(p);
                         } else {
                             gui.show("Folder delete skip (not present): " + p);
+                            // Mark as completed since folder doesn't exist anyway
+                            modMetadata.markDeleteCompleted(p);
                         }
                     }
                 }
@@ -224,14 +246,32 @@ public class UpdaterCore {
                 // Check metadata first to see if file is already tracked
                 if (modMetadata.isFileInstalledAndMatches(fileName, expectedHash)) {
                     if (dest.exists()) {
-                        gui.show("[ModUpdater] File OK (manifest): " + dest.getPath());
+                        // File is in manifest with matching hash and exists on disk
+                        // FIXED: Check if we're upgrading and overwrite=true ONLY if hash differs
+                        if (overwrite && isInVersionRange && upgrading && expectedHash != null && !expectedHash.trim().isEmpty()) {
+                            // Even though manifest matches, we're upgrading - verify hash against remote
+                            try {
+                                String actual = HashUtils.sha256Hex(dest);
+                                if (!FileUtils.hashEquals(expectedHash, actual)) {
+                                    gui.show("File hash changed in upgrade (overwrite=true); will update: " + dest.getPath());
+                                    needDownload = true;
+                                } else {
+                                    gui.show("[ModUpdater] File OK (manifest + hash match): " + dest.getPath());
+                                }
+                            } catch (Exception ex) {
+                                gui.show("Error verifying file hash: " + ex.getMessage() + "; will redownload: " + dest.getPath());
+                                needDownload = true;
+                            }
+                        } else {
+                            gui.show("[ModUpdater] File OK (manifest): " + dest.getPath());
+                        }
                     } else {
                         // File in manifest but missing on disk - need to redownload
                         gui.show("File in manifest but missing on disk; will download: " + dest.getPath());
                         needDownload = true;
                     }
                 } else if (dest.exists()) {
-                    // File exists but not in manifest - check hash
+                    // File exists but not in manifest or hash doesn't match - check hash
                     if (expectedHash != null && !expectedHash.trim().isEmpty()) {
                         try {
                             String actual = HashUtils.sha256Hex(dest);
@@ -256,13 +296,9 @@ public class UpdaterCore {
                         } catch (Exception ex) {
                             modMetadata.recordFile(fileName, "", url, downloadPath);
                         }
-                    } else if (overwrite && isInVersionRange && upgrading) {
-                        // FIXED: When overwrite=true and we're upgrading AND file is in version range, re-download
-                        gui.show("File will be overwritten due to version update (overwrite=true): " + dest.getPath());
-                        needDownload = true;
                     } else {
-                        // File exists, no hash to verify, and either not upgrading or not in version range
-                        gui.show("File exists (no hash to verify, no action needed): " + dest.getPath());
+                        // File exists, no hash to verify, treat as OK and add to manifest
+                        gui.show("File exists (no hash to verify): " + dest.getPath());
                         // Add to manifest for future runs
                         try {
                             String actual = HashUtils.sha256Hex(dest);
