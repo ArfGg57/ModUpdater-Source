@@ -1,6 +1,7 @@
 package com.ArfGg57.modupdater.ui;
 
 import com.ArfGg57.modupdater.core.UpdaterCore;
+import com.ArfGg57.modupdater.deletion.DeletionProcessor;
 import com.ArfGg57.modupdater.hash.HashUtils;
 import com.ArfGg57.modupdater.hash.RenamedFileResolver;
 import com.ArfGg57.modupdater.metadata.ModMetadata;
@@ -940,10 +941,21 @@ public class ModConfirmationDialog {
 
     private List<String> loadDeletes(String urlStr){
         List<String> deletes = new ArrayList<>();
-        try(InputStream in = new URL(urlStr).openStream()){
-            JSONArray arr = new JSONArray(new JSONTokener(in));
-            for(int i=0;i<arr.length();i++) deletes.add(arr.getString(i));
-        }catch(Exception e){ e.printStackTrace(); }
+        try {
+            // Load the deletes.json using the new format
+            JSONObject deletesRoot = FileUtils.readJsonFromUrl(urlStr);
+            
+            // Use a dummy metadata and processor to build the list
+            // In test mode, we don't have version info, so we'll show all deletions
+            ModMetadata dummyMetadata = new ModMetadata(null);
+            DeletionProcessor processor = new DeletionProcessor(null, dummyMetadata, null, null);
+            
+            // Get all deletions (use version range that includes everything)
+            List<String> deletionsList = processor.buildDeletionsList(deletesRoot, "0.0.0", "999.0.0");
+            deletes.addAll(deletionsList);
+        } catch(Exception e) { 
+            e.printStackTrace(); 
+        }
         return deletes;
     }
 

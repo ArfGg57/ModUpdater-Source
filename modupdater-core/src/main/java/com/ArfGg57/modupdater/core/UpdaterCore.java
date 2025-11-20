@@ -1,5 +1,6 @@
 package com.ArfGg57.modupdater.core;
 
+import com.ArfGg57.modupdater.deletion.DeletionProcessor;
 import com.ArfGg57.modupdater.hash.HashUtils;
 import com.ArfGg57.modupdater.hash.RenamedFileResolver;
 import com.ArfGg57.modupdater.metadata.ModMetadata;
@@ -132,84 +133,26 @@ public class UpdaterCore {
             // Process any pending operations from previous run (before main scan)
             pendingOps.processPendingOperations();
 
-            // 1) Deletes phase
-            for (JSONObject del : deletesToApply) {
-                String since = del.optString("since", "0.0.0");
-                gui.show("Applying deletes for version " + since);
-
-                JSONArray paths = del.optJSONArray("paths");
-                if (paths != null) {
-                    for (int i = 0; i < paths.length(); i++) {
-                        String p = paths.getString(i);
-                        
-                        // Check if delete already completed successfully
-                        if (modMetadata.isDeleteCompleted(p)) {
-                            gui.show("Delete already completed (skipping): " + p);
-                            continue;
-                        }
-                        
-                        File f = new File(p);
-                        if (f.exists()) {
-                            gui.show("Backing up then deleting: " + p);
-                            FileUtils.backupPathTo(f, backupRoot);
-                            
-                            // Use pendingOps.deleteWithFallback which returns success status
-                            boolean deleted = pendingOps.deleteWithFallback(f);
-                            
-                            // Only mark as completed if deletion actually succeeded
-                            if (deleted) {
-                                modMetadata.markDeleteCompleted(p);
-                            } else {
-                                gui.show("Delete scheduled for next startup (file locked): " + p);
-                            }
-                        } else {
-                            gui.show("Delete skip (not present): " + p);
-                            // Mark as completed since file doesn't exist anyway
-                            modMetadata.markDeleteCompleted(p);
-                        }
+            // 1) Deletes phase - Use new DeletionProcessor
+            gui.show("=== Starting Deletes Phase ===");
+            DeletionProcessor deletionProcessor = new DeletionProcessor(
+                new DeletionProcessor.Logger() {
+                    public void log(String message) {
+                        gui.show(message);
                     }
-                }
-                JSONArray folders = del.optJSONArray("folders");
-                if (folders != null) {
-                    for (int i = 0; i < folders.length(); i++) {
-                        String p = folders.getString(i);
-                        
-                        // Check if delete already completed successfully
-                        if (modMetadata.isDeleteCompleted(p)) {
-                            gui.show("Delete already completed (skipping): " + p);
-                            continue;
-                        }
-                        
-                        File d = new File(p);
-                        if (d.exists()) {
-                            gui.show("Backing up then deleting folder: " + p);
-                            FileUtils.backupPathTo(d, backupRoot);
-                            
-                            // Use pendingOps.deleteWithFallback which returns success status
-                            boolean deleted = pendingOps.deleteWithFallback(d);
-                            
-                            // Only mark as completed if deletion actually succeeded
-                            if (deleted) {
-                                modMetadata.markDeleteCompleted(p);
-                            } else {
-                                gui.show("Delete scheduled for next startup (folder locked): " + p);
-                            }
-                        } else {
-                            gui.show("Folder delete skip (not present): " + p);
-                            // Mark as completed since folder doesn't exist anyway
-                            modMetadata.markDeleteCompleted(p);
-                        }
-                    }
-                }
-
-                completed++;
-                updateProgress(completed, totalTasks);
-            }
+                },
+                modMetadata,
+                pendingOps,
+                backupRoot
+            );
             
-            // Save metadata after deletes phase to persist delete tracking
-            // This ensures delete operations are not repeated if the program crashes later
-            gui.show("Saving metadata after deletes phase...");
-            modMetadata.save();
+            int deletionCount = deletionProcessor.processDeletions(deletesRoot, appliedVersion, remoteVersion);
+            gui.show("Deletion phase completed: " + deletionCount + " item(s) deleted");
+            
+            // Note: Metadata is saved inside DeletionProcessor after deletions
+            
+            completed += deletesToApply.size(); // Update progress
+            updateProgress(completed, totalTasks);
 
             // 2) Files phase: handle verify + apply with metadata tracking
             gui.show("=== Starting Files Phase ===");
@@ -556,7 +499,9 @@ public class UpdaterCore {
                                             
                                             // Try rename with fallback to pending operation
                                             if (!pendingOps.moveWithFallback(existingFile, target)) {
-                                                gui.show("File locked, rename scheduled for next startup");
+                                                gui.show("RENAME FAILED: File locked, rename scheduled for next startup");
+                                                gui.show("Continuing with existing file (valid): " + existingFile.getPath());
+                                                // Keep using existingFile - no re-download needed
                                             } else {
                                                 gui.show("Successfully renamed mod to: " + target.getPath());
                                                 modMetadata.recordMod(numberId, finalName, expectedHash, source);
@@ -592,7 +537,9 @@ public class UpdaterCore {
                                         
                                         // Try rename with fallback to pending operation
                                         if (!pendingOps.moveWithFallback(renamedFile, target)) {
-                                            gui.show("File locked, rename scheduled for next startup");
+                                            gui.show("RENAME FAILED: File locked, rename scheduled for next startup");
+                                            gui.show("Continuing with existing file (valid): " + renamedFile.getPath());
+                                            // Keep using renamedFile - no re-download needed
                                         } else {
                                             gui.show("Successfully renamed mod to: " + target.getPath());
                                             modMetadata.recordMod(numberId, finalName, expectedHash, source);
@@ -630,7 +577,9 @@ public class UpdaterCore {
                                         
                                         // Try rename with fallback to pending operation
                                         if (!pendingOps.moveWithFallback(existingFile, target)) {
-                                            gui.show("File locked, rename scheduled for next startup");
+                                            gui.show("RENAME FAILED: File locked, rename scheduled for next startup");
+                                            gui.show("Continuing with existing file (valid): " + existingFile.getPath());
+                                            // Keep using existingFile - no re-download needed
                                         } else {
                                             gui.show("Successfully renamed mod to: " + target.getPath());
                                             modMetadata.recordMod(numberId, finalName, expectedHash, source);
@@ -695,7 +644,9 @@ public class UpdaterCore {
                             
                             // Try rename with fallback to pending operation
                             if (!pendingOps.moveWithFallback(existingFile, target)) {
-                                gui.show("File locked, rename scheduled for next startup");
+                                gui.show("RENAME FAILED: File locked, rename scheduled for next startup");
+                                gui.show("Continuing with existing file (valid): " + existingFile.getPath());
+                                // Keep using existingFile - no re-download needed
                             } else {
                                 gui.show("Successfully renamed mod to: " + target.getPath());
                                 modMetadata.recordMod(numberId, finalName, expectedHash, source);
