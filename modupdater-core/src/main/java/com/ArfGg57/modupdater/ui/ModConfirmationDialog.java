@@ -1,6 +1,9 @@
 package com.ArfGg57.modupdater.ui;
 
 import com.ArfGg57.modupdater.core.UpdaterCore;
+import com.ArfGg57.modupdater.hash.HashUtils;
+import com.ArfGg57.modupdater.hash.RenamedFileResolver;
+import com.ArfGg57.modupdater.metadata.ModMetadata;
 import com.ArfGg57.modupdater.resolver.FilenameResolver;
 import com.ArfGg57.modupdater.util.FileUtils;
 import org.json.JSONArray;
@@ -70,6 +73,10 @@ public class ModConfirmationDialog {
     
     // Filename resolver for consistent filename derivation with UpdaterCore
     private final FilenameResolver filenameResolver;
+    
+    // Metadata and resolver for hash-based rename detection
+    private ModMetadata modMetadata;
+    private RenamedFileResolver renamedFileResolver;
 
     // Mapping to hold URL/source data for file entries (keyed by "FILE: <path>")
     // This allows showing a URL/source for file items when we learned it from files.json
@@ -143,6 +150,21 @@ public class ModConfirmationDialog {
     // -----------------------------
     private void enrichListsWithCheckCurrentVersion() {
         try {
+            // Initialize ModMetadata for hash-based detection
+            String modMetadataPath = "config/ModUpdater/mod_metadata.json";
+            try {
+                modMetadata = new ModMetadata(modMetadataPath);
+                renamedFileResolver = new RenamedFileResolver(modMetadata, new RenamedFileResolver.Logger() {
+                    public void log(String message) {
+                        System.out.println("[ModConfirmationDialog] " + message);
+                    }
+                });
+                System.out.println("[ModConfirmationDialog] Loaded metadata with " + modMetadata.getAllMods().size() + " mod(s)");
+            } catch (Exception e) {
+                System.out.println("[ModConfirmationDialog] Warning: Could not load metadata: " + e.getMessage());
+                // Continue without metadata - will work in degraded mode
+            }
+            
             // Read local config to find remote_config_url
             JSONObject localConfig = FileUtils.readJson("config/ModUpdater/config.json");
             String remoteConfigUrl = localConfig != null ? localConfig.optString("remote_config_url", "").trim() : "";
@@ -196,16 +218,14 @@ public class ModConfirmationDialog {
                             String displayName = f.optString("display_name", "").trim();
                             String fileName = f.optString("file_name", "").trim();
 
-                            // make safe fallbacks for files (so UI always has something)
+                            // make safe fallbacks for display name only (do not modify fileName)
                             if (displayName.isEmpty()) {
                                 if (!fileName.isEmpty()) displayName = fileName;
                                 else if (!url.isEmpty()) displayName = FileUtils.extractFileNameFromUrl(url);
                                 else displayName = "Unknown File";
                             }
-                            if (fileName.isEmpty()) {
-                                if (!displayName.equals("Unknown File")) fileName = displayName.replaceAll("\\s","_");
-                                else fileName = "file_" + Integer.toHexString(i);
-                            }
+                            // NOTE: Do NOT set fileName from displayName - let it remain empty
+                            // so that the filename resolution logic below will extract from URL
 
                             // FIXED: Use FilenameResolver to derive filename consistently with UpdaterCore
                             // This ensures we check for the correct filename on disk
@@ -365,21 +385,113 @@ public class ModConfirmationDialog {
                         String modKey = "MODNAME:" + displayName + "|" + finalName;
                         if (addKeys.contains(modKey)) continue;
 
-                        // check existence using the resolved finalName
+                        // Get expected hash from config
+                        String expectedHash = mod.optString("hash", "").trim();
+                        
+                        // NEW: Smart file detection with hash-based rename handling
                         java.io.File targetDir = new java.io.File(installLocation);
-                        List<java.io.File> existing = FileUtils.findFilesForNumberId(targetDir, numberId);
+                        java.io.File targetFile = new java.io.File(targetDir, finalName);
                         boolean needs = false;
-                        if (existing.isEmpty()) {
-                            // nothing found by numberId; check for file with finalName
-                            java.io.File possible = new java.io.File(installLocation, finalName);
-                            if (!possible.exists()) needs = true;
+                        
+                        // Check if mod is already correctly installed by hash
+                        if (renamedFileResolver != null && modMetadata != null && !expectedHash.isEmpty()) {
+                            // Use metadata to check if mod is installed
+                            if (modMetadata.isModInstalledAndMatches(numberId, source, expectedHash)) {
+                                // Mod is in metadata with matching hash
+                                String installedFileName = modMetadata.findInstalledFile(numberId);
+                                if (installedFileName != null) {
+                                    java.io.File installedFile = new java.io.File(targetDir, installedFileName);
+                                    if (installedFile.exists()) {
+                                        // File exists with correct hash
+                                        if (!installedFileName.equals(finalName)) {
+                                            // File was renamed by user - try to rename it back silently
+                                            System.out.println("[ModConfirmationDialog] Detected renamed mod: " + installedFileName + " (expected: " + finalName + ")");
+                                            System.out.println("[ModConfirmationDialog] Attempting silent rename...");
+                                            boolean renamed = installedFile.renameTo(targetFile);
+                                            if (renamed) {
+                                                System.out.println("[ModConfirmationDialog] Successfully renamed mod back to: " + finalName);
+                                                // Update metadata with new filename
+                                                modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                                modMetadata.save();
+                                            } else {
+                                                System.out.println("[ModConfirmationDialog] Failed to rename (file may be locked); will propose download");
+                                                needs = true;
+                                            }
+                                        }
+                                        // else: file has correct name, no action needed
+                                    } else {
+                                        // File from metadata doesn't exist - scan for renamed file by hash
+                                        System.out.println("[ModConfirmationDialog] Mod file missing from metadata location, scanning by hash...");
+                                        java.io.File renamedFile = renamedFileResolver.findFileByHash(targetDir, expectedHash);
+                                        if (renamedFile != null) {
+                                            System.out.println("[ModConfirmationDialog] Found renamed mod by hash: " + renamedFile.getName());
+                                            System.out.println("[ModConfirmationDialog] Attempting silent rename to: " + finalName);
+                                            boolean renamed = renamedFile.renameTo(targetFile);
+                                            if (renamed) {
+                                                System.out.println("[ModConfirmationDialog] Successfully renamed mod to: " + finalName);
+                                                modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                                modMetadata.save();
+                                            } else {
+                                                System.out.println("[ModConfirmationDialog] Failed to rename; will propose download");
+                                                needs = true;
+                                            }
+                                        } else {
+                                            // File not found by hash either - need to download
+                                            needs = true;
+                                        }
+                                    }
+                                } else {
+                                    needs = true;
+                                }
+                            } else {
+                                // Not in metadata or doesn't match - check filesystem by hash
+                                System.out.println("[ModConfirmationDialog] Mod not in metadata, checking filesystem by hash...");
+                                java.io.File foundFile = renamedFileResolver.findFileByHash(targetDir, expectedHash);
+                                if (foundFile != null) {
+                                    System.out.println("[ModConfirmationDialog] Found mod by hash: " + foundFile.getName());
+                                    if (!foundFile.getName().equals(finalName)) {
+                                        System.out.println("[ModConfirmationDialog] Attempting silent rename to: " + finalName);
+                                        boolean renamed = foundFile.renameTo(targetFile);
+                                        if (renamed) {
+                                            System.out.println("[ModConfirmationDialog] Successfully renamed mod to: " + finalName);
+                                            modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                            modMetadata.save();
+                                        } else {
+                                            System.out.println("[ModConfirmationDialog] Failed to rename; will propose download");
+                                            needs = true;
+                                        }
+                                    }
+                                    // else: file already has correct name
+                                } else if (!targetFile.exists()) {
+                                    // File not found by hash and target doesn't exist
+                                    needs = true;
+                                } else {
+                                    // Target file exists but hash doesn't match - verify it
+                                    try {
+                                        String actualHash = HashUtils.sha256Hex(targetFile);
+                                        if (!FileUtils.hashEquals(expectedHash, actualHash)) {
+                                            System.out.println("[ModConfirmationDialog] File exists but hash mismatch; will propose download");
+                                            needs = true;
+                                        }
+                                    } catch (Exception ex) {
+                                        System.out.println("[ModConfirmationDialog] Error checking hash; will propose download: " + ex.getMessage());
+                                        needs = true;
+                                    }
+                                }
+                            }
                         } else {
-                            // Without hash: compare filename suffix (the part after numberId-)
-                            // Use finalName (which has been resolved with FilenameResolver) for comparison
-                            boolean matches = FileUtils.fileNameSuffixMatches(existing.get(0), numberId, finalName);
-                            if (!matches) {
-                                needs = true;
-                                System.out.println("[ModConfirmationDialog] Mod filename mismatch; will propose re-download: " + existing.get(0).getPath());
+                            // Fallback: no hash available or metadata not loaded - use legacy filename checking
+                            List<java.io.File> existing = FileUtils.findFilesForNumberId(targetDir, numberId);
+                            if (existing.isEmpty()) {
+                                // nothing found by numberId; check for file with finalName
+                                if (!targetFile.exists()) needs = true;
+                            } else {
+                                // Without hash: compare filename suffix (the part after numberId-)
+                                boolean matches = FileUtils.fileNameSuffixMatches(existing.get(0), numberId, finalName);
+                                if (!matches) {
+                                    needs = true;
+                                    System.out.println("[ModConfirmationDialog] Mod filename mismatch; will propose re-download: " + existing.get(0).getPath());
+                                }
                             }
                         }
 
@@ -602,9 +714,10 @@ public class ModConfirmationDialog {
 
                 if (agreed && core != null) {
                     // Updater is started synchronously by UpdaterTweaker after dialog closes.
-                } else if (!agreed && core == null) {
-                    // Only exit when running the standalone test main()
-                    System.exit(0);
+                } else if (!agreed) {
+                    // User clicked Quit - crash the JVM to force game exit
+                    System.err.println("[ModConfirmationDialog] User declined update. Exiting...");
+                    System.exit(1);
                 }
             } else {
                 dialog.setOpacity(op);
