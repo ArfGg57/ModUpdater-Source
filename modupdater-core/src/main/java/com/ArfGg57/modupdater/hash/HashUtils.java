@@ -1,4 +1,4 @@
-package com.ArfGg57.modupdater;
+package com.ArfGg57.modupdater.hash;
 
 import java.io.File;
 import java.io.FileInputStream;

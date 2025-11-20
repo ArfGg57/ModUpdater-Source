@@ -1,5 +1,6 @@
 package com.ArfGg57.modupdater;
 
+import com.ArfGg57.modupdater.core.UpdaterCore;
 import cpw.mods.fml.common.Mod;
 import cpw.mods.fml.common.event.FMLPreInitializationEvent;
 
