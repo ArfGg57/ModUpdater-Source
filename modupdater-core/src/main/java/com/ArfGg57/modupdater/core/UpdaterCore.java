@@ -502,6 +502,7 @@ public class UpdaterCore {
                                                 gui.show("RENAME FAILED: File locked, rename scheduled for next startup");
                                                 gui.show("Continuing with existing file (valid): " + existingFile.getPath());
                                                 // FIXED: Update metadata with current filename so we know it's the same file
+                                                // NOTE: Save immediately to prevent re-download in case of crash/interrupt
                                                 modMetadata.recordMod(numberId, existingFile.getName(), expectedHash, source);
                                                 modMetadata.save();
                                                 // Keep using existingFile - no re-download needed

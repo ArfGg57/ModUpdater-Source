@@ -52,6 +52,14 @@ public class ModConfirmationDialog {
     private static final Font FONT_ENTRY_TITLE = new Font("Segoe UI", Font.BOLD, 14);
     private static final Font FONT_ENTRY_SUB = new Font("Segoe UI", Font.PLAIN, 12);
 
+    // Deletion key prefixes
+    private static final String DELETE_KEY_FILE = "FILE: ";
+    private static final String DELETE_KEY_FOLDER = "FOLDER: ";
+    private static final String DELETE_KEY_MOD = "MOD: ";
+    
+    // Timing constants
+    private static final int CHECKING_DIALOG_CLOSE_DELAY_MS = 500;
+
     private JDialog dialog;
 
     // unified left-hand list of things to add (mods + files)
@@ -564,7 +572,7 @@ public class ModConfirmationDialog {
                             
                             // If tracked by ModUpdater but not in the valid list, it will be deleted
                             if (isTrackedByModUpdater && !isStillValid) {
-                                String deleteKey = "MOD: " + file.getPath() + " (outdated version)";
+                                String deleteKey = DELETE_KEY_MOD + file.getPath() + " (outdated version)";
                                 if (!deleteKeys.contains(deleteKey)) {
                                     filesToDelete.add(deleteKey);
                                     deleteKeys.add(deleteKey);
@@ -636,7 +644,7 @@ public class ModConfirmationDialog {
             if (checkingDialog != null) {
                 final CheckingUpdatesDialog finalDialog = checkingDialog;
                 // FIXED: Use Timer instead of Thread.sleep to avoid blocking EDT
-                javax.swing.Timer closeTimer = new javax.swing.Timer(500, e -> finalDialog.close());
+                javax.swing.Timer closeTimer = new javax.swing.Timer(CHECKING_DIALOG_CLOSE_DELAY_MS, e -> finalDialog.close());
                 closeTimer.setRepeats(false);
                 closeTimer.start();
             }

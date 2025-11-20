@@ -24,6 +24,9 @@ public class CheckingUpdatesDialog {
     private static final Font FONT_TITLE = new Font("Segoe UI", Font.BOLD, 22);
     private static final Font FONT_BODY = new Font("Segoe UI", Font.PLAIN, 14);
     
+    // Accessibility constant
+    private static final String PROGRESS_BAR_ACCESSIBLE_NAME = "Update check progress";
+    
     private JDialog dialog;
     private JLabel statusLabel;
     private JProgressBar progressBar;
@@ -85,6 +88,7 @@ public class CheckingUpdatesDialog {
         progressBar.setPreferredSize(new Dimension(0, 10));
         progressBar.setForeground(COLOR_ACCENT);
         progressBar.setBackground(COLOR_BG.brighter());
+        progressBar.getAccessibleContext().setAccessibleName(PROGRESS_BAR_ACCESSIBLE_NAME);
         centerPanel.add(progressBar, BorderLayout.SOUTH);
         
         mainPanel.add(centerPanel, BorderLayout.CENTER);
