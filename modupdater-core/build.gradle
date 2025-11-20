@@ -13,4 +13,7 @@ repositories {
 dependencies {
     // include any jars you put in modupdater-core/libs (org.json)
     implementation fileTree(dir: 'libs', include: ['*.jar'])
+    
+    // Testing dependencies
+    testImplementation 'junit:junit:4.12'
 }

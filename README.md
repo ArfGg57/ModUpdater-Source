@@ -10,16 +10,45 @@ A Forge 1.7.10 mod that automatically updates mods, configs, and files from a re
 - 🔒 Robust file lock handling for Windows compatibility
 - ✨ Clean, modern UI for update confirmations
 - 📊 Comprehensive logging and error handling
+- 🎯 **NEW:** Intelligent filename extension inference
+- ⚡ **NEW:** Early-load coremod for locked file handling
+- 🛡️ **NEW:** Enhanced pending operations system
 
 ## Quick Start
 
 See [docs/QUICK_START.md](docs/QUICK_START.md) for setup instructions.
+
+## New Features
+
+### Filename Extension Resolution
+
+The updater now automatically infers file extensions when missing from configuration:
+
+```json
+{
+  "file_name": "betterleaves",
+  "source": { "url": "https://example.com/betterleaves.jar" }
+}
+```
+
+Saves as `betterleaves.jar` automatically! See [docs/FILENAME_RESOLUTION.md](docs/FILENAME_RESOLUTION.md) for details.
+
+### Coremod for Early Operations
+
+Optional coremod support for processing pending file operations before mods load:
+- Handles locked files more reliably on Windows
+- Processes deferred operations from previous runs
+- Runs before FML scans mods directory
+
+See [docs/COREMOD_SETUP.md](docs/COREMOD_SETUP.md) for setup instructions.
 
 ## Documentation
 
 - **User Guides**
   - [Quick Start Guide](docs/QUICK_START.md) - Get started quickly
   - [Mods JSON Schema](docs/MODS_JSON_SCHEMA.md) - Configuration format reference
+  - [Filename Resolution](docs/FILENAME_RESOLUTION.md) - Extension inference guide
+  - [Coremod Setup](docs/COREMOD_SETUP.md) - Early-load configuration
 
 - **Testing & Validation**
   - [Testing Guide](docs/TESTING_GUIDE.md) - General testing procedures
