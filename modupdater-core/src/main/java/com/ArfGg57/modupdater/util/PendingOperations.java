@@ -41,7 +41,8 @@ public class PendingOperations {
      */
     public enum OpType {
         DELETE,
-        MOVE
+        MOVE,
+        REPLACE  // Replace old file with staged new file
     }
     
     /**
@@ -50,7 +51,9 @@ public class PendingOperations {
     public static class PendingOp {
         public OpType type;
         public String sourcePath;
-        public String targetPath; // only for MOVE operations
+        public String targetPath; // for MOVE and REPLACE operations
+        public String stagedPath;  // for REPLACE: path to the new file to install
+        public String checksum;    // for REPLACE: expected checksum of staged file
         public long timestamp;
         
         public PendingOp() {}
@@ -62,11 +65,22 @@ public class PendingOperations {
             this.timestamp = System.currentTimeMillis();
         }
         
+        public PendingOp(OpType type, String sourcePath, String targetPath, String stagedPath, String checksum) {
+            this.type = type;
+            this.sourcePath = sourcePath;
+            this.targetPath = targetPath;
+            this.stagedPath = stagedPath;
+            this.checksum = checksum;
+            this.timestamp = System.currentTimeMillis();
+        }
+        
         public JSONObject toJson() {
             JSONObject obj = new JSONObject();
             obj.put("type", type.toString());
             obj.put("sourcePath", sourcePath);
             if (targetPath != null) obj.put("targetPath", targetPath);
+            if (stagedPath != null) obj.put("stagedPath", stagedPath);
+            if (checksum != null) obj.put("checksum", checksum);
             obj.put("timestamp", timestamp);
             return obj;
         }
@@ -76,6 +90,8 @@ public class PendingOperations {
             op.type = OpType.valueOf(obj.optString("type", "DELETE"));
             op.sourcePath = obj.optString("sourcePath", "");
             op.targetPath = obj.optString("targetPath", null);
+            op.stagedPath = obj.optString("stagedPath", null);
+            op.checksum = obj.optString("checksum", null);
             op.timestamp = obj.optLong("timestamp", 0);
             return op;
         }
@@ -245,6 +261,74 @@ public class PendingOperations {
     }
     
     /**
+     * Attempt to move/rename a file, with fallback to scheduling for next startup.
+     * 
+     * @param source The source file to move
+     * @param target The target location
+     * @return true if moved immediately, false if scheduled for later
+     */
+    public boolean moveWithFallback(File source, File target) {
+        if (source == null || !source.exists()) {
+            return true; // Nothing to do
+        }
+        
+        // Try immediate move
+        try {
+            FileUtils.atomicMoveWithRetries(source, target, 3, 100);
+            if (logger != null) {
+                logger.log("Moved file: " + source.getPath() + " -> " + target.getPath());
+            }
+            return true;
+        } catch (Exception e) {
+            // Move failed - check if locked
+            if (isFileLocked(source)) {
+                if (logger != null) {
+                    logger.log("File is locked, scheduling move for next startup: " + source.getPath() + " -> " + target.getPath());
+                }
+                
+                // Record in pending operations
+                PendingOp op = new PendingOp(OpType.MOVE, source.getAbsolutePath(), target.getAbsolutePath());
+                operations.add(op);
+                save();
+                
+                return false;
+            } else {
+                // Not locked but still failed - log warning
+                if (logger != null) {
+                    logger.log("Warning: Failed to move file (not locked): " + source.getPath() + ": " + e.getMessage());
+                }
+                return false;
+            }
+        }
+    }
+    
+    /**
+     * Schedule a file replacement operation for next startup.
+     * This downloads the new file to a staging area, then schedules the replacement.
+     * 
+     * @param oldFile The old file to replace
+     * @param newFile The target location for the new file
+     * @param stagedFile The staged new file (already downloaded)
+     * @param checksum The expected checksum of the staged file
+     */
+    public void scheduleReplace(File oldFile, File newFile, File stagedFile, String checksum) {
+        if (logger != null) {
+            logger.log("Scheduling file replacement for next startup: " + oldFile.getPath() + " -> " + newFile.getPath());
+        }
+        
+        // Record in pending operations
+        PendingOp op = new PendingOp(
+            OpType.REPLACE, 
+            oldFile.getAbsolutePath(), 
+            newFile.getAbsolutePath(),
+            stagedFile.getAbsolutePath(),
+            checksum
+        );
+        operations.add(op);
+        save();
+    }
+    
+    /**
      * Process all pending operations from previous runs.
      * This should be called early at startup before the main update logic.
      * 
@@ -302,6 +386,45 @@ public class PendingOperations {
                             if (logger != null) {
                                 logger.log("Warning: Still cannot move file: " + op.sourcePath + ": " + e.getMessage());
                             }
+                        }
+                    }
+                } else if (op.type == OpType.REPLACE) {
+                    File old = new File(op.sourcePath);
+                    File staged = new File(op.stagedPath);
+                    File target = new File(op.targetPath);
+                    
+                    if (!staged.exists()) {
+                        // Staged file missing - can't complete operation
+                        if (logger != null) {
+                            logger.log("Warning: Staged file missing for REPLACE: " + op.stagedPath);
+                        }
+                        // Keep operation for potential retry
+                        remaining.add(op);
+                        continue;
+                    }
+                    
+                    // Delete old file if it exists
+                    if (old.exists()) {
+                        if (!old.delete()) {
+                            if (logger != null) {
+                                logger.log("Warning: Still cannot delete old file: " + op.sourcePath);
+                            }
+                            // Can't complete - keep for next run
+                            remaining.add(op);
+                            continue;
+                        }
+                    }
+                    
+                    // Move staged file to target
+                    try {
+                        FileUtils.atomicMoveWithRetries(staged, target, 3, 100);
+                        if (logger != null) {
+                            logger.log("Completed pending replace: " + op.sourcePath + " -> " + op.targetPath);
+                        }
+                        success = true;
+                    } catch (Exception e) {
+                        if (logger != null) {
+                            logger.log("Warning: Cannot move staged file to target: " + e.getMessage());
                         }
                     }
                 }

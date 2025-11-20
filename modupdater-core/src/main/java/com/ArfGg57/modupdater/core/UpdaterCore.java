@@ -146,7 +146,33 @@ public class UpdaterCore {
                 updateProgress(completed, totalTasks);
             }
 
-            // 2) Files phase: handle verify + apply
+            // Initialize metadata and pending operations before file/mod processing
+            gui.show("=== Initializing Metadata and Pending Operations ===");
+            gui.show("Initializing metadata from: " + modMetadataPath);
+            ModMetadata modMetadata = new ModMetadata(modMetadataPath);
+            gui.show("Loaded metadata for " + modMetadata.getAllMods().size() + " mod(s) and " + modMetadata.getAllFiles().size() + " file(s)");
+            
+            // Initialize RenamedFileResolver for centralized hash-based detection
+            RenamedFileResolver fileResolver = new RenamedFileResolver(modMetadata, new RenamedFileResolver.Logger() {
+                public void log(String message) {
+                    gui.show(message);
+                }
+            });
+            
+            // Initialize PendingOperations for locked file handling
+            String pendingOpsPath = localConfigDir + "pending-ops.json";
+            PendingOperations pendingOps = new PendingOperations(pendingOpsPath, new PendingOperations.Logger() {
+                public void log(String message) {
+                    gui.show(message);
+                }
+            });
+            
+            // Process any pending operations from previous run (before main scan)
+            pendingOps.processPendingOperations();
+
+            // 2) Files phase: handle verify + apply with metadata tracking
+            gui.show("=== Starting Files Phase ===");
+            
             // Build a map to track which files need to be applied (are in version range)
             Map<String, Boolean> fileNeedsApply = new LinkedHashMap<>();
             for (JSONObject f : filesToApply) {
@@ -170,12 +196,15 @@ public class UpdaterCore {
                 String url = f.getString("url");
                 String downloadPath = f.optString("downloadPath", "config/");
                 // CHANGED: Use file_name instead of name to match schema
+                // IMPORTANT: file_name is for actual filename, NOT display_name
                 String customFileName = f.optString("file_name", "").trim();
                 boolean overwrite = f.optBoolean("overwrite", true);
                 boolean extract = f.optBoolean("extract", false);
                 String expectedHash = f.optString("hash", null);
 
                 // Determine actual filename to use with extension inference
+                // Priority: file_name (if provided), or extract from URL
+                // NEVER use display_name for saved filename
                 String fileName;
                 if (!customFileName.isEmpty()) {
                     // Use custom file_name from config, but infer extension if missing
@@ -192,7 +221,17 @@ public class UpdaterCore {
                 File dest = new File(downloadPath, fileName);
                 boolean needDownload = false;
 
-                if (dest.exists()) {
+                // Check metadata first to see if file is already tracked
+                if (modMetadata.isFileInstalledAndMatches(fileName, expectedHash)) {
+                    if (dest.exists()) {
+                        gui.show("[ModUpdater] File OK (manifest): " + dest.getPath());
+                    } else {
+                        // File in manifest but missing on disk - need to redownload
+                        gui.show("File in manifest but missing on disk; will download: " + dest.getPath());
+                        needDownload = true;
+                    }
+                } else if (dest.exists()) {
+                    // File exists but not in manifest - check hash
                     if (expectedHash != null && !expectedHash.trim().isEmpty()) {
                         try {
                             String actual = HashUtils.sha256Hex(dest);
@@ -201,6 +240,8 @@ public class UpdaterCore {
                                 needDownload = true;
                             } else {
                                 gui.show("File OK (hash verified): " + dest.getPath());
+                                // Add to manifest for future runs
+                                modMetadata.recordFile(fileName, actual, url, downloadPath);
                             }
                         } catch (Exception ex) {
                             gui.show("Error verifying file hash: " + ex.getMessage() + "; will redownload: " + dest.getPath());
@@ -208,6 +249,13 @@ public class UpdaterCore {
                         }
                     } else if (!overwrite) {
                         gui.show("Existing file preserved (overwrite=false): " + dest.getPath());
+                        // Add to manifest even without hash
+                        try {
+                            String actual = HashUtils.sha256Hex(dest);
+                            modMetadata.recordFile(fileName, actual, url, downloadPath);
+                        } catch (Exception ex) {
+                            modMetadata.recordFile(fileName, "", url, downloadPath);
+                        }
                     } else if (overwrite && isInVersionRange && upgrading) {
                         // FIXED: When overwrite=true and we're upgrading AND file is in version range, re-download
                         gui.show("File will be overwritten due to version update (overwrite=true): " + dest.getPath());
@@ -215,6 +263,13 @@ public class UpdaterCore {
                     } else {
                         // File exists, no hash to verify, and either not upgrading or not in version range
                         gui.show("File exists (no hash to verify, no action needed): " + dest.getPath());
+                        // Add to manifest for future runs
+                        try {
+                            String actual = HashUtils.sha256Hex(dest);
+                            modMetadata.recordFile(fileName, actual, url, downloadPath);
+                        } catch (Exception ex) {
+                            modMetadata.recordFile(fileName, "", url, downloadPath);
+                        }
                     }
                 } else {
                     gui.show("File missing; will download: " + dest.getPath());
@@ -251,6 +306,17 @@ public class UpdaterCore {
                     gui.show("Installing file: " + fileName + " to " + downloadPath);
                     FileUtils.atomicMoveWithRetries(tmp, dest, 5, 200);
                     gui.show("Successfully installed file: " + dest.getPath());
+                    
+                    // Record in manifest with actual hash
+                    String actualHash = expectedHash;
+                    if (actualHash == null || actualHash.trim().isEmpty()) {
+                        try {
+                            actualHash = HashUtils.sha256Hex(dest);
+                        } catch (Exception ex) {
+                            actualHash = "";
+                        }
+                    }
+                    modMetadata.recordFile(fileName, actualHash, url, downloadPath);
                 }
 
                 if (extract && dest.getName().toLowerCase().endsWith(".zip")) {
@@ -264,27 +330,6 @@ public class UpdaterCore {
 
             // 3) Mods phase with metadata tracking
             gui.show("=== Starting Mods Phase ===");
-            gui.show("Initializing mod metadata from: " + modMetadataPath);
-            ModMetadata modMetadata = new ModMetadata(modMetadataPath);
-            gui.show("Loaded metadata for " + modMetadata.getAllMods().size() + " previously installed mod(s)");
-            
-            // Initialize RenamedFileResolver for centralized hash-based detection
-            RenamedFileResolver fileResolver = new RenamedFileResolver(modMetadata, new RenamedFileResolver.Logger() {
-                public void log(String message) {
-                    gui.show(message);
-                }
-            });
-            
-            // Initialize PendingOperations for locked file handling
-            String pendingOpsPath = localConfigDir + "pending-ops.json";
-            PendingOperations pendingOps = new PendingOperations(pendingOpsPath, new PendingOperations.Logger() {
-                public void log(String message) {
-                    gui.show(message);
-                }
-            });
-            
-            // Process any pending operations from previous run (before main scan)
-            pendingOps.processPendingOperations();
             
             // Build map of all mods that should be installed (from modsToVerify)
             Map<String, JSONObject> modHandleMap = new LinkedHashMap<>();
@@ -447,10 +492,15 @@ public class UpdaterCore {
                                         if (!existingFile.getName().equals(finalName)) {
                                             gui.show("Renaming mod from: " + existingFile.getName() + " to: " + finalName);
                                             FileUtils.backupPathTo(existingFile, backupRoot);
-                                            FileUtils.atomicMoveWithRetries(existingFile, target, 5, 200);
-                                            gui.show("Successfully renamed mod to: " + target.getPath());
-                                            modMetadata.recordMod(numberId, finalName, expectedHash, source);
-                                            existingFile = target;
+                                            
+                                            // Try rename with fallback to pending operation
+                                            if (!pendingOps.moveWithFallback(existingFile, target)) {
+                                                gui.show("File locked, rename scheduled for next startup");
+                                            } else {
+                                                gui.show("Successfully renamed mod to: " + target.getPath());
+                                                modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                                existingFile = target;
+                                            }
                                         }
                                     } else {
                                         gui.show("Mod hash mismatch (expected: " + expectedHash.substring(0, Math.min(8, expectedHash.length())) + "..., got: " + actual.substring(0, Math.min(8, actual.length())) + "...); will redownload: " + existingFile.getPath());
@@ -478,9 +528,14 @@ public class UpdaterCore {
                                     if (!renamedFile.getName().equals(finalName)) {
                                         gui.show("Renaming mod from: " + renamedFile.getName() + " to: " + finalName);
                                         FileUtils.backupPathTo(renamedFile, backupRoot);
-                                        FileUtils.atomicMoveWithRetries(renamedFile, target, 5, 200);
-                                        gui.show("Successfully renamed mod to: " + target.getPath());
-                                        modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                        
+                                        // Try rename with fallback to pending operation
+                                        if (!pendingOps.moveWithFallback(renamedFile, target)) {
+                                            gui.show("File locked, rename scheduled for next startup");
+                                        } else {
+                                            gui.show("Successfully renamed mod to: " + target.getPath());
+                                            modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                        }
                                     }
                                 } else {
                                     gui.show("Could not find renamed file by hash scan; will redownload: " + installedFileName);
@@ -511,9 +566,14 @@ public class UpdaterCore {
                                     if (!existingFile.getName().equals(finalName)) {
                                         gui.show("Renaming mod from: " + existingFile.getName() + " to: " + finalName);
                                         FileUtils.backupPathTo(existingFile, backupRoot);
-                                        FileUtils.atomicMoveWithRetries(existingFile, target, 5, 200);
-                                        gui.show("Successfully renamed mod to: " + target.getPath());
-                                        modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                        
+                                        // Try rename with fallback to pending operation
+                                        if (!pendingOps.moveWithFallback(existingFile, target)) {
+                                            gui.show("File locked, rename scheduled for next startup");
+                                        } else {
+                                            gui.show("Successfully renamed mod to: " + target.getPath());
+                                            modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                        }
                                     }
                                 } else {
                                     gui.show("Mod hash mismatch (expected: " + expectedHash.substring(0, Math.min(8, expectedHash.length())) + "..., got: " + actual.substring(0, Math.min(8, actual.length())) + "...); will redownload: " + existingFile.getPath());
@@ -571,9 +631,14 @@ public class UpdaterCore {
                             // Rename to expected name
                             gui.show("Renaming mod from: " + renamedFile.getName() + " to: " + finalName);
                             FileUtils.backupPathTo(existingFile, backupRoot);
-                            FileUtils.atomicMoveWithRetries(existingFile, target, 5, 200);
-                            gui.show("Successfully renamed mod to: " + target.getPath());
-                            modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                            
+                            // Try rename with fallback to pending operation
+                            if (!pendingOps.moveWithFallback(existingFile, target)) {
+                                gui.show("File locked, rename scheduled for next startup");
+                            } else {
+                                gui.show("Successfully renamed mod to: " + target.getPath());
+                                modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                            }
                         } else {
                             gui.show("Mod missing after hash scan; will download: " + finalName);
                             needDownload = true;

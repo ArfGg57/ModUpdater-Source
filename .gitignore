@@ -33,3 +33,6 @@
 
 # Changelog backup
 /changelog.bak
+
+# Compiled class files
+*.class

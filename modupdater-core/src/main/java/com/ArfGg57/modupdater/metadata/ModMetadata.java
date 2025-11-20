@@ -8,18 +8,68 @@ import java.io.File;
 import java.util.*;
 
 /**
- * ModMetadata: Tracks installed mods by their source identifiers (projectId, versionId, etc.)
- * This allows us to identify mods even when filenames change.
+ * ModMetadata: Tracks installed mods and auxiliary files by their identifiers.
+ * This allows us to identify artifacts even when filenames change and prevents
+ * repeated downloads of files that are already present.
+ * 
+ * Unified manifest format for both mods (with numberId) and auxiliary files (without).
  */
 public class ModMetadata {
 
-    private Map<String, ModEntry> installedMods; // key: numberId
+    private Map<String, ModEntry> installedMods; // key: numberId (for mods)
+    private Map<String, ArtifactEntry> installedFiles; // key: fileName (for auxiliary files)
     private String metadataFilePath;
 
     public ModMetadata(String metadataFilePath) {
         this.metadataFilePath = metadataFilePath;
         this.installedMods = new LinkedHashMap<>();
+        this.installedFiles = new LinkedHashMap<>();
         load();
+    }
+    
+    /**
+     * Represents an auxiliary file (config, resource, etc.)
+     */
+    public static class ArtifactEntry {
+        public String fileName;
+        public String kind; // "FILE" or "MOD"
+        public String version; // may be null for files
+        public String checksum; // SHA-256 hash
+        public String url; // last download URL
+        public String installLocation; // target directory
+        
+        public ArtifactEntry() {}
+        
+        public ArtifactEntry(String fileName, String kind, String version, String checksum, String url, String installLocation) {
+            this.fileName = fileName;
+            this.kind = kind;
+            this.version = version;
+            this.checksum = checksum;
+            this.url = url;
+            this.installLocation = installLocation;
+        }
+        
+        public JSONObject toJson() {
+            JSONObject obj = new JSONObject();
+            obj.put("fileName", fileName);
+            obj.put("kind", kind);
+            if (version != null && !version.isEmpty()) obj.put("version", version);
+            if (checksum != null && !checksum.isEmpty()) obj.put("checksum", checksum);
+            if (url != null && !url.isEmpty()) obj.put("url", url);
+            if (installLocation != null && !installLocation.isEmpty()) obj.put("installLocation", installLocation);
+            return obj;
+        }
+        
+        public static ArtifactEntry fromJson(JSONObject obj) {
+            ArtifactEntry entry = new ArtifactEntry();
+            entry.fileName = obj.optString("fileName", "");
+            entry.kind = obj.optString("kind", "FILE");
+            entry.version = obj.optString("version", null);
+            entry.checksum = obj.optString("checksum", "");
+            entry.url = obj.optString("url", "");
+            entry.installLocation = obj.optString("installLocation", "");
+            return entry;
+        }
     }
 
     public static class ModEntry {
@@ -78,21 +128,37 @@ public class ModMetadata {
             File file = new File(metadataFilePath);
             if (!file.exists()) {
                 installedMods = new LinkedHashMap<>();
+                installedFiles = new LinkedHashMap<>();
                 return;
             }
             JSONObject root = FileUtils.readJson(metadataFilePath);
+            
+            // Load mods (backward compatible)
             JSONArray modsArray = root.optJSONArray("mods");
             if (modsArray == null) {
                 installedMods = new LinkedHashMap<>();
-                return;
+            } else {
+                installedMods = new LinkedHashMap<>();
+                for (int i = 0; i < modsArray.length(); i++) {
+                    ModEntry entry = ModEntry.fromJson(modsArray.getJSONObject(i));
+                    installedMods.put(entry.numberId, entry);
+                }
             }
-            installedMods = new LinkedHashMap<>();
-            for (int i = 0; i < modsArray.length(); i++) {
-                ModEntry entry = ModEntry.fromJson(modsArray.getJSONObject(i));
-                installedMods.put(entry.numberId, entry);
+            
+            // Load auxiliary files (new unified manifest format)
+            JSONArray filesArray = root.optJSONArray("files");
+            if (filesArray == null) {
+                installedFiles = new LinkedHashMap<>();
+            } else {
+                installedFiles = new LinkedHashMap<>();
+                for (int i = 0; i < filesArray.length(); i++) {
+                    ArtifactEntry entry = ArtifactEntry.fromJson(filesArray.getJSONObject(i));
+                    installedFiles.put(entry.fileName, entry);
+                }
             }
         } catch (Exception e) {
             installedMods = new LinkedHashMap<>();
+            installedFiles = new LinkedHashMap<>();
         }
     }
 
@@ -102,11 +168,20 @@ public class ModMetadata {
     public void save() {
         try {
             JSONObject root = new JSONObject();
+            
+            // Save mods
             JSONArray modsArray = new JSONArray();
             for (ModEntry entry : installedMods.values()) {
                 modsArray.put(entry.toJson());
             }
             root.put("mods", modsArray);
+            
+            // Save auxiliary files
+            JSONArray filesArray = new JSONArray();
+            for (ArtifactEntry entry : installedFiles.values()) {
+                filesArray.put(entry.toJson());
+            }
+            root.put("files", filesArray);
 
             File file = new File(metadataFilePath);
             File parent = file.getParentFile();
@@ -214,5 +289,73 @@ public class ModMetadata {
      */
     public void clear() {
         installedMods.clear();
+        installedFiles.clear();
+    }
+    
+    // ========== Auxiliary File Management Methods ==========
+    
+    /**
+     * Record an auxiliary file installation
+     * 
+     * @param fileName The actual filename (not display name)
+     * @param checksum SHA-256 hash of the file
+     * @param url The download URL
+     * @param installLocation Target directory (e.g., "config/")
+     */
+    public void recordFile(String fileName, String checksum, String url, String installLocation) {
+        ArtifactEntry entry = new ArtifactEntry(fileName, "FILE", null, checksum, url, installLocation);
+        installedFiles.put(fileName, entry);
+    }
+    
+    /**
+     * Get auxiliary file entry by filename
+     * 
+     * @param fileName The filename to look up
+     * @return The ArtifactEntry if found, null otherwise
+     */
+    public ArtifactEntry getFile(String fileName) {
+        return installedFiles.get(fileName);
+    }
+    
+    /**
+     * Check if an auxiliary file is installed and matches the expected checksum
+     * 
+     * @param fileName The filename to check
+     * @param expectedChecksum The expected SHA-256 hash (can be null/empty)
+     * @return true if file is tracked and checksum matches (or no checksum to verify)
+     */
+    public boolean isFileInstalledAndMatches(String fileName, String expectedChecksum) {
+        ArtifactEntry entry = installedFiles.get(fileName);
+        if (entry == null) return false;
+        
+        // If no expected checksum provided, just check presence
+        if (expectedChecksum == null || expectedChecksum.trim().isEmpty()) {
+            return true;
+        }
+        
+        // Check checksum match
+        if (entry.checksum == null || entry.checksum.trim().isEmpty()) {
+            return false;
+        }
+        
+        return FileUtils.hashEquals(expectedChecksum, entry.checksum);
+    }
+    
+    /**
+     * Remove an auxiliary file from metadata
+     * 
+     * @param fileName The filename to remove
+     */
+    public void removeFile(String fileName) {
+        installedFiles.remove(fileName);
+    }
+    
+    /**
+     * Get all installed auxiliary file entries
+     * 
+     * @return Collection of all tracked auxiliary files
+     */
+    public Collection<ArtifactEntry> getAllFiles() {
+        return new ArrayList<>(installedFiles.values());
     }
 }
