@@ -3,6 +3,7 @@ package com.ArfGg57.modupdater.core;
 import com.ArfGg57.modupdater.hash.HashUtils;
 import com.ArfGg57.modupdater.hash.RenamedFileResolver;
 import com.ArfGg57.modupdater.metadata.ModMetadata;
+import com.ArfGg57.modupdater.resolver.FilenameResolver;
 import com.ArfGg57.modupdater.util.PendingOperations;
 import com.ArfGg57.modupdater.util.FileUtils;
 import com.ArfGg57.modupdater.ui.GuiUpdater;
@@ -48,6 +49,17 @@ public class UpdaterCore {
             JSONObject remoteConfig = FileUtils.readJsonFromUrl(remoteConfigUrl);
             String remoteVersion = remoteConfig.optString("modpackVersion", "0.0.0");
             String baseUrl = remoteConfig.optString("configsBaseUrl", "");
+            boolean debugMode = remoteConfig.optBoolean("debugMode", false);
+            
+            // Initialize FilenameResolver for extension inference
+            final FilenameResolver filenameResolver = new FilenameResolver(
+                new FilenameResolver.Logger() {
+                    public void log(String message) {
+                        gui.show(message);
+                    }
+                },
+                debugMode
+            );
             String modsJsonName = remoteConfig.optString("modsJson", "mods.json");
             String filesJsonName = remoteConfig.optString("filesJson", "files.json");
             String deletesJsonName = remoteConfig.optString("deletesJson", "deletes.json");
@@ -163,14 +175,15 @@ public class UpdaterCore {
                 boolean extract = f.optBoolean("extract", false);
                 String expectedHash = f.optString("hash", null);
 
-                // Determine actual filename to use
+                // Determine actual filename to use with extension inference
                 String fileName;
                 if (!customFileName.isEmpty()) {
-                    // Use custom file_name from config
-                    fileName = customFileName;
+                    // Use custom file_name from config, but infer extension if missing
+                    fileName = filenameResolver.resolve(customFileName, url, null, FilenameResolver.ArtifactType.FILE);
                 } else {
-                    // Extract from URL
-                    fileName = FileUtils.extractFileNameFromUrl(url);
+                    // Extract from URL with extension inference
+                    String extracted = FileUtils.extractFileNameFromUrl(url);
+                    fileName = filenameResolver.resolve(extracted, url, null, FilenameResolver.ArtifactType.FILE);
                 }
                 
                 String key = url + "|" + f.optString("file_name", "");
@@ -393,18 +406,18 @@ public class UpdaterCore {
                     continue;
                 }
 
-                // Determine final filename: CHANGED - no longer add numberId prefix
+                // Determine final filename with extension inference
                 // Priority: file_name from config, or sourceFilename, or displayName
                 String finalName;
                 if (!fileName.isEmpty()) {
-                    // Use custom file_name from config
-                    finalName = fileName;
+                    // Use custom file_name from config, infer extension if missing
+                    finalName = filenameResolver.resolve(fileName, downloadUrl, null, FilenameResolver.ArtifactType.MOD);
                 } else if (filenameFromSource != null && !filenameFromSource.isEmpty()) {
-                    // Use filename from source (URL/API)
-                    finalName = filenameFromSource;
+                    // Use filename from source (URL/API), infer extension if missing
+                    finalName = filenameResolver.resolve(filenameFromSource, downloadUrl, null, FilenameResolver.ArtifactType.MOD);
                 } else if (!displayName.isEmpty()) {
-                    // Fallback to display name with .jar extension
-                    finalName = displayName.endsWith(".jar") ? displayName : displayName + ".jar";
+                    // Fallback to display name with extension inference
+                    finalName = filenameResolver.resolve(displayName, downloadUrl, null, FilenameResolver.ArtifactType.MOD);
                 } else {
                     // Last resort fallback
                     finalName = "mod_" + numberId + ".jar";
