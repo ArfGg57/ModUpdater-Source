@@ -1,5 +1,6 @@
 package com.ArfGg57.modupdater;
 
+import com.ArfGg57.modupdater.core.ModUpdaterLifecycle;
 import com.ArfGg57.modupdater.core.UpdaterCore;
 import cpw.mods.fml.common.Mod;
 import cpw.mods.fml.common.event.FMLPreInitializationEvent;
@@ -10,7 +11,15 @@ public class ModUpdater {
     @Mod.EventHandler
     public void preInit(FMLPreInitializationEvent event) {
         try {
-            // Run update synchronously in preInit; GUI will appear (after Minecraft window)
+            // Check if early phase already ran via coremod
+            if (ModUpdaterLifecycle.wasEarlyPhaseCompleted()) {
+                System.out.println("[ModUpdater] Early coremod phase already completed - skipping duplicate update run");
+                System.out.println("[ModUpdater] Pending file operations were processed before mod loading");
+                return;
+            }
+            
+            // If no early phase, run update normally (backward compatibility for non-coremod mode)
+            System.out.println("[ModUpdater] Early phase not detected - running update in preInit");
             UpdaterCore core = new UpdaterCore();
             core.runUpdateSynchronous();
         } catch (Throwable t) {

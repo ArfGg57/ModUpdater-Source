@@ -49,6 +49,68 @@ Optional coremod support for processing pending file operations before mods load
 
 See [docs/COREMOD_SETUP.md](docs/COREMOD_SETUP.md) for setup instructions.
 
+## Early Loading System
+
+ModUpdater includes a sophisticated early-loading system that ensures reliable file operations **before mods are loaded**:
+
+### How It Works
+
+1. **Coremod Phase** (Earliest - Before mod scanning)
+   - `ModUpdaterCoremod` loads as an FML coremod plugin (SortingIndex=1)
+   - Processes any pending file operations from `config/ModUpdater/pending-ops.json`
+   - **NEW:** Fetches remote config headlessly (no GUI)
+   - **NEW:** Scans for outdated mods and deletes them immediately
+   - **NEW:** All cleanup happens BEFORE Forge scans/loads mods
+   - Marks early phase as completed
+
+2. **Tweaker Phase** (Early - Before Minecraft launches)
+   - `UpdaterTweaker` runs as a Launchwrapper tweaker
+   - Shows confirmation dialog for updates
+   - Checks if coremod already performed cleanup
+   - Performs main update logic (downloads new mods) if user agrees
+
+3. **PreInit Phase** (Normal - After mods load)
+   - `ModUpdater` @Mod preInit handler
+   - Checks if early phases already completed
+   - Only runs if coremod/tweaker didn't execute (backward compatibility)
+
+### Benefits
+
+- **Prevents Loading Old Mods**: Outdated mods are deleted BEFORE Forge can scan and initialize them
+- **No Conflicts**: Duplicate mod versions never loaded simultaneously
+- **First-Run Deletion**: Files deleted/renamed on first launch, no restart needed
+- **Prevents File Locks**: Operations execute before Forge locks JAR files
+- **Immediate Deletion**: Outdated mods can be deleted immediately instead of requiring restart
+- **Atomic Replacements**: New versions replace old ones cleanly without conflicts
+- **Windows Compatibility**: Significantly improves reliability on Windows systems
+- **Graceful Fallback**: If immediate operations fail, they're deferred to next startup
+
+### Early Cleanup Process
+
+The coremod performs these steps before any mods load:
+
+1. **Fetch Remote Config**: Downloads latest mods.json (headless operation)
+2. **Build Valid Mod List**: Determines which mods should be present
+3. **Load Metadata**: Reads tracking info for installed mods
+4. **Scan Mod Folders**: Checks each installed mod against valid list
+5. **Identify Outdated**: Finds mods that are no longer in config
+6. **Delete Immediately**: Removes outdated mods with 5 retry attempts
+7. **Update Metadata**: Removes deleted mods from tracking database
+
+### Pending Operations
+
+When a file cannot be deleted/moved immediately (e.g., still locked), the operation is:
+1. Scheduled using `File.deleteOnExit()` for JVM exit cleanup
+2. Written to `config/ModUpdater/pending-ops.json` for next startup
+3. Processed by the coremod on next launch before files are locked again
+
+Each pending operation includes:
+- **Type**: DELETE, MOVE, or REPLACE
+- **Paths**: Source, target, and staged paths as needed
+- **Reason**: Human-readable explanation for debugging
+- **Timestamps**: When scheduled and when executed
+- **Idempotency**: Operations check if already completed before attempting
+
 ### Unified Manifest for Files and Mods
 
 The updater now tracks both mods and auxiliary files (configs, resources) in a unified manifest:

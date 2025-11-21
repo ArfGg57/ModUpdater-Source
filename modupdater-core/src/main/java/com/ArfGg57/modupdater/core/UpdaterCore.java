@@ -28,12 +28,226 @@ public class UpdaterCore {
 
     private GuiUpdater gui;
     private boolean configError = false;
+    
+    /**
+     * Logger interface for headless operation
+     */
+    public interface SimpleLogger {
+        void log(String message);
+    }
+    
+    /**
+     * Run early cleanup phase during coremod loading (before mods are scanned).
+     * This moves outdated mods to a temporary location (not deletes) so they don't get loaded.
+     * Files can be restored if user cancels confirmation, or permanently deleted if user accepts.
+     * 
+     * Runs headless (no GUI) and only performs cleanup, not full update.
+     * 
+     * @param logger Simple logger for console output
+     * @return true if cleanup succeeded, false if errors occurred
+     */
+    public static boolean runEarlyCleanup(SimpleLogger logger) {
+        try {
+            logger.log("=== Starting Early Cleanup Phase ===");
+            
+            UpdaterCore core = new UpdaterCore();
+            
+            // Get cleanup state tracker
+            EarlyCleanupState cleanupState = EarlyCleanupState.getInstance();
+            
+            // Ensure config exists
+            try {
+                core.ensureLocalConfigExists();
+            } catch (Exception e) {
+                logger.log("Error ensuring config exists: " + e.getMessage());
+                return false;
+            }
+            
+            // Read local config to get remote config URL
+            JSONObject localConfig;
+            try {
+                localConfig = FileUtils.readJson(core.remoteConfigPath);
+            } catch (Exception e) {
+                logger.log("Error reading local config: " + e.getMessage());
+                return false;
+            }
+            
+            String remoteConfigUrl = localConfig.optString("remote_config_url", "").trim();
+            if (remoteConfigUrl.isEmpty()) {
+                logger.log("No remote_config_url configured, skipping early cleanup");
+                return true; // Not an error, just not configured
+            }
+            
+            // Fetch remote config
+            logger.log("Fetching remote config from: " + remoteConfigUrl);
+            JSONObject remoteConfig;
+            try {
+                remoteConfig = FileUtils.readJsonFromUrl(remoteConfigUrl);
+            } catch (Exception e) {
+                logger.log("Warning: Could not fetch remote config: " + e.getMessage());
+                logger.log("Continuing with existing mods (network may be unavailable during early phase)");
+                return true; // Not fatal, continue launch
+            }
+            
+            String baseUrl = remoteConfig.optString("configsBaseUrl", "");
+            String modsJsonName = remoteConfig.optString("modsJson", "mods.json");
+            String remoteVersion = remoteConfig.optString("modpackVersion", "0.0.0");
+            
+            // Fetch mods.json
+            logger.log("Fetching mods configuration...");
+            String modsUrl = FileUtils.joinUrl(baseUrl, modsJsonName);
+            JSONArray mods;
+            try {
+                mods = FileUtils.readJsonArrayFromUrl(modsUrl);
+            } catch (Exception e) {
+                logger.log("Warning: Could not fetch mods.json: " + e.getMessage());
+                return true; // Not fatal
+            }
+            
+            // Build valid mod map
+            Map<String, JSONObject> validMods = new HashMap<>();
+            for (int i = 0; i < mods.length(); i++) {
+                JSONObject mod = mods.getJSONObject(i);
+                String numberId = mod.optString("numberId", "").trim();
+                if (!numberId.isEmpty()) {
+                    validMods.put(numberId, mod);
+                }
+            }
+            
+            logger.log("Remote config has " + validMods.size() + " mod(s)");
+            
+            // Load metadata to identify managed mods
+            ModMetadata metadata;
+            try {
+                metadata = new ModMetadata(core.modMetadataPath);
+            } catch (Exception e) {
+                logger.log("Warning: Could not load metadata: " + e.getMessage());
+                metadata = new ModMetadata(core.modMetadataPath); // Create new
+            }
+            
+            // Initialize file resolver for hash-based detection
+            RenamedFileResolver fileResolver = new RenamedFileResolver(metadata, new RenamedFileResolver.Logger() {
+                public void log(String message) {
+                    logger.log(message);
+                }
+            });
+            
+            // Scan install locations
+            Set<String> validNumberIds = validMods.keySet();
+            Set<String> installLocations = new HashSet<>();
+            for (JSONObject m : validMods.values()) {
+                installLocations.add(m.optString("installLocation", "mods"));
+            }
+            
+            logger.log("Scanning " + installLocations.size() + " install location(s) for outdated mods...");
+            
+            // Create temporary directory for moved files
+            File tempDir = new File("modupdater/tmp/early-cleanup/");
+            if (!tempDir.exists()) {
+                tempDir.mkdirs();
+            }
+            
+            int movedCount = 0;
+            
+            for (String installLocation : installLocations) {
+                File targetDir = new File(installLocation);
+                if (!targetDir.exists() || !targetDir.isDirectory()) {
+                    continue;
+                }
+                
+                File[] filesInDir = targetDir.listFiles();
+                if (filesInDir == null) continue;
+                
+                for (File file : filesInDir) {
+                    if (!file.isFile()) continue;
+                    if (file.getName().endsWith(".tmp")) continue;
+                    
+                    // Check if this file belongs to a ModUpdater-managed mod
+                    String belongsToNumberId = fileResolver.getOwnerNumberId(file);
+                    boolean isTrackedByModUpdater = (belongsToNumberId != null);
+                    boolean isStillValid = isTrackedByModUpdater && validNumberIds.contains(belongsToNumberId);
+                    
+                    // Move to temp location if tracked but no longer valid
+                    if (isTrackedByModUpdater && !isStillValid) {
+                        logger.log("Moving outdated mod to temp location (early phase): " + file.getName());
+                        
+                        // Move to temporary location instead of deleting
+                        File tempFile = new File(tempDir, file.getName());
+                        int counter = 1;
+                        // Handle duplicate names
+                        while (tempFile.exists()) {
+                            tempFile = new File(tempDir, file.getName() + "." + counter);
+                            counter++;
+                        }
+                        
+                        if (file.renameTo(tempFile)) {
+                            // Record the move so we can restore or delete later
+                            cleanupState.recordMovedFile(file.getAbsolutePath(), tempFile.getAbsolutePath());
+                            
+                            // Record the relative path for showing in confirmation dialog (e.g., "mods/test.jar")
+                            String relativePath = installLocation + "/" + file.getName();
+                            cleanupState.recordRemovedMod(relativePath);
+                            
+                            movedCount++;
+                            logger.log("  Moved to: " + tempFile.getName());
+                        } else {
+                            logger.log("  Failed to move file (may be locked)");
+                        }
+                    }
+                }
+            }
+            
+            if (movedCount > 0) {
+                logger.log("Moved " + movedCount + " outdated mod(s) to temporary location during early phase");
+                logger.log("Files will be permanently deleted if user accepts confirmation, or restored if user cancels");
+            } else {
+                logger.log("No outdated mods found during early cleanup");
+            }
+            
+            logger.log("=== Early Cleanup Phase Complete ===");
+            return true;
+            
+        } catch (Exception e) {
+            logger.log("Error during early cleanup: " + e.getMessage());
+            e.printStackTrace();
+            return false;
+        }
+    }
 
     public void runUpdate() {
         gui = new GuiUpdater();
         gui.show("Initializing ModUpdater...");
 
         try {
+            // Clean up metadata for files that were permanently deleted during early cleanup
+            EarlyCleanupState cleanupState = EarlyCleanupState.getInstance();
+            if (cleanupState.hasMovedFiles()) {
+                gui.show("Cleaning up metadata for removed mods...");
+                ModMetadata metadata = new ModMetadata(modMetadataPath);
+                
+                // Remove metadata entries for files that were deleted
+                for (String originalPath : cleanupState.getMovedFiles().keySet()) {
+                    File originalFile = new File(originalPath);
+                    String fileName = originalFile.getName();
+                    
+                    // Try to find and remove the metadata entry
+                    // This is safe because files have already been permanently deleted at this point
+                    for (ModMetadata.ModEntry entry : metadata.getAllMods()) {
+                        if (entry.fileName != null && entry.fileName.equals(fileName)) {
+                            metadata.removeMod(entry.numberId);
+                            gui.show("  Removed metadata for: " + fileName);
+                            break;
+                        }
+                    }
+                }
+                
+                try {
+                    metadata.save();
+                } catch (Exception e) {
+                    gui.show("Warning: Could not save metadata: " + e.getMessage());
+                }
+            }
+            
             ensureLocalConfigExists();
 
             JSONObject localConfig = FileUtils.readJson(remoteConfigPath);
@@ -380,7 +594,7 @@ public class UpdaterCore {
                         gui.show("Removing outdated ModUpdater-managed mod: " + file.getPath());
                         FileUtils.backupPathTo(file, backupRoot);
                         
-                        // Try to delete with fallback to pending operations
+                        // deleteWithFallback now handles retries intelligently based on early phase
                         if (!pendingOps.deleteWithFallback(file)) {
                             gui.show("File locked, will retry on next startup");
                         }
@@ -714,7 +928,7 @@ public class UpdaterCore {
                         gui.show("Removing old version: " + f.getPath());
                         FileUtils.backupPathTo(f, backupRoot);
                         
-                        // Try to delete with fallback to pending operations
+                        // deleteWithFallback now handles retries intelligently based on early phase
                         if (!pendingOps.deleteWithFallback(f)) {
                             gui.show("File locked, will retry on next startup");
                         }
@@ -727,7 +941,7 @@ public class UpdaterCore {
                                 gui.show("Backing up existing target file: " + target.getPath());
                                 FileUtils.backupPathTo(target, backupRoot);
                                 
-                                // Try to delete with fallback to pending operations
+                                // deleteWithFallback now handles retries intelligently based on early phase
                                 if (!pendingOps.deleteWithFallback(target)) {
                                     gui.show("File locked, will retry on next startup");
                                 }

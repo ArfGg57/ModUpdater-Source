@@ -76,6 +76,75 @@ This guide helps verify that the fixes for mod renaming and updating work correc
 
 ---
 
+### Test 4: Early Phase Immediate Deletion (No Second Launch Required)
+
+**Purpose:** Verify that files can be deleted or renamed on the **first run** without requiring a second launch.
+
+**Setup:**
+1. Ensure ModUpdater JAR has the coremod properly configured (manifest attributes set)
+2. Install a mod with fileId=1000
+3. Verify mod is in place and metadata is recorded
+
+**Test:**
+1. Update `mods.json` to change fileId to 2000 (new version with different hash)
+2. Launch the game/mod loader **once**
+
+**Expected Result:**
+- On first launch, you should see in logs:
+  ```
+  [ModUpdaterCoremod] Initializing early-load phase...
+  [ModUpdaterCoremod] No pending operations to process
+  [ModUpdaterCoremod] Early-load phase complete
+  ```
+- During update phase:
+  ```
+  Removing outdated ModUpdater-managed mod: [old file path]
+  Deleted file (attempt 1): [old file path]
+  ```
+  OR with retries:
+  ```
+  Deleted file (attempt 3): [old file path]
+  ```
+- **NO messages** about "File locked, will retry on next startup"
+- Old file is removed immediately
+- New file is downloaded and installed
+- **NO second launch required**
+
+**Failure (old behavior):**
+- Would see "File locked, will retry on next startup"
+- Would require second launch to complete deletion
+
+---
+
+### Test 5: Manual Rename with Immediate Correction
+
+**Purpose:** Verify that manually renamed files are corrected immediately without requiring second launch.
+
+**Setup:**
+1. Install a mod with expected filename `journeymap-1.7.10.jar`
+2. Manually rename it to `journeymap-custom-name.jar`
+
+**Test:**
+1. Launch the game/mod loader **once**
+
+**Expected Result:**
+- Mod is detected by hash scan
+- File is renamed back to expected name immediately on first launch
+- Logs show:
+  ```
+  Found renamed mod by hash: journeymap-custom-name.jar
+  Renaming mod from: journeymap-custom-name.jar to: journeymap-1.7.10.jar
+  Moved file (attempt 1): [paths]
+  ```
+- **NO pending operations** created
+- **NO second launch required**
+
+**Failure (old behavior):**
+- Rename would be scheduled for next startup
+- Would require second launch
+
+---
+
 ## Verification Checklist
 
 After running tests, verify:
