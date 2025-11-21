@@ -11,6 +11,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.*;
 
@@ -166,12 +167,14 @@ public class UpdaterCore {
                     }
                 },
                 modMetadata,
-                pendingOps,
                 backupRoot
             );
             
             int deletionCount = deletionProcessor.processDeletions(deletesRoot, appliedVersion, remoteVersion);
             gui.show("Deletion phase completed: " + deletionCount + " item(s) deleted");
+            
+            // Track any failed deletions from the deletion processor
+            pendingDeletes.addAll(deletionProcessor.getFailedDeletes());
             
             // Note: Metadata is saved inside DeletionProcessor after deletions
             
@@ -494,19 +497,20 @@ public class UpdaterCore {
                                             gui.show("Renaming mod from: " + existingFile.getName() + " to: " + finalName);
                                             FileUtils.backupPathTo(existingFile, backupRoot);
                                             
-                                            // Try rename with fallback to pending operation
-                                            if (!pendingOps.moveWithFallback(existingFile, target)) {
-                                                gui.show("RENAME FAILED: File locked, rename scheduled for next startup");
-                                                gui.show("Continuing with existing file (valid): " + existingFile.getPath());
-                                                // FIXED: Update metadata with current filename so we know it's the same file
-                                                // NOTE: Save immediately to prevent re-download in case of crash/interrupt
-                                                modMetadata.recordMod(numberId, existingFile.getName(), expectedHash, source);
-                                                modMetadata.save();
-                                                // Keep using existingFile - no re-download needed
-                                            } else {
+                                            // Try rename
+                                            try {
+                                                FileUtils.atomicMoveWithRetries(existingFile, target, 3, 100);
                                                 gui.show("Successfully renamed mod to: " + target.getPath());
                                                 modMetadata.recordMod(numberId, finalName, expectedHash, source);
                                                 existingFile = target;
+                                            } catch (IOException e) {
+                                                gui.show("RENAME FAILED: " + e.getMessage());
+                                                gui.show("File may be locked - tracking for deletion after restart");
+                                                pendingDeletes.add(existingFile);
+                                                gui.show("Continuing with existing file (valid): " + existingFile.getPath());
+                                                // Update metadata with current filename so we know it's the same file
+                                                modMetadata.recordMod(numberId, existingFile.getName(), expectedHash, source);
+                                                modMetadata.save();
                                             }
                                         }
                                     } else {
@@ -536,16 +540,18 @@ public class UpdaterCore {
                                         gui.show("Renaming mod from: " + renamedFile.getName() + " to: " + finalName);
                                         FileUtils.backupPathTo(renamedFile, backupRoot);
                                         
-                                        // Try rename with fallback to pending operation
-                                        if (!pendingOps.moveWithFallback(renamedFile, target)) {
-                                            gui.show("RENAME FAILED: File locked, rename scheduled for next startup");
-                                            gui.show("Continuing with existing file (valid): " + renamedFile.getPath());
-                                            // FIXED: Metadata already recorded with renamedFile.getName() above, save it
-                                            modMetadata.save();
-                                            // Keep using renamedFile - no re-download needed
-                                        } else {
+                                        // Try rename
+                                        try {
+                                            FileUtils.atomicMoveWithRetries(renamedFile, target, 3, 100);
                                             gui.show("Successfully renamed mod to: " + target.getPath());
                                             modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                        } catch (IOException e) {
+                                            gui.show("RENAME FAILED: " + e.getMessage());
+                                            gui.show("File may be locked - tracking for deletion after restart");
+                                            pendingDeletes.add(renamedFile);
+                                            gui.show("Continuing with existing file (valid): " + renamedFile.getPath());
+                                            // Metadata already recorded with renamedFile.getName() above, save it
+                                            modMetadata.save();
                                         }
                                     }
                                 } else {
@@ -578,16 +584,18 @@ public class UpdaterCore {
                                         gui.show("Renaming mod from: " + existingFile.getName() + " to: " + finalName);
                                         FileUtils.backupPathTo(existingFile, backupRoot);
                                         
-                                        // Try rename with fallback to pending operation
-                                        if (!pendingOps.moveWithFallback(existingFile, target)) {
-                                            gui.show("RENAME FAILED: File locked, rename scheduled for next startup");
-                                            gui.show("Continuing with existing file (valid): " + existingFile.getPath());
-                                            // FIXED: Metadata already recorded with existingFile.getName() above, save it
-                                            modMetadata.save();
-                                            // Keep using existingFile - no re-download needed
-                                        } else {
+                                        // Try rename
+                                        try {
+                                            FileUtils.atomicMoveWithRetries(existingFile, target, 3, 100);
                                             gui.show("Successfully renamed mod to: " + target.getPath());
                                             modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                        } catch (IOException e) {
+                                            gui.show("RENAME FAILED: " + e.getMessage());
+                                            gui.show("File may be locked - tracking for deletion after restart");
+                                            pendingDeletes.add(existingFile);
+                                            gui.show("Continuing with existing file (valid): " + existingFile.getPath());
+                                            // Metadata already recorded with existingFile.getName() above, save it
+                                            modMetadata.save();
                                         }
                                     }
                                 } else {
@@ -647,16 +655,18 @@ public class UpdaterCore {
                             gui.show("Renaming mod from: " + renamedFile.getName() + " to: " + finalName);
                             FileUtils.backupPathTo(existingFile, backupRoot);
                             
-                            // Try rename with fallback to pending operation
-                            if (!pendingOps.moveWithFallback(existingFile, target)) {
-                                gui.show("RENAME FAILED: File locked, rename scheduled for next startup");
-                                gui.show("Continuing with existing file (valid): " + existingFile.getPath());
-                                // FIXED: Metadata already recorded with renamedFile.getName() above, save it
-                                modMetadata.save();
-                                // Keep using existingFile - no re-download needed
-                            } else {
+                            // Try rename
+                            try {
+                                FileUtils.atomicMoveWithRetries(existingFile, target, 3, 100);
                                 gui.show("Successfully renamed mod to: " + target.getPath());
                                 modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                            } catch (IOException e) {
+                                gui.show("RENAME FAILED: " + e.getMessage());
+                                gui.show("File may be locked - tracking for deletion after restart");
+                                pendingDeletes.add(existingFile);
+                                gui.show("Continuing with existing file (valid): " + existingFile.getPath());
+                                // Metadata already recorded with renamedFile.getName() above, save it
+                                modMetadata.save();
                             }
                         } else {
                             gui.show("Mod missing after hash scan; will download: " + finalName);

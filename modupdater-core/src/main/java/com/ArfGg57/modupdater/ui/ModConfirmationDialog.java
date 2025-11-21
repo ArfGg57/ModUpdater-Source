@@ -620,7 +620,6 @@ public class ModConfirmationDialog {
                             }
                         },
                         modMetadata,
-                        null, // No pending ops needed for just building the list
                         null  // No backup root needed for just building the list
                     );
                     
@@ -1022,7 +1021,7 @@ public class ModConfirmationDialog {
             // Use a dummy metadata and processor to build the list
             // In test mode, we don't have version info, so we'll show all deletions
             ModMetadata dummyMetadata = new ModMetadata(null);
-            DeletionProcessor processor = new DeletionProcessor(null, dummyMetadata, null, null);
+            DeletionProcessor processor = new DeletionProcessor(null, dummyMetadata, null);
             
             // Get all deletions (use version range that includes everything)
             List<String> deletionsList = processor.buildDeletionsList(deletesRoot, "0.0.0", "999.0.0");
