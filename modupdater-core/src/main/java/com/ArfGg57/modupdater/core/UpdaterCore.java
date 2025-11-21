@@ -818,7 +818,7 @@ public class UpdaterCore {
 
     /**
      * Start a deletion thread for pending files and crash the game to force restart.
-     * This method will not return - it throws a RuntimeException to crash the game.
+     * This method will not return - it throws an Error to crash the game.
      */
     private void startDeletionThreadAndCrash() {
         System.out.println("[ModUpdater] Starting deletion thread for pending files...");
@@ -848,8 +848,9 @@ public class UpdaterCore {
                 // Keep the process alive for a few more seconds to ensure files are deleted
                 Thread.sleep(DELETION_KEEP_ALIVE_MS);
                 
-                System.out.println("[ModUpdater] Deletion thread complete. Exiting...");
-                System.exit(0);
+                System.out.println("[ModUpdater] Deletion thread complete.");
+                // Note: Don't call System.exit() as it's blocked by FMLSecurityManager
+                // The game crash from the Error will terminate the process
             } catch (InterruptedException e) {
                 System.err.println("[ModUpdater] Deletion thread interrupted: " + e.getMessage());
             }
@@ -857,10 +858,11 @@ public class UpdaterCore {
         deletionThread.setDaemon(false);  // Not a daemon - should keep running
         deletionThread.start();
         
-        // Throw a runtime exception to crash the game and force a restart
+        // Throw an Error instead of RuntimeException to crash the game and force a restart
+        // Errors are less likely to be caught by FML exception handlers
         // This will bypass FMLSecurityManager's System.exit() blocking
         System.err.println("[ModUpdater] Triggering game crash to apply updates...");
-        throw new RuntimeException("[ModUpdater] Restart required to complete mod updates. Please restart the game.");
+        throw new AssertionError("[ModUpdater] Restart required to complete mod updates. Please restart the game.");
     }
 
     private List<JSONObject> buildSinceList(JSONArray arr, String fromExclusive, String toInclusive) {
