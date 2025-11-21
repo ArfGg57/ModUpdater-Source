@@ -782,6 +782,64 @@ public class UpdaterCore {
             gui.setProgress(100);
 
             FileUtils.pruneBackups("modupdater/backup", backupKeep, gui);
+            
+            // Check if there are any pending deletes (files that were locked)
+            if (!pendingDeletes.isEmpty()) {
+                gui.show("Some files could not be deleted and require a restart.");
+                gui.close();  // Close the progress GUI before showing the restart dialog
+                
+                // Show restart required dialog
+                com.ArfGg57.modupdater.ui.RestartRequiredDialog restartDialog = 
+                    new com.ArfGg57.modupdater.ui.RestartRequiredDialog(pendingDeletes);
+                restartDialog.showDialog();
+                
+                if (restartDialog.wasContinued()) {
+                    // User clicked Continue - we need to crash the game but keep the updater running
+                    System.out.println("[ModUpdater] User requested restart to complete updates.");
+                    System.out.println("[ModUpdater] Starting deletion thread for pending files...");
+                    
+                    // Start a daemon thread to delete the files after a short delay
+                    Thread deletionThread = new Thread(new Runnable() {
+                        public void run() {
+                            try {
+                                // Wait for the game to start shutting down
+                                Thread.sleep(2000);
+                                
+                                System.out.println("[ModUpdater] Attempting to delete " + pendingDeletes.size() + " pending file(s)...");
+                                int deletedCount = 0;
+                                for (File file : pendingDeletes) {
+                                    if (file.exists()) {
+                                        boolean deleted = file.delete();
+                                        if (deleted) {
+                                            System.out.println("[ModUpdater] Deleted: " + file.getPath());
+                                            deletedCount++;
+                                        } else {
+                                            System.out.println("[ModUpdater] Still locked: " + file.getPath());
+                                        }
+                                    }
+                                }
+                                
+                                System.out.println("[ModUpdater] Deletion complete: " + deletedCount + " of " + pendingDeletes.size() + " files deleted.");
+                                
+                                // Keep the process alive for a few more seconds to ensure files are deleted
+                                Thread.sleep(3000);
+                                
+                                System.out.println("[ModUpdater] Deletion thread complete. Exiting...");
+                                System.exit(0);
+                            } catch (InterruptedException e) {
+                                System.err.println("[ModUpdater] Deletion thread interrupted: " + e.getMessage());
+                            }
+                        }
+                    }, "ModUpdater-DeletionThread");
+                    deletionThread.setDaemon(false);  // Not a daemon - should keep running
+                    deletionThread.start();
+                    
+                    // Now crash the game by throwing an exception
+                    System.err.println("[ModUpdater] Triggering game exit to apply updates...");
+                    throw new RuntimeException("ModUpdater: Restart required to complete updates. " +
+                        "Please restart the game. The updater will clean up pending files.");
+                }
+            }
 
         } catch (Exception e) {
             gui.show("Update failed: " + e.getMessage());
