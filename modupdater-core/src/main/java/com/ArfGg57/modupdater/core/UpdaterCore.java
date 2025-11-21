@@ -32,7 +32,6 @@ public class UpdaterCore {
     
     // Constants for pending delete cleanup
     private static final int DELETION_WAIT_MS = 2000;  // Wait time before attempting deletion
-    private static final int DELETION_KEEP_ALIVE_MS = 3000;  // Keep process alive after deletion
     
     /**
      * Get list of files that failed to delete (locked by the game)
@@ -818,7 +817,7 @@ public class UpdaterCore {
 
     /**
      * Start a deletion thread for pending files and crash the game to force restart.
-     * This method will not return - it throws an Error to crash the game.
+     * This method will not return - it forcefully halts the JVM.
      */
     private void startDeletionThreadAndCrash() {
         System.out.println("[ModUpdater] Starting deletion thread for pending files...");
@@ -845,12 +844,10 @@ public class UpdaterCore {
                 
                 System.out.println("[ModUpdater] Deletion complete: " + deletedCount + " of " + pendingDeletes.size() + " files deleted.");
                 
-                // Keep the process alive for a few more seconds to ensure files are deleted
-                Thread.sleep(DELETION_KEEP_ALIVE_MS);
+                // Brief wait to ensure logs are flushed
+                Thread.sleep(500);
                 
-                System.out.println("[ModUpdater] Deletion thread complete.");
-                // Note: Don't call System.exit() as it's blocked by FMLSecurityManager
-                // The game crash from the Error will terminate the process
+                System.out.println("[ModUpdater] Deletion thread complete. Exiting...");
             } catch (InterruptedException e) {
                 System.err.println("[ModUpdater] Deletion thread interrupted: " + e.getMessage());
             }
@@ -858,11 +855,23 @@ public class UpdaterCore {
         deletionThread.setDaemon(false);  // Not a daemon - should keep running
         deletionThread.start();
         
-        // Throw a custom Error to crash the game and force a restart
-        // Using Error (not Exception) ensures it bypasses FML exception handlers
-        // This is necessary because FMLSecurityManager blocks System.exit()
+        // Forcefully crash the game using Runtime.halt()
+        // This is more forceful than throwing an Error or calling System.exit()
+        // Runtime.halt() immediately terminates the JVM without calling shutdown hooks
+        // and cannot be caught by SecurityManager or try-catch blocks
         System.err.println("[ModUpdater] Triggering game crash to apply updates...");
-        throw new RestartRequiredError("[ModUpdater] Restart required to complete mod updates. Please restart the game.");
+        System.err.println("[ModUpdater] Restart required to complete mod updates. Please restart the game.");
+        
+        // Give the deletion thread a moment to start, then halt
+        try {
+            Thread.sleep(100);
+        } catch (InterruptedException e) {
+            // Ignore
+        }
+        
+        // Halt the JVM with exit code 0 (normal termination from user perspective)
+        // The deletion thread will continue running for a brief moment to delete files
+        Runtime.getRuntime().halt(0);
     }
 
     private List<JSONObject> buildSinceList(JSONArray arr, String fromExclusive, String toInclusive) {
