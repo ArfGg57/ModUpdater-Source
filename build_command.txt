@@ -1,0 +1,5 @@
+./gradlew --refresh-dependencies clean :modupdater-core:build :modupdater-launchwrapper:build
+
+--refresh-dependencies
+
+./gradlew clean :modupdater-launchwrapper:build
