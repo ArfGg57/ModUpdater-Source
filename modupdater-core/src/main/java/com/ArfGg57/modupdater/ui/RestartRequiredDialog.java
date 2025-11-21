@@ -34,19 +34,28 @@ public class RestartRequiredDialog {
     private JDialog dialog;
     private Point initialClick;
     private boolean continued = false;
+    private boolean closedWithoutContinue = false;
     
     public RestartRequiredDialog(List<File> lockedFiles) {
         dialog = new JDialog((Frame) null, true); // Modal
         dialog.setUndecorated(true);
         dialog.setBackground(new Color(0, 0, 0, 0));
         
-        // Allow dialog to be closed with ESC key or window close
+        // Set up window close listener to track when user closes without clicking Continue
         dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+        dialog.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosing(java.awt.event.WindowEvent windowEvent) {
+                closedWithoutContinue = true;
+            }
+        });
         
         // Add ESC key binding
         JRootPane rootPane = dialog.getRootPane();
-        rootPane.registerKeyboardAction(e -> dialog.dispose(),
-            KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0),
+        rootPane.registerKeyboardAction(e -> {
+            closedWithoutContinue = true;
+            dialog.dispose();
+        }, KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0),
             JComponent.WHEN_IN_FOCUSED_WINDOW);
         
         JPanel mainPanel = new JPanel(new BorderLayout(15, 15)) {
@@ -64,7 +73,7 @@ public class RestartRequiredDialog {
         mainPanel.setBorder(new EmptyBorder(30, 30, 30, 30));
         
         // Title
-        JLabel titleLabel = new JLabel("⚠ Restart Required", SwingConstants.CENTER);
+        JLabel titleLabel = new JLabel("! Restart Required", SwingConstants.CENTER);
         titleLabel.setFont(FONT_TITLE);
         titleLabel.setForeground(COLOR_ACCENT);
         mainPanel.add(titleLabel, BorderLayout.NORTH);
@@ -200,5 +209,12 @@ public class RestartRequiredDialog {
      */
     public boolean wasContinued() {
         return continued;
+    }
+    
+    /**
+     * Check if user closed dialog without clicking Continue
+     */
+    public boolean wasClosedWithoutContinue() {
+        return closedWithoutContinue;
     }
 }
