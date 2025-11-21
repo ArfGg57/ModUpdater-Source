@@ -58,6 +58,15 @@ public class UpdaterCore {
                 throw new RuntimeException("Invalid remote_config_url format in " + remoteConfigPath);
             }
             
+            // Additional URL validation - try to parse it to ensure it's well-formed
+            try {
+                new java.net.URL(remoteConfigUrl);
+            } catch (java.net.MalformedURLException e) {
+                gui.show("CONFIG ERROR: remote_config_url is malformed: " + e.getMessage());
+                gui.show("Current value: " + remoteConfigUrl);
+                throw new RuntimeException("Malformed remote_config_url in " + remoteConfigPath, e);
+            }
+            
             gui.show("Using remote config URL: " + remoteConfigUrl);
 
             String appliedVersion = FileUtils.readAppliedVersion(localVersionPath);
@@ -824,6 +833,11 @@ public class UpdaterCore {
     /**
      * Forcefully crash the game to force restart.
      * This method will not return - it immediately halts the JVM.
+     * 
+     * Note: We use Runtime.halt() instead of System.exit() because FMLSecurityManager
+     * (Forge Mod Loader) blocks System.exit() calls by throwing ExitTrappedException.
+     * Runtime.halt() cannot be caught or blocked, ensuring the game actually crashes
+     * as required when files are locked and need a restart to be deleted.
      */
     private void startDeletionThreadAndCrash() {
         System.out.println("[ModUpdater] Triggering game crash to apply updates...");
