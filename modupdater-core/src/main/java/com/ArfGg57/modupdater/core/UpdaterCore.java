@@ -53,6 +53,15 @@ public class UpdaterCore {
                 gui.show("CONFIG ERROR: remote_config_url missing in " + remoteConfigPath);
                 throw new RuntimeException("ModUpdater configuration incomplete.");
             }
+            
+            // Validate the remote config URL format
+            if (!remoteConfigUrl.startsWith("http://") && !remoteConfigUrl.startsWith("https://")) {
+                gui.show("CONFIG ERROR: remote_config_url must start with http:// or https://");
+                gui.show("Current value: " + remoteConfigUrl);
+                throw new RuntimeException("Invalid remote_config_url format in " + remoteConfigPath);
+            }
+            
+            gui.show("Using remote config URL: " + remoteConfigUrl);
 
             String appliedVersion = FileUtils.readAppliedVersion(localVersionPath);
             gui.show("Local applied version: " + appliedVersion);
