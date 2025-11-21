@@ -38,7 +38,8 @@ public class UpdaterCore {
     
     /**
      * Run early cleanup phase during coremod loading (before mods are scanned).
-     * This performs immediate deletion/rename of outdated mods so they don't get loaded.
+     * This moves outdated mods to a temporary location (not deletes) so they don't get loaded.
+     * Files can be restored if user cancels confirmation, or permanently deleted if user accepts.
      * 
      * Runs headless (no GUI) and only performs cleanup, not full update.
      * 
@@ -50,6 +51,9 @@ public class UpdaterCore {
             logger.log("=== Starting Early Cleanup Phase ===");
             
             UpdaterCore core = new UpdaterCore();
+            
+            // Get cleanup state tracker
+            EarlyCleanupState cleanupState = EarlyCleanupState.getInstance();
             
             // Ensure config exists
             try {
@@ -128,16 +132,6 @@ public class UpdaterCore {
                 }
             });
             
-            // Initialize pending operations
-            PendingOperations pendingOps = new PendingOperations(
-                "config/ModUpdater/pending-ops.json",
-                new PendingOperations.Logger() {
-                    public void log(String message) {
-                        logger.log(message);
-                    }
-                }
-            );
-            
             // Scan install locations
             Set<String> validNumberIds = validMods.keySet();
             Set<String> installLocations = new HashSet<>();
@@ -147,7 +141,13 @@ public class UpdaterCore {
             
             logger.log("Scanning " + installLocations.size() + " install location(s) for outdated mods...");
             
-            int deletedCount = 0;
+            // Create temporary directory for moved files
+            File tempDir = new File("modupdater/tmp/early-cleanup/");
+            if (!tempDir.exists()) {
+                tempDir.mkdirs();
+            }
+            
+            int movedCount = 0;
             
             for (String installLocation : installLocations) {
                 File targetDir = new File(installLocation);
@@ -167,32 +167,43 @@ public class UpdaterCore {
                     boolean isTrackedByModUpdater = (belongsToNumberId != null);
                     boolean isStillValid = isTrackedByModUpdater && validNumberIds.contains(belongsToNumberId);
                     
-                    // Delete if tracked but no longer valid
+                    // Move to temp location if tracked but no longer valid
                     if (isTrackedByModUpdater && !isStillValid) {
-                        logger.log("Removing outdated mod (early phase): " + file.getName());
+                        logger.log("Moving outdated mod to temp location (early phase): " + file.getName());
                         
-                        // Try immediate deletion - during early phase, files shouldn't be locked
-                        if (pendingOps.deleteWithFallback(file)) {
-                            deletedCount++;
-                            // Remove from metadata
-                            if (belongsToNumberId != null) {
-                                metadata.removeMod(belongsToNumberId);
+                        // Move to temporary location instead of deleting
+                        File tempFile = new File(tempDir, file.getName());
+                        int counter = 1;
+                        // Handle duplicate names
+                        while (tempFile.exists()) {
+                            tempFile = new File(tempDir, file.getName() + "." + counter);
+                            counter++;
+                        }
+                        
+                        if (file.renameTo(tempFile)) {
+                            // Record the move so we can restore or delete later
+                            cleanupState.recordMovedFile(file.getAbsolutePath(), tempFile.getAbsolutePath());
+                            
+                            // Get mod display name for confirmation dialog
+                            ModMetadata.ModEntry entry = metadata.getMod(belongsToNumberId);
+                            String displayName = file.getName();
+                            if (entry != null && entry.fileName != null) {
+                                displayName = entry.fileName;
                             }
+                            cleanupState.recordRemovedMod(displayName);
+                            
+                            movedCount++;
+                            logger.log("  Moved to: " + tempFile.getName());
                         } else {
-                            logger.log("  Note: Deletion deferred to pending operations");
+                            logger.log("  Failed to move file (may be locked)");
                         }
                     }
                 }
             }
             
-            // Save metadata if changes were made
-            if (deletedCount > 0) {
-                try {
-                    metadata.save();
-                    logger.log("Removed " + deletedCount + " outdated mod(s) during early phase");
-                } catch (Exception e) {
-                    logger.log("Warning: Could not save metadata: " + e.getMessage());
-                }
+            if (movedCount > 0) {
+                logger.log("Moved " + movedCount + " outdated mod(s) to temporary location during early phase");
+                logger.log("Files will be permanently deleted if user accepts confirmation, or restored if user cancels");
             } else {
                 logger.log("No outdated mods found during early cleanup");
             }
@@ -212,6 +223,35 @@ public class UpdaterCore {
         gui.show("Initializing ModUpdater...");
 
         try {
+            // Clean up metadata for files that were permanently deleted during early cleanup
+            EarlyCleanupState cleanupState = EarlyCleanupState.getInstance();
+            if (cleanupState.hasMovedFiles()) {
+                gui.show("Cleaning up metadata for removed mods...");
+                ModMetadata metadata = new ModMetadata(modMetadataPath);
+                
+                // Remove metadata entries for files that were deleted
+                for (String originalPath : cleanupState.getMovedFiles().keySet()) {
+                    File originalFile = new File(originalPath);
+                    String fileName = originalFile.getName();
+                    
+                    // Try to find and remove the metadata entry
+                    // This is safe because files have already been permanently deleted at this point
+                    for (ModMetadata.ModEntry entry : metadata.getAllMods()) {
+                        if (entry.fileName != null && entry.fileName.equals(fileName)) {
+                            metadata.removeMod(entry.numberId);
+                            gui.show("  Removed metadata for: " + fileName);
+                            break;
+                        }
+                    }
+                }
+                
+                try {
+                    metadata.save();
+                } catch (Exception e) {
+                    gui.show("Warning: Could not save metadata: " + e.getMessage());
+                }
+            }
+            
             ensureLocalConfigExists();
 
             JSONObject localConfig = FileUtils.readJson(remoteConfigPath);
