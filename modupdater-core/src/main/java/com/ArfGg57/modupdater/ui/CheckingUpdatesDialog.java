@@ -100,11 +100,21 @@ public class CheckingUpdatesDialog {
     }
     
     public void show() {
-        SwingUtilities.invokeLater(() -> dialog.setVisible(true));
+        // Show immediately if on EDT, otherwise schedule for later
+        if (SwingUtilities.isEventDispatchThread()) {
+            dialog.setVisible(true);
+        } else {
+            SwingUtilities.invokeLater(() -> dialog.setVisible(true));
+        }
     }
     
     public void updateStatus(String status) {
-        SwingUtilities.invokeLater(() -> statusLabel.setText(status));
+        // Update immediately if on EDT, otherwise schedule for later
+        if (SwingUtilities.isEventDispatchThread()) {
+            statusLabel.setText(status);
+        } else {
+            SwingUtilities.invokeLater(() -> statusLabel.setText(status));
+        }
     }
     
     public void close() {

@@ -38,57 +38,9 @@ public class ModMetadataTest {
         }
     }
     
-    @Test
-    public void testDeleteTracking_MarkAndCheck() {
-        String path1 = "mods/oldmod.jar";
-        String path2 = "config/oldconfig.cfg";
-        
-        // Initially not completed
-        assertFalse("Delete should not be marked as completed initially", 
-                    metadata.isDeleteCompleted(path1));
-        
-        // Mark as completed
-        metadata.markDeleteCompleted(path1);
-        
-        // Should now be completed
-        assertTrue("Delete should be marked as completed", 
-                   metadata.isDeleteCompleted(path1));
-        
-        // Other paths should not be affected
-        assertFalse("Different path should not be marked", 
-                    metadata.isDeleteCompleted(path2));
-    }
+    // NOTE: Delete tracking feature removed per user request (files should be deletable multiple times)
+    // Tests removed: testDeleteTracking_MarkAndCheck, testDeleteTracking_Persistence, testDeleteTracking_EmptyPath
     
-    @Test
-    public void testDeleteTracking_Persistence() {
-        String path = "mods/obsolete.jar";
-        
-        // Mark delete as completed
-        metadata.markDeleteCompleted(path);
-        metadata.save();
-        
-        // Create new instance (simulating restart)
-        ModMetadata metadata2 = new ModMetadata(TEST_METADATA_PATH);
-        
-        // Should still be marked as completed
-        assertTrue("Delete should persist across restarts", 
-                   metadata2.isDeleteCompleted(path));
-    }
-    
-    @Test
-    public void testDeleteTracking_EmptyPath() {
-        // Should handle empty/null paths gracefully
-        assertFalse("Empty path should return false", 
-                    metadata.isDeleteCompleted(""));
-        assertFalse("Null path should return false", 
-                    metadata.isDeleteCompleted(null));
-        
-        metadata.markDeleteCompleted("");
-        metadata.markDeleteCompleted(null);
-        
-        // Should not throw exceptions
-        assertTrue("Test completed without exceptions", true);
-    }
     
     @Test
     public void testAuxiliaryFile_BasicTracking() {
@@ -212,8 +164,7 @@ public class ModMetadataTest {
     
     @Test
     public void testPersistence_FullCycle() {
-        // Add various entries
-        metadata.markDeleteCompleted("old/file.jar");
+        // Add various entries (delete tracking removed per user request)
         metadata.recordFile("config/test.cfg", "hash123", "url", "config/");
         metadata.recordMod("99", "mod.jar", "modhash", new JSONObject().put("type", "url").put("url", "test"));
         
@@ -224,7 +175,6 @@ public class ModMetadataTest {
         ModMetadata loaded = new ModMetadata(TEST_METADATA_PATH);
         
         // Verify all data persisted
-        assertTrue("Delete should persist", loaded.isDeleteCompleted("old/file.jar"));
         assertNotNull("File should persist", loaded.getFile("config/test.cfg"));
         assertNotNull("Mod should persist", loaded.getMod("99"));
     }

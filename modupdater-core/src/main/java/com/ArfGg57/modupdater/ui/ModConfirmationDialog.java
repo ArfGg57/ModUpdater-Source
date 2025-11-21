@@ -436,8 +436,9 @@ public class ModConfirmationDialog {
                                                 modMetadata.recordMod(numberId, finalName, expectedHash, source);
                                                 modMetadata.save();
                                             } else {
-                                                System.out.println("[ModConfirmationDialog] Failed to rename (file may be locked); will propose download");
-                                                needs = true;
+                                                System.out.println("[ModConfirmationDialog] Failed to rename (file may be locked); keeping existing file with correct hash");
+                                                // Do NOT set needs = true - the file exists with correct hash, just wrong name
+                                                // The existing file will continue to work
                                             }
                                         }
                                         // else: file has correct name, no action needed
@@ -454,8 +455,9 @@ public class ModConfirmationDialog {
                                                 modMetadata.recordMod(numberId, finalName, expectedHash, source);
                                                 modMetadata.save();
                                             } else {
-                                                System.out.println("[ModConfirmationDialog] Failed to rename; will propose download");
-                                                needs = true;
+                                                System.out.println("[ModConfirmationDialog] Failed to rename; keeping existing file with correct hash");
+                                                // Do NOT set needs = true - the file exists with correct hash, just wrong name
+                                                // The existing file will continue to work
                                             }
                                         } else {
                                             // File not found by hash either - need to download
@@ -479,8 +481,9 @@ public class ModConfirmationDialog {
                                             modMetadata.recordMod(numberId, finalName, expectedHash, source);
                                             modMetadata.save();
                                         } else {
-                                            System.out.println("[ModConfirmationDialog] Failed to rename; will propose download");
-                                            needs = true;
+                                            System.out.println("[ModConfirmationDialog] Failed to rename; keeping existing file with correct hash");
+                                            // Do NOT set needs = true - the file exists with correct hash, just wrong name
+                                            // The existing file will continue to work
                                         }
                                     }
                                     // else: file already has correct name
