@@ -1,7 +1,6 @@
 package com.ArfGg57.modupdater.deletion;
 
 import com.ArfGg57.modupdater.metadata.ModMetadata;
-import com.ArfGg57.modupdater.util.PendingOperations;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Before;
@@ -124,8 +123,8 @@ public class DeletionProcessorTest {
         
         // Create processor
         ModMetadata metadata = new ModMetadata(metadataFile.getPath());
-        PendingOperations pendingOps = new PendingOperations(pendingOpsFile.getPath(), null);
-        DeletionProcessor processor = new DeletionProcessor(createLogger(), metadata, pendingOps, null);
+        
+        DeletionProcessor processor = new DeletionProcessor(createLogger(), metadata, null);
         
         // Process deletions (current: 1.4, target: 1.6)
         int count = processor.processDeletions(config, "1.4.0", "1.6.0");
@@ -178,8 +177,8 @@ public class DeletionProcessorTest {
         
         // Create processor
         ModMetadata metadata = new ModMetadata(metadataFile.getPath());
-        PendingOperations pendingOps = new PendingOperations(pendingOpsFile.getPath(), null);
-        DeletionProcessor processor = new DeletionProcessor(createLogger(), metadata, pendingOps, null);
+        
+        DeletionProcessor processor = new DeletionProcessor(createLogger(), metadata, null);
         
         // Process deletions
         processor.processDeletions(config, "1.4.0", "1.6.0");
@@ -242,8 +241,8 @@ public class DeletionProcessorTest {
         
         // Create processor
         ModMetadata metadata = new ModMetadata(metadataFile.getPath());
-        PendingOperations pendingOps = new PendingOperations(pendingOpsFile.getPath(), null);
-        DeletionProcessor processor = new DeletionProcessor(createLogger(), metadata, pendingOps, null);
+        
+        DeletionProcessor processor = new DeletionProcessor(createLogger(), metadata, null);
         
         // Process deletions
         processor.processDeletions(config, "1.4.0", "1.6.0");
@@ -270,8 +269,8 @@ public class DeletionProcessorTest {
         
         // Create processor
         ModMetadata metadata = new ModMetadata(metadataFile.getPath());
-        PendingOperations pendingOps = new PendingOperations(pendingOpsFile.getPath(), null);
-        DeletionProcessor processor = new DeletionProcessor(createLogger(), metadata, pendingOps, null);
+        
+        DeletionProcessor processor = new DeletionProcessor(createLogger(), metadata, null);
         
         // Process deletions
         int count = processor.processDeletions(config, "1.4.0", "1.6.0");
@@ -315,8 +314,8 @@ public class DeletionProcessorTest {
         
         // Create processor
         ModMetadata metadata = new ModMetadata(metadataFile.getPath());
-        PendingOperations pendingOps = new PendingOperations(pendingOpsFile.getPath(), null);
-        DeletionProcessor processor = new DeletionProcessor(createLogger(), metadata, pendingOps, null);
+        
+        DeletionProcessor processor = new DeletionProcessor(createLogger(), metadata, null);
         
         // Process deletions
         processor.processDeletions(config, "1.4.0", "1.6.0");
@@ -358,8 +357,8 @@ public class DeletionProcessorTest {
         
         // Create processor
         ModMetadata metadata = new ModMetadata(metadataFile.getPath());
-        PendingOperations pendingOps = new PendingOperations(pendingOpsFile.getPath(), null);
-        DeletionProcessor processor = new DeletionProcessor(createLogger(), metadata, pendingOps, null);
+        
+        DeletionProcessor processor = new DeletionProcessor(createLogger(), metadata, null);
         
         // Process deletions - should handle gracefully
         processor.processDeletions(config, "1.4.0", "1.6.0");
@@ -395,8 +394,8 @@ public class DeletionProcessorTest {
         
         // Create processor
         ModMetadata metadata = new ModMetadata(metadataFile.getPath());
-        PendingOperations pendingOps = new PendingOperations(pendingOpsFile.getPath(), null);
-        DeletionProcessor processor = new DeletionProcessor(createLogger(), metadata, pendingOps, null);
+        
+        DeletionProcessor processor = new DeletionProcessor(createLogger(), metadata, null);
         
         // Process deletions first time
         int count1 = processor.processDeletions(config, "1.4.0", "1.6.0");

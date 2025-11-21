@@ -5,13 +5,13 @@ import com.ArfGg57.modupdater.hash.HashUtils;
 import com.ArfGg57.modupdater.hash.RenamedFileResolver;
 import com.ArfGg57.modupdater.metadata.ModMetadata;
 import com.ArfGg57.modupdater.resolver.FilenameResolver;
-import com.ArfGg57.modupdater.util.PendingOperations;
 import com.ArfGg57.modupdater.util.FileUtils;
 import com.ArfGg57.modupdater.ui.GuiUpdater;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.*;
 
@@ -28,190 +28,17 @@ public class UpdaterCore {
 
     private GuiUpdater gui;
     private boolean configError = false;
+    private List<File> pendingDeletes = new ArrayList<>();  // Track files that failed to delete
+    
+    // Constants for pending delete cleanup
+    private static final int DELETION_WAIT_MS = 2000;  // Wait time before attempting deletion
+    private static final int DELETION_KEEP_ALIVE_MS = 3000;  // Keep process alive after deletion
     
     /**
-     * Logger interface for headless operation
+     * Get list of files that failed to delete (locked by the game)
      */
-    public interface SimpleLogger {
-        void log(String message);
-    }
-    
-    /**
-     * Run early cleanup phase during coremod loading (before mods are scanned).
-     * This moves outdated mods to a temporary location (not deletes) so they don't get loaded.
-     * Files can be restored if user cancels confirmation, or permanently deleted if user accepts.
-     * 
-     * Runs headless (no GUI) and only performs cleanup, not full update.
-     * 
-     * @param logger Simple logger for console output
-     * @return true if cleanup succeeded, false if errors occurred
-     */
-    public static boolean runEarlyCleanup(SimpleLogger logger) {
-        try {
-            logger.log("=== Starting Early Cleanup Phase ===");
-            
-            UpdaterCore core = new UpdaterCore();
-            
-            // Get cleanup state tracker
-            EarlyCleanupState cleanupState = EarlyCleanupState.getInstance();
-            
-            // Ensure config exists
-            try {
-                core.ensureLocalConfigExists();
-            } catch (Exception e) {
-                logger.log("Error ensuring config exists: " + e.getMessage());
-                return false;
-            }
-            
-            // Read local config to get remote config URL
-            JSONObject localConfig;
-            try {
-                localConfig = FileUtils.readJson(core.remoteConfigPath);
-            } catch (Exception e) {
-                logger.log("Error reading local config: " + e.getMessage());
-                return false;
-            }
-            
-            String remoteConfigUrl = localConfig.optString("remote_config_url", "").trim();
-            if (remoteConfigUrl.isEmpty()) {
-                logger.log("No remote_config_url configured, skipping early cleanup");
-                return true; // Not an error, just not configured
-            }
-            
-            // Fetch remote config
-            logger.log("Fetching remote config from: " + remoteConfigUrl);
-            JSONObject remoteConfig;
-            try {
-                remoteConfig = FileUtils.readJsonFromUrl(remoteConfigUrl);
-            } catch (Exception e) {
-                logger.log("Warning: Could not fetch remote config: " + e.getMessage());
-                logger.log("Continuing with existing mods (network may be unavailable during early phase)");
-                return true; // Not fatal, continue launch
-            }
-            
-            String baseUrl = remoteConfig.optString("configsBaseUrl", "");
-            String modsJsonName = remoteConfig.optString("modsJson", "mods.json");
-            String remoteVersion = remoteConfig.optString("modpackVersion", "0.0.0");
-            
-            // Fetch mods.json
-            logger.log("Fetching mods configuration...");
-            String modsUrl = FileUtils.joinUrl(baseUrl, modsJsonName);
-            JSONArray mods;
-            try {
-                mods = FileUtils.readJsonArrayFromUrl(modsUrl);
-            } catch (Exception e) {
-                logger.log("Warning: Could not fetch mods.json: " + e.getMessage());
-                return true; // Not fatal
-            }
-            
-            // Build valid mod map
-            Map<String, JSONObject> validMods = new HashMap<>();
-            for (int i = 0; i < mods.length(); i++) {
-                JSONObject mod = mods.getJSONObject(i);
-                String numberId = mod.optString("numberId", "").trim();
-                if (!numberId.isEmpty()) {
-                    validMods.put(numberId, mod);
-                }
-            }
-            
-            logger.log("Remote config has " + validMods.size() + " mod(s)");
-            
-            // Load metadata to identify managed mods
-            ModMetadata metadata;
-            try {
-                metadata = new ModMetadata(core.modMetadataPath);
-            } catch (Exception e) {
-                logger.log("Warning: Could not load metadata: " + e.getMessage());
-                metadata = new ModMetadata(core.modMetadataPath); // Create new
-            }
-            
-            // Initialize file resolver for hash-based detection
-            RenamedFileResolver fileResolver = new RenamedFileResolver(metadata, new RenamedFileResolver.Logger() {
-                public void log(String message) {
-                    logger.log(message);
-                }
-            });
-            
-            // Scan install locations
-            Set<String> validNumberIds = validMods.keySet();
-            Set<String> installLocations = new HashSet<>();
-            for (JSONObject m : validMods.values()) {
-                installLocations.add(m.optString("installLocation", "mods"));
-            }
-            
-            logger.log("Scanning " + installLocations.size() + " install location(s) for outdated mods...");
-            
-            // Create temporary directory for moved files
-            File tempDir = new File("modupdater/tmp/early-cleanup/");
-            if (!tempDir.exists()) {
-                tempDir.mkdirs();
-            }
-            
-            int movedCount = 0;
-            
-            for (String installLocation : installLocations) {
-                File targetDir = new File(installLocation);
-                if (!targetDir.exists() || !targetDir.isDirectory()) {
-                    continue;
-                }
-                
-                File[] filesInDir = targetDir.listFiles();
-                if (filesInDir == null) continue;
-                
-                for (File file : filesInDir) {
-                    if (!file.isFile()) continue;
-                    if (file.getName().endsWith(".tmp")) continue;
-                    
-                    // Check if this file belongs to a ModUpdater-managed mod
-                    String belongsToNumberId = fileResolver.getOwnerNumberId(file);
-                    boolean isTrackedByModUpdater = (belongsToNumberId != null);
-                    boolean isStillValid = isTrackedByModUpdater && validNumberIds.contains(belongsToNumberId);
-                    
-                    // Move to temp location if tracked but no longer valid
-                    if (isTrackedByModUpdater && !isStillValid) {
-                        logger.log("Moving outdated mod to temp location (early phase): " + file.getName());
-                        
-                        // Move to temporary location instead of deleting
-                        File tempFile = new File(tempDir, file.getName());
-                        int counter = 1;
-                        // Handle duplicate names
-                        while (tempFile.exists()) {
-                            tempFile = new File(tempDir, file.getName() + "." + counter);
-                            counter++;
-                        }
-                        
-                        if (file.renameTo(tempFile)) {
-                            // Record the move so we can restore or delete later
-                            cleanupState.recordMovedFile(file.getAbsolutePath(), tempFile.getAbsolutePath());
-                            
-                            // Record the relative path for showing in confirmation dialog (e.g., "mods/test.jar")
-                            String relativePath = installLocation + "/" + file.getName();
-                            cleanupState.recordRemovedMod(relativePath);
-                            
-                            movedCount++;
-                            logger.log("  Moved to: " + tempFile.getName());
-                        } else {
-                            logger.log("  Failed to move file (may be locked)");
-                        }
-                    }
-                }
-            }
-            
-            if (movedCount > 0) {
-                logger.log("Moved " + movedCount + " outdated mod(s) to temporary location during early phase");
-                logger.log("Files will be permanently deleted if user accepts confirmation, or restored if user cancels");
-            } else {
-                logger.log("No outdated mods found during early cleanup");
-            }
-            
-            logger.log("=== Early Cleanup Phase Complete ===");
-            return true;
-            
-        } catch (Exception e) {
-            logger.log("Error during early cleanup: " + e.getMessage());
-            e.printStackTrace();
-            return false;
-        }
+    public List<File> getPendingDeletes() {
+        return new ArrayList<>(pendingDeletes);
     }
 
     public void runUpdate() {
@@ -219,35 +46,6 @@ public class UpdaterCore {
         gui.show("Initializing ModUpdater...");
 
         try {
-            // Clean up metadata for files that were permanently deleted during early cleanup
-            EarlyCleanupState cleanupState = EarlyCleanupState.getInstance();
-            if (cleanupState.hasMovedFiles()) {
-                gui.show("Cleaning up metadata for removed mods...");
-                ModMetadata metadata = new ModMetadata(modMetadataPath);
-                
-                // Remove metadata entries for files that were deleted
-                for (String originalPath : cleanupState.getMovedFiles().keySet()) {
-                    File originalFile = new File(originalPath);
-                    String fileName = originalFile.getName();
-                    
-                    // Try to find and remove the metadata entry
-                    // This is safe because files have already been permanently deleted at this point
-                    for (ModMetadata.ModEntry entry : metadata.getAllMods()) {
-                        if (entry.fileName != null && entry.fileName.equals(fileName)) {
-                            metadata.removeMod(entry.numberId);
-                            gui.show("  Removed metadata for: " + fileName);
-                            break;
-                        }
-                    }
-                }
-                
-                try {
-                    metadata.save();
-                } catch (Exception e) {
-                    gui.show("Warning: Could not save metadata: " + e.getMessage());
-                }
-            }
-            
             ensureLocalConfigExists();
 
             JSONObject localConfig = FileUtils.readJson(remoteConfigPath);
@@ -320,7 +118,7 @@ public class UpdaterCore {
             gui.show("Calculating tasks to perform...");
 
             // Initialize metadata and pending operations before any processing
-            gui.show("=== Initializing Metadata and Pending Operations ===");
+            gui.show("=== Initializing Metadata ===");
             gui.show("Initializing metadata from: " + modMetadataPath);
             ModMetadata modMetadata = new ModMetadata(modMetadataPath);
             gui.show("Loaded metadata for " + modMetadata.getAllMods().size() + " mod(s) and " + modMetadata.getAllFiles().size() + " file(s)");
@@ -331,17 +129,6 @@ public class UpdaterCore {
                     gui.show(message);
                 }
             });
-            
-            // Initialize PendingOperations for locked file handling
-            String pendingOpsPath = localConfigDir + "pending-ops.json";
-            PendingOperations pendingOps = new PendingOperations(pendingOpsPath, new PendingOperations.Logger() {
-                public void log(String message) {
-                    gui.show(message);
-                }
-            });
-            
-            // Process any pending operations from previous run (before main scan)
-            pendingOps.processPendingOperations();
 
             // Build file and mod maps for deduplication (needed for accurate progress calculation)
             Map<String, Boolean> fileNeedsApply = new LinkedHashMap<>();
@@ -384,12 +171,14 @@ public class UpdaterCore {
                     }
                 },
                 modMetadata,
-                pendingOps,
                 backupRoot
             );
             
             int deletionCount = deletionProcessor.processDeletions(deletesRoot, appliedVersion, remoteVersion);
             gui.show("Deletion phase completed: " + deletionCount + " item(s) deleted");
+            
+            // Track any failed deletions from the deletion processor
+            pendingDeletes.addAll(deletionProcessor.getFailedDeletes());
             
             // Note: Metadata is saved inside DeletionProcessor after deletions
             
@@ -594,9 +383,10 @@ public class UpdaterCore {
                         gui.show("Removing outdated ModUpdater-managed mod: " + file.getPath());
                         FileUtils.backupPathTo(file, backupRoot);
                         
-                        // deleteWithFallback now handles retries intelligently based on early phase
-                        if (!pendingOps.deleteWithFallback(file)) {
-                            gui.show("File locked, will retry on next startup");
+                        // Try to delete the file - track it if deletion fails
+                        if (!file.delete()) {
+                            gui.show("File locked - tracking for deletion after restart");
+                            pendingDeletes.add(file);
                         }
                         
                         if (belongsToNumberId != null) {
@@ -711,19 +501,20 @@ public class UpdaterCore {
                                             gui.show("Renaming mod from: " + existingFile.getName() + " to: " + finalName);
                                             FileUtils.backupPathTo(existingFile, backupRoot);
                                             
-                                            // Try rename with fallback to pending operation
-                                            if (!pendingOps.moveWithFallback(existingFile, target)) {
-                                                gui.show("RENAME FAILED: File locked, rename scheduled for next startup");
-                                                gui.show("Continuing with existing file (valid): " + existingFile.getPath());
-                                                // FIXED: Update metadata with current filename so we know it's the same file
-                                                // NOTE: Save immediately to prevent re-download in case of crash/interrupt
-                                                modMetadata.recordMod(numberId, existingFile.getName(), expectedHash, source);
-                                                modMetadata.save();
-                                                // Keep using existingFile - no re-download needed
-                                            } else {
+                                            // Try rename
+                                            try {
+                                                FileUtils.atomicMoveWithRetries(existingFile, target, 3, 100);
                                                 gui.show("Successfully renamed mod to: " + target.getPath());
                                                 modMetadata.recordMod(numberId, finalName, expectedHash, source);
                                                 existingFile = target;
+                                            } catch (IOException e) {
+                                                gui.show("RENAME FAILED: " + e.getMessage());
+                                                gui.show("File may be locked - tracking for deletion after restart");
+                                                pendingDeletes.add(existingFile);
+                                                gui.show("Continuing with existing file (valid): " + existingFile.getPath());
+                                                // Update metadata with current filename so we know it's the same file
+                                                modMetadata.recordMod(numberId, existingFile.getName(), expectedHash, source);
+                                                modMetadata.save();
                                             }
                                         }
                                     } else {
@@ -753,16 +544,18 @@ public class UpdaterCore {
                                         gui.show("Renaming mod from: " + renamedFile.getName() + " to: " + finalName);
                                         FileUtils.backupPathTo(renamedFile, backupRoot);
                                         
-                                        // Try rename with fallback to pending operation
-                                        if (!pendingOps.moveWithFallback(renamedFile, target)) {
-                                            gui.show("RENAME FAILED: File locked, rename scheduled for next startup");
-                                            gui.show("Continuing with existing file (valid): " + renamedFile.getPath());
-                                            // FIXED: Metadata already recorded with renamedFile.getName() above, save it
-                                            modMetadata.save();
-                                            // Keep using renamedFile - no re-download needed
-                                        } else {
+                                        // Try rename
+                                        try {
+                                            FileUtils.atomicMoveWithRetries(renamedFile, target, 3, 100);
                                             gui.show("Successfully renamed mod to: " + target.getPath());
                                             modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                        } catch (IOException e) {
+                                            gui.show("RENAME FAILED: " + e.getMessage());
+                                            gui.show("File may be locked - tracking for deletion after restart");
+                                            pendingDeletes.add(renamedFile);
+                                            gui.show("Continuing with existing file (valid): " + renamedFile.getPath());
+                                            // Metadata already recorded with renamedFile.getName() above, save it
+                                            modMetadata.save();
                                         }
                                     }
                                 } else {
@@ -795,16 +588,18 @@ public class UpdaterCore {
                                         gui.show("Renaming mod from: " + existingFile.getName() + " to: " + finalName);
                                         FileUtils.backupPathTo(existingFile, backupRoot);
                                         
-                                        // Try rename with fallback to pending operation
-                                        if (!pendingOps.moveWithFallback(existingFile, target)) {
-                                            gui.show("RENAME FAILED: File locked, rename scheduled for next startup");
-                                            gui.show("Continuing with existing file (valid): " + existingFile.getPath());
-                                            // FIXED: Metadata already recorded with existingFile.getName() above, save it
-                                            modMetadata.save();
-                                            // Keep using existingFile - no re-download needed
-                                        } else {
+                                        // Try rename
+                                        try {
+                                            FileUtils.atomicMoveWithRetries(existingFile, target, 3, 100);
                                             gui.show("Successfully renamed mod to: " + target.getPath());
                                             modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                        } catch (IOException e) {
+                                            gui.show("RENAME FAILED: " + e.getMessage());
+                                            gui.show("File may be locked - tracking for deletion after restart");
+                                            pendingDeletes.add(existingFile);
+                                            gui.show("Continuing with existing file (valid): " + existingFile.getPath());
+                                            // Metadata already recorded with existingFile.getName() above, save it
+                                            modMetadata.save();
                                         }
                                     }
                                 } else {
@@ -864,16 +659,18 @@ public class UpdaterCore {
                             gui.show("Renaming mod from: " + renamedFile.getName() + " to: " + finalName);
                             FileUtils.backupPathTo(existingFile, backupRoot);
                             
-                            // Try rename with fallback to pending operation
-                            if (!pendingOps.moveWithFallback(existingFile, target)) {
-                                gui.show("RENAME FAILED: File locked, rename scheduled for next startup");
-                                gui.show("Continuing with existing file (valid): " + existingFile.getPath());
-                                // FIXED: Metadata already recorded with renamedFile.getName() above, save it
-                                modMetadata.save();
-                                // Keep using existingFile - no re-download needed
-                            } else {
+                            // Try rename
+                            try {
+                                FileUtils.atomicMoveWithRetries(existingFile, target, 3, 100);
                                 gui.show("Successfully renamed mod to: " + target.getPath());
                                 modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                            } catch (IOException e) {
+                                gui.show("RENAME FAILED: " + e.getMessage());
+                                gui.show("File may be locked - tracking for deletion after restart");
+                                pendingDeletes.add(existingFile);
+                                gui.show("Continuing with existing file (valid): " + existingFile.getPath());
+                                // Metadata already recorded with renamedFile.getName() above, save it
+                                modMetadata.save();
                             }
                         } else {
                             gui.show("Mod missing after hash scan; will download: " + finalName);
@@ -928,9 +725,10 @@ public class UpdaterCore {
                         gui.show("Removing old version: " + f.getPath());
                         FileUtils.backupPathTo(f, backupRoot);
                         
-                        // deleteWithFallback now handles retries intelligently based on early phase
-                        if (!pendingOps.deleteWithFallback(f)) {
-                            gui.show("File locked, will retry on next startup");
+                        // Try to delete the file - track it if deletion fails
+                        if (!f.delete()) {
+                            gui.show("File locked - tracking for deletion after restart");
+                            pendingDeletes.add(f);
                         }
                     }
 
@@ -941,9 +739,10 @@ public class UpdaterCore {
                                 gui.show("Backing up existing target file: " + target.getPath());
                                 FileUtils.backupPathTo(target, backupRoot);
                                 
-                                // deleteWithFallback now handles retries intelligently based on early phase
-                                if (!pendingOps.deleteWithFallback(target)) {
-                                    gui.show("File locked, will retry on next startup");
+                                // Try to delete the file - track it if deletion fails
+                                if (!target.delete()) {
+                                    gui.show("File locked - tracking for deletion after restart");
+                                    pendingDeletes.add(target);
                                 }
                             } else {
                                 gui.show("Warning: Target equals tmp (unexpected); skipping delete");
@@ -987,6 +786,77 @@ public class UpdaterCore {
             gui.setProgress(100);
 
             FileUtils.pruneBackups("modupdater/backup", backupKeep, gui);
+            
+            // Check if there are any pending deletes (files that were locked)
+            if (!pendingDeletes.isEmpty()) {
+                gui.show("Some files could not be deleted and require a restart.");
+                gui.close();  // Close the progress GUI before showing the restart dialog
+                
+                // Show restart required dialog
+                com.ArfGg57.modupdater.ui.RestartRequiredDialog restartDialog = 
+                    new com.ArfGg57.modupdater.ui.RestartRequiredDialog(pendingDeletes);
+                restartDialog.showDialog();
+                
+                if (restartDialog.wasContinued()) {
+                    // User clicked Continue - we need to crash the game but keep the updater running
+                    System.out.println("[ModUpdater] User requested restart to complete updates.");
+                    System.out.println("[ModUpdater] Starting deletion thread for pending files...");
+                    
+                    // Start a non-daemon thread to delete the files after a short delay
+                    Thread deletionThread = new Thread(() -> {
+                        try {
+                            // Wait for the game to start shutting down
+                            Thread.sleep(DELETION_WAIT_MS);
+                            
+                            System.out.println("[ModUpdater] Attempting to delete " + pendingDeletes.size() + " pending file(s)...");
+                            int deletedCount = 0;
+                            for (File file : pendingDeletes) {
+                                if (file.exists()) {
+                                    boolean deleted = file.delete();
+                                    if (deleted) {
+                                        System.out.println("[ModUpdater] Deleted: " + file.getPath());
+                                        deletedCount++;
+                                    } else {
+                                        System.out.println("[ModUpdater] Still locked: " + file.getPath());
+                                    }
+                                }
+                            }
+                            
+                            System.out.println("[ModUpdater] Deletion complete: " + deletedCount + " of " + pendingDeletes.size() + " files deleted.");
+                            
+                            // Keep the process alive for a few more seconds to ensure files are deleted
+                            Thread.sleep(DELETION_KEEP_ALIVE_MS);
+                            
+                            System.out.println("[ModUpdater] Deletion thread complete. Exiting...");
+                            System.exit(0);
+                        } catch (InterruptedException e) {
+                            System.err.println("[ModUpdater] Deletion thread interrupted: " + e.getMessage());
+                        }
+                    }, "ModUpdater-DeletionThread");
+                    deletionThread.setDaemon(false);  // Not a daemon - should keep running
+                    deletionThread.start();
+                    
+                    // Now trigger game exit by calling System.exit in a separate thread
+                    // This ensures the deletion thread continues running
+                    System.err.println("[ModUpdater] Triggering game exit to apply updates...");
+                    new Thread(() -> {
+                        try {
+                            // Give deletion thread a moment to start
+                            Thread.sleep(100);
+                            System.exit(1);  // Exit with error code to indicate restart needed
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        }
+                    }, "ModUpdater-ExitThread").start();
+                    
+                    // Keep main thread alive briefly
+                    try {
+                        Thread.sleep(500);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
 
         } catch (Exception e) {
             gui.show("Update failed: " + e.getMessage());

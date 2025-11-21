@@ -2,7 +2,6 @@ package com.ArfGg57.modupdater.deletion;
 
 import com.ArfGg57.modupdater.metadata.ModMetadata;
 import com.ArfGg57.modupdater.util.FileUtils;
-import com.ArfGg57.modupdater.util.PendingOperations;
 import com.ArfGg57.modupdater.version.VersionComparator;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -30,14 +29,20 @@ public class DeletionProcessor {
     
     private final Logger logger;
     private final ModMetadata metadata;
-    private final PendingOperations pendingOps;
     private final File backupRoot;
+    private final List<File> failedDeletes = new ArrayList<>();  // Track files that failed to delete
     
-    public DeletionProcessor(Logger logger, ModMetadata metadata, PendingOperations pendingOps, File backupRoot) {
+    public DeletionProcessor(Logger logger, ModMetadata metadata, File backupRoot) {
         this.logger = logger;
         this.metadata = metadata;
-        this.pendingOps = pendingOps;
         this.backupRoot = backupRoot;
+    }
+    
+    /**
+     * Get list of files that failed to delete (locked by the game)
+     */
+    public List<File> getFailedDeletes() {
+        return new ArrayList<>(failedDeletes);
     }
     
     /**
@@ -178,43 +183,49 @@ public class DeletionProcessor {
         boolean deleted = false;
         if (type == DeletionConfig.PathType.FOLDER) {
             // For folders, we need to recursively delete
-            // Try using FileUtils.deleteSilently which handles recursion
-            deleted = deleteRecursivelyWithFallback(file);
+            deleted = deleteRecursively(file);
         } else {
-            // For files, use pendingOps.deleteWithFallback
-            deleted = pendingOps.deleteWithFallback(file);
+            // For files, try direct deletion
+            deleted = file.delete();
+            if (!deleted) {
+                logger.log("File locked - tracking for deletion after restart");
+                failedDeletes.add(file);
+            }
         }
         
         if (deleted) {
             logger.log("Successfully deleted: " + path);
             return true;
         } else {
-            logger.log("Delete scheduled for next startup (file/folder locked): " + path);
+            logger.log("Deletion failed (file/folder locked): " + path);
             return false;
         }
     }
     
     /**
-     * Delete a directory recursively, with fallback to pending operations if locked.
+     * Delete a directory recursively.
      */
-    private boolean deleteRecursivelyWithFallback(File dir) {
+    private boolean deleteRecursively(File dir) {
         if (!dir.exists()) {
             return true;
         }
         
         if (!dir.isDirectory()) {
             // Not a directory, use standard delete
-            return pendingOps.deleteWithFallback(dir);
+            boolean deleted = dir.delete();
+            if (!deleted) {
+                failedDeletes.add(dir);
+            }
+            return deleted;
         }
         
         // Recursively delete contents
+        boolean allDeleted = true;
         File[] children = dir.listFiles();
         if (children != null) {
             for (File child : children) {
-                if (child.isDirectory()) {
-                    deleteRecursivelyWithFallback(child);
-                } else {
-                    pendingOps.deleteWithFallback(child);
+                if (!deleteRecursively(child)) {
+                    allDeleted = false;
                 }
             }
         }
@@ -223,11 +234,8 @@ public class DeletionProcessor {
         if (dir.delete()) {
             return true;
         } else {
-            // Schedule for deletion on exit
-            dir.deleteOnExit();
-            PendingOperations.PendingOp op = new PendingOperations.PendingOp(
-                PendingOperations.OpType.DELETE, dir.getAbsolutePath(), null);
-            // Note: We can't directly add to pendingOps from here, so we'll just use deleteOnExit
+            // Track for deletion after restart
+            failedDeletes.add(dir);
             return false;
         }
     }
