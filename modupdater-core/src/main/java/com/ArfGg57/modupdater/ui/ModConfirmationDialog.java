@@ -52,6 +52,14 @@ public class ModConfirmationDialog {
     private static final Font FONT_ENTRY_TITLE = new Font("Segoe UI", Font.BOLD, 14);
     private static final Font FONT_ENTRY_SUB = new Font("Segoe UI", Font.PLAIN, 12);
 
+    // Deletion key prefixes
+    private static final String DELETE_KEY_FILE = "FILE: ";
+    private static final String DELETE_KEY_FOLDER = "FOLDER: ";
+    private static final String DELETE_KEY_MOD = "MOD: ";
+    
+    // Timing constants
+    private static final int CHECKING_DIALOG_CLOSE_DELAY_MS = 500;
+
     private JDialog dialog;
 
     // unified left-hand list of things to add (mods + files)
@@ -62,7 +70,6 @@ public class ModConfirmationDialog {
     private JList<String> deleteList;
     private DefaultListModel<String> deleteListModel;
 
-    private javax.swing.Timer fadeOutTimer;
     private Point initialClick;
     private boolean agreed = false;
 
@@ -150,7 +157,13 @@ public class ModConfirmationDialog {
     // Enrichment: checkCurrentVersion -> scan mods/files/deletes and add proposals
     // -----------------------------
     private void enrichListsWithCheckCurrentVersion() {
+        CheckingUpdatesDialog checkingDialog = null;
         try {
+            // Show checking dialog
+            checkingDialog = new CheckingUpdatesDialog();
+            checkingDialog.show();
+            checkingDialog.updateStatus("Loading metadata...");
+            
             // Initialize ModMetadata for hash-based detection
             String modMetadataPath = "config/ModUpdater/mod_metadata.json";
             try {
@@ -171,17 +184,23 @@ public class ModConfirmationDialog {
             String remoteConfigUrl = localConfig != null ? localConfig.optString("remote_config_url", "").trim() : "";
             if (remoteConfigUrl.isEmpty()) {
                 System.out.println("[ModConfirmationDialog] remote_config_url empty; skipping checkCurrentVersion enrichment.");
+                if (checkingDialog != null) checkingDialog.close();
                 return;
             }
 
+            checkingDialog.updateStatus("Fetching remote configuration...");
             JSONObject remoteConfig = FileUtils.readJsonFromUrl(remoteConfigUrl);
             if (remoteConfig == null) {
                 System.out.println("[ModConfirmationDialog] remote config unreadable; skipping checkCurrentVersion enrichment.");
+                if (checkingDialog != null) checkingDialog.close();
                 return;
             }
 
             boolean checkCurrent = remoteConfig.optBoolean("checkCurrentVersion", false);
-            if (!checkCurrent) return;
+            if (!checkCurrent) {
+                if (checkingDialog != null) checkingDialog.close();
+                return;
+            }
 
             String baseUrl = remoteConfig.optString("configsBaseUrl", "");
             String filesJsonName = remoteConfig.optString("filesJson", "files.json");
@@ -205,6 +224,7 @@ public class ModConfirmationDialog {
             // ---------------------
             // FILES: propose missing or flagged files (no hash checks)
             // ---------------------
+            checkingDialog.updateStatus("Checking files...");
             try {
                 String filesUrl = FileUtils.joinUrl(baseUrl, filesJsonName);
                 JSONObject filesRoot = FileUtils.readJsonFromUrl(filesUrl);
@@ -275,6 +295,7 @@ public class ModConfirmationDialog {
             // ---------------------
             // MODS: propose missing mods or filename-mismatched mods (no hash checks)
             // ---------------------
+            checkingDialog.updateStatus("Checking mods...");
             try {
                 String modsUrl = FileUtils.joinUrl(baseUrl, modsJsonName);
                 JSONArray modsArr = FileUtils.readJsonArrayFromUrl(modsUrl);
@@ -509,46 +530,106 @@ public class ModConfirmationDialog {
                 e.printStackTrace();
             }
 
-
             // ---------------------
-            // DELETES: propose deletes if listed path/folder exists locally
+            // DETECT MODS TO BE DELETED: scan for mods that will be removed during update
             // ---------------------
+            checkingDialog.updateStatus("Detecting outdated mods...");
             try {
-                String deletesUrl = FileUtils.joinUrl(baseUrl, deletesJsonName);
-                JSONObject deletesRoot = FileUtils.readJsonFromUrl(deletesUrl);
-                if (deletesRoot != null) {
-                    JSONArray allDeletes = deletesRoot.optJSONArray("deletes");
-                    if (allDeletes != null) {
-                        for (int i = 0; i < allDeletes.length(); i++) {
-                            JSONObject del = allDeletes.getJSONObject(i);
-                            JSONArray paths = del.optJSONArray("paths");
-                            if (paths != null) {
-                                for (int p = 0; p < paths.length(); p++) {
-                                    String path = paths.getString(p);
-                                    String key = "FILE: " + path;
-                                    if (deleteKeys.contains(key)) continue;
-                                    java.io.File f = new java.io.File(path);
-                                    if (f.exists()) {
-                                        filesToDelete.add(key);
-                                        deleteKeys.add(key);
-                                    }
-                                }
-                            }
-                            JSONArray folders = del.optJSONArray("folders");
-                            if (folders != null) {
-                                for (int p = 0; p < folders.length(); p++) {
-                                    String folder = folders.getString(p);
-                                    String key = "FOLDER: " + folder;
-                                    if (deleteKeys.contains(key)) continue;
-                                    java.io.File d = new java.io.File(folder);
-                                    if (d.exists()) {
-                                        filesToDelete.add(key);
-                                        deleteKeys.add(key);
-                                    }
+                String modsUrl = FileUtils.joinUrl(baseUrl, modsJsonName);
+                JSONArray modsArr = FileUtils.readJsonArrayFromUrl(modsUrl);
+                if (modsArr != null && modMetadata != null && renamedFileResolver != null) {
+                    // Build set of valid numberIds from mods.json
+                    Set<String> validNumberIds = new HashSet<>();
+                    Set<String> installLocations = new HashSet<>();
+                    for (int i = 0; i < modsArr.length(); i++) {
+                        JSONObject mod = modsArr.getJSONObject(i);
+                        String numberId = mod.optString("numberId", "").trim();
+                        String installLocation = mod.optString("installLocation", "mods");
+                        if (!numberId.isEmpty()) {
+                            validNumberIds.add(numberId);
+                        }
+                        installLocations.add(installLocation);
+                    }
+                    
+                    System.out.println("[ModConfirmationDialog] Scanning for mods to be deleted (valid mods: " + validNumberIds.size() + ")");
+                    
+                    // Scan each install location for mods that will be deleted
+                    for (String installLocation : installLocations) {
+                        java.io.File targetDir = new java.io.File(installLocation);
+                        if (!targetDir.exists() || !targetDir.isDirectory()) continue;
+                        
+                        java.io.File[] filesInDir = targetDir.listFiles();
+                        if (filesInDir == null) continue;
+                        
+                        for (java.io.File file : filesInDir) {
+                            if (!file.isFile()) continue;
+                            if (file.getName().endsWith(".tmp")) continue;
+                            
+                            // Check if this file is owned by ModUpdater
+                            String belongsToNumberId = renamedFileResolver.getOwnerNumberId(file);
+                            boolean isTrackedByModUpdater = (belongsToNumberId != null);
+                            boolean isStillValid = isTrackedByModUpdater && validNumberIds.contains(belongsToNumberId);
+                            
+                            // If tracked by ModUpdater but not in the valid list, it will be deleted
+                            if (isTrackedByModUpdater && !isStillValid) {
+                                String deleteKey = DELETE_KEY_MOD + file.getPath() + " (outdated version)";
+                                if (!deleteKeys.contains(deleteKey)) {
+                                    filesToDelete.add(deleteKey);
+                                    deleteKeys.add(deleteKey);
+                                    System.out.println("[ModConfirmationDialog] Detected mod to be deleted: " + file.getName() + " (numberId=" + belongsToNumberId + ")");
                                 }
                             }
                         }
                     }
+                }
+            } catch (Exception e) {
+                System.err.println("[ModConfirmationDialog] Error while detecting mods to delete: " + e.getMessage());
+                e.printStackTrace();
+            }
+
+
+            // ---------------------
+            // DELETES: propose deletes if listed path/folder exists locally
+            // Uses DeletionProcessor to handle new deletes.json format with version filtering
+            // ---------------------
+            checkingDialog.updateStatus("Checking for files to delete...");
+            try {
+                String deletesUrl = FileUtils.joinUrl(baseUrl, deletesJsonName);
+                JSONObject deletesRoot = FileUtils.readJsonFromUrl(deletesUrl);
+                if (deletesRoot != null) {
+                    // Read local version to determine what deletions apply
+                    String appliedVersion = "0.0.0";
+                    try {
+                        String versionPath = "config/ModUpdater/modpack_version.json";
+                        appliedVersion = FileUtils.readAppliedVersion(versionPath);
+                    } catch (Exception ex) {
+                        System.out.println("[ModConfirmationDialog] Could not read applied version, using 0.0.0");
+                    }
+                    
+                    // Get target version from remote config
+                    String targetVersion = remoteConfig != null ? remoteConfig.optString("modpackVersion", "999.0.0") : "999.0.0";
+                    
+                    // Use DeletionProcessor to build list of deletions
+                    DeletionProcessor deletionProcessor = new DeletionProcessor(
+                        new DeletionProcessor.Logger() {
+                            public void log(String message) {
+                                System.out.println("[ModConfirmationDialog] " + message);
+                            }
+                        },
+                        modMetadata,
+                        null, // No pending ops needed for just building the list
+                        null  // No backup root needed for just building the list
+                    );
+                    
+                    List<String> deletionsList = deletionProcessor.buildDeletionsList(deletesRoot, appliedVersion, targetVersion);
+                    for (String deletion : deletionsList) {
+                        if (!deleteKeys.contains(deletion)) {
+                            filesToDelete.add(deletion);
+                            deleteKeys.add(deletion);
+                        }
+                    }
+                    
+                    System.out.println("[ModConfirmationDialog] Found " + deletionsList.size() + " deletion(s) from deletes.json");
                 }
             } catch (Exception e) {
                 System.err.println("[ModConfirmationDialog] Error while checking deletes.json for present paths: " + e.getMessage());
@@ -558,6 +639,15 @@ public class ModConfirmationDialog {
         } catch (Exception e) {
             System.err.println("[ModConfirmationDialog] enrichListsWithCheckCurrentVersion() failed: " + e.getMessage());
             e.printStackTrace();
+        } finally {
+            // Always close checking dialog
+            if (checkingDialog != null) {
+                final CheckingUpdatesDialog finalDialog = checkingDialog;
+                // FIXED: Use Timer instead of Thread.sleep to avoid blocking EDT
+                javax.swing.Timer closeTimer = new javax.swing.Timer(CHECKING_DIALOG_CLOSE_DELAY_MS, e -> finalDialog.close());
+                closeTimer.setRepeats(false);
+                closeTimer.start();
+            }
         }
     }
 
@@ -707,28 +797,9 @@ public class ModConfirmationDialog {
             closeDialog();
         });
 
-        fadeOutTimer = new javax.swing.Timer(10, e -> {
-            float op = dialog.getOpacity() - 0.2f;
-            if (op <= 0) {
-                fadeOutTimer.stop();
-                dialog.dispose();
-
-                if (agreed && core != null) {
-                    // Updater is started synchronously by UpdaterTweaker after dialog closes.
-                } else if (!agreed) {
-                    // User clicked Quit - crash the JVM to force game exit
-                    System.err.println("[ModConfirmationDialog] User declined update. Exiting...");
-                    System.exit(1);
-                }
-            } else {
-                dialog.setOpacity(op);
-            }
-        });
-
         dialog.setContentPane(mainPanel);
         dialog.setSize(950,550);
         dialog.setLocationRelativeTo(null);
-        dialog.setOpacity(1.0f);
         dialog.setAlwaysOnTop(true);
     }
 
@@ -1184,15 +1255,17 @@ public class ModConfirmationDialog {
     }
 
 
-    // Added: safely close dialog via fade or immediate disposal
+    // Close dialog immediately without animation
     private void closeDialog() {
-        if (fadeOutTimer != null && !fadeOutTimer.isRunning()) {
-            fadeOutTimer.start();
-        } else {
-            if (dialog != null) {
-                dialog.setVisible(false);
-                dialog.dispose();
-            }
+        if (dialog != null) {
+            dialog.setVisible(false);
+            dialog.dispose();
+        }
+        
+        // Handle exit if user declined
+        if (!agreed) {
+            System.err.println("[ModConfirmationDialog] User declined update. Exiting...");
+            System.exit(1);
         }
     }
 
