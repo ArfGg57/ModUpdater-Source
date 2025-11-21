@@ -364,13 +364,14 @@ public class DeletionProcessorTest {
         // Process deletions - should handle gracefully
         processor.processDeletions(config, "1.4.0", "1.6.0");
         
-        // Should mark as completed even though file doesn't exist
-        assertTrue("Non-existent file should be marked as completed", 
-                  metadata.isDeleteCompleted(testDir.getPath() + "/nonexistent.txt"));
+        // Should complete without errors (no longer tracking completed deletes)
+        assertTrue("Test completed without exceptions", true);
     }
     
     @Test
-    public void testDeletionOnlyOnce() throws Exception {
+    public void testDeletionMultipleTimes() throws Exception {
+        // NOTE: Changed behavior - deletions are NOT tracked in metadata anymore
+        // This allows files to be deleted multiple times if they are re-added
         // Create test config
         JSONObject config = new JSONObject();
         config.put("safetyMode", false);
@@ -402,13 +403,13 @@ public class DeletionProcessorTest {
         assertEquals("Should delete file on first run", 1, count1);
         assertFalse("File should be deleted", new File(testDir, "test-once.txt").exists());
         
-        // Recreate file
+        // Recreate file (simulating user re-adding it)
         createTestFile(testDir.getPath() + "/test-once.txt");
         
-        // Process deletions second time - should skip
+        // Process deletions second time - should DELETE AGAIN (new behavior)
         int count2 = processor.processDeletions(config, "1.4.0", "1.6.0");
-        assertEquals("Should not delete file on second run", 0, count2);
-        assertTrue("File should not be deleted again", new File(testDir, "test-once.txt").exists());
+        assertEquals("Should delete file on second run (new behavior)", 1, count2);
+        assertFalse("File should be deleted again", new File(testDir, "test-once.txt").exists());
     }
     
     private void createTestFile(String path) throws Exception {

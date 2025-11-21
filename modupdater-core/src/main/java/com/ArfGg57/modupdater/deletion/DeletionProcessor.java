@@ -147,18 +147,10 @@ public class DeletionProcessor {
             return false;
         }
         
-        // Check if already completed
-        if (metadata.isDeleteCompleted(path)) {
-            logger.log("Delete already completed (skipping): " + path);
-            return false;
-        }
-        
         File file = new File(path);
         
         if (!file.exists()) {
             logger.log("Delete skip (not present): " + path);
-            // Mark as completed since file doesn't exist anyway
-            metadata.markDeleteCompleted(path);
             return false;
         }
         
@@ -195,11 +187,9 @@ public class DeletionProcessor {
         
         if (deleted) {
             logger.log("Successfully deleted: " + path);
-            metadata.markDeleteCompleted(path);
             return true;
         } else {
             logger.log("Delete scheduled for next startup (file/folder locked): " + path);
-            // Don't mark as completed since it's pending
             return false;
         }
     }
@@ -317,11 +307,6 @@ public class DeletionProcessor {
             
             for (DeletionConfig.PathEntry pathEntry : entry.getPaths()) {
                 String path = pathEntry.getPath();
-                
-                // Skip if already completed
-                if (metadata.isDeleteCompleted(path)) {
-                    continue;
-                }
                 
                 // Apply safety mode filter
                 if (config.isSafetyMode() && !isInSafeDirectory(path)) {

@@ -18,14 +18,12 @@ public class ModMetadata {
 
     private Map<String, ModEntry> installedMods; // key: numberId (for mods)
     private Map<String, ArtifactEntry> installedFiles; // key: fileName (for auxiliary files)
-    private Set<String> processedDeletes; // Track completed delete operations by path
     private String metadataFilePath;
 
     public ModMetadata(String metadataFilePath) {
         this.metadataFilePath = metadataFilePath;
         this.installedMods = new LinkedHashMap<>();
         this.installedFiles = new LinkedHashMap<>();
-        this.processedDeletes = new LinkedHashSet<>();
         load();
     }
     
@@ -131,7 +129,6 @@ public class ModMetadata {
             if (!file.exists()) {
                 installedMods = new LinkedHashMap<>();
                 installedFiles = new LinkedHashMap<>();
-                processedDeletes = new LinkedHashSet<>();
                 return;
             }
             JSONObject root = FileUtils.readJson(metadataFilePath);
@@ -159,21 +156,9 @@ public class ModMetadata {
                     installedFiles.put(entry.fileName, entry);
                 }
             }
-            
-            // Load processed deletes (new field)
-            JSONArray deletesArray = root.optJSONArray("processedDeletes");
-            if (deletesArray == null) {
-                processedDeletes = new LinkedHashSet<>();
-            } else {
-                processedDeletes = new LinkedHashSet<>();
-                for (int i = 0; i < deletesArray.length(); i++) {
-                    processedDeletes.add(deletesArray.getString(i));
-                }
-            }
         } catch (Exception e) {
             installedMods = new LinkedHashMap<>();
             installedFiles = new LinkedHashMap<>();
-            processedDeletes = new LinkedHashSet<>();
         }
     }
 
@@ -197,13 +182,6 @@ public class ModMetadata {
                 filesArray.put(entry.toJson());
             }
             root.put("files", filesArray);
-            
-            // Save processed deletes
-            JSONArray deletesArray = new JSONArray();
-            for (String deletePath : processedDeletes) {
-                deletesArray.put(deletePath);
-            }
-            root.put("processedDeletes", deletesArray);
 
             File file = new File(metadataFilePath);
             File parent = file.getParentFile();
@@ -432,38 +410,4 @@ public class ModMetadata {
         return new ArrayList<>(installedFiles.values());
     }
     
-    // ========== Delete Tracking Methods ==========
-    
-    /**
-     * Mark a delete operation as completed for the given path.
-     * This prevents the delete from being re-proposed or re-executed.
-     * 
-     * @param path The file or folder path that was deleted
-     */
-    public void markDeleteCompleted(String path) {
-        if (path != null && !path.trim().isEmpty()) {
-            processedDeletes.add(path.trim());
-        }
-    }
-    
-    /**
-     * Check if a delete operation has already been completed for the given path.
-     * 
-     * @param path The file or folder path to check
-     * @return true if the delete has already been processed
-     */
-    public boolean isDeleteCompleted(String path) {
-        if (path == null || path.trim().isEmpty()) {
-            return false;
-        }
-        return processedDeletes.contains(path.trim());
-    }
-    
-    /**
-     * Clear all processed delete records.
-     * This is useful for testing or forcing a full re-check.
-     */
-    public void clearProcessedDeletes() {
-        processedDeletes.clear();
-    }
 }
