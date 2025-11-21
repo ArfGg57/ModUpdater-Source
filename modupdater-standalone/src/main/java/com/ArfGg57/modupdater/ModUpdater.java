@@ -13,9 +13,10 @@ public class ModUpdater {
             System.out.println("[ModUpdater] Running update in preInit");
             UpdaterCore core = new UpdaterCore();
             core.runUpdate();
-        } catch (Throwable t) {
-            System.err.println("FATAL ERROR during ModUpdater preInit:");
-            t.printStackTrace();
+        } catch (Exception e) {
+            // Only catch Exception, not Error - let Errors (like AssertionError) propagate to crash the game
+            System.err.println("ERROR during ModUpdater preInit:");
+            e.printStackTrace();
         }
     }
 }
