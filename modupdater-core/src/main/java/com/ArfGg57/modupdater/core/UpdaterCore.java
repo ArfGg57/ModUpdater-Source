@@ -853,8 +853,8 @@ public class UpdaterCore {
         // This is more forceful than throwing an Error or calling System.exit()
         // Runtime.halt() immediately terminates the JVM without calling shutdown hooks
         // and cannot be caught by SecurityManager or try-catch blocks
-        // Exit code 0 indicates normal termination from the user's perspective
-        Runtime.getRuntime().halt(0);
+        // Exit code 130 (128 + SIGINT) indicates forced termination requiring restart
+        Runtime.getRuntime().halt(130);
     }
 
     private List<JSONObject> buildSinceList(JSONArray arr, String fromExclusive, String toInclusive) {
