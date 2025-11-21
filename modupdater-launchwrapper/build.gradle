@@ -34,7 +34,8 @@ jar {
                 'Implementation-Version': version,
                 'TweakClass': 'com.ArfGg57.modupdater.tweak.UpdaterTweaker', // used by LaunchWrapper
                 'FMLCorePlugin': 'com.ArfGg57.modupdater.coremod.ModUpdaterCoremod',
-                'FMLCorePluginContainsFMLMod': 'true'
+                'FMLCorePluginContainsFMLMod': 'true',
+                'ForceLoadAsMod': 'true'
         )
     }
 

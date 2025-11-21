@@ -380,8 +380,18 @@ public class UpdaterCore {
                         gui.show("Removing outdated ModUpdater-managed mod: " + file.getPath());
                         FileUtils.backupPathTo(file, backupRoot);
                         
-                        // Try to delete with fallback to pending operations
-                        if (!pendingOps.deleteWithFallback(file)) {
+                        // If early phase already processed pending ops, try immediate deletion with retries
+                        boolean deleted = false;
+                        if (ModUpdaterLifecycle.wasEarlyPhaseCompleted()) {
+                            // Early phase ran - file locks should be minimal, try direct deletion with retries
+                            deleted = tryDeleteWithRetries(file, 3, 500);
+                            if (deleted) {
+                                gui.show("Successfully deleted file immediately (post-early-phase)");
+                            }
+                        }
+                        
+                        // If not deleted yet, use fallback to pending operations
+                        if (!deleted && !pendingOps.deleteWithFallback(file)) {
                             gui.show("File locked, will retry on next startup");
                         }
                         
@@ -820,6 +830,39 @@ public class UpdaterCore {
         if (percent < 0) percent = 0;
         if (percent > 100) percent = 100;
         gui.setProgress(percent);
+    }
+    
+    /**
+     * Try to delete a file with retries and short sleeps.
+     * Useful when early phase has cleared most locks but some transient locks may remain.
+     * 
+     * @param file The file to delete
+     * @param maxRetries Maximum number of retry attempts
+     * @param sleepMs Milliseconds to sleep between retries
+     * @return true if deleted successfully, false otherwise
+     */
+    private boolean tryDeleteWithRetries(File file, int maxRetries, long sleepMs) {
+        if (file == null || !file.exists()) {
+            return true; // Nothing to delete
+        }
+        
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            if (file.delete()) {
+                return true;
+            }
+            
+            // Not last attempt - sleep and retry
+            if (attempt < maxRetries) {
+                try {
+                    Thread.sleep(sleepMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+        }
+        
+        return false;
     }
 
     /**

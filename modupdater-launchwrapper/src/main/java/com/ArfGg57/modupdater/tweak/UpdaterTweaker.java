@@ -1,5 +1,6 @@
 package com.ArfGg57.modupdater.tweak;
 
+import com.ArfGg57.modupdater.core.ModUpdaterLifecycle;
 import com.ArfGg57.modupdater.ui.ModConfirmationDialog;
 import com.ArfGg57.modupdater.ui.ModConfirmationDialog.ModEntry;
 import com.ArfGg57.modupdater.core.UpdaterCore;
@@ -15,6 +16,8 @@ import java.util.List;
 /**
  * Tweaker that shows ModConfirmationDialog before Minecraft launches.
  * Works with the provided ModConfirmationDialog and UpdaterCore implementations.
+ * 
+ * This tweaker runs after the coremod phase but before Minecraft main launch.
  */
 public class UpdaterTweaker implements ITweaker {
 
@@ -31,6 +34,11 @@ public class UpdaterTweaker implements ITweaker {
 
     @Override
     public void injectIntoClassLoader(LaunchClassLoader classLoader) {
+        // Check if early phase already ran
+        if (ModUpdaterLifecycle.wasEarlyPhaseCompleted()) {
+            System.out.println("[UpdaterTweaker] Early coremod phase already completed. Pending operations were processed.");
+        }
+        
         boolean shouldExit = false;
         int exitCode = 0;
 

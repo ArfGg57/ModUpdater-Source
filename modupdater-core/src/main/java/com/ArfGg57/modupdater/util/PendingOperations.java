@@ -468,4 +468,16 @@ public class PendingOperations {
     public int size() {
         return operations.size();
     }
+    
+    /**
+     * Add a new pending operation and save to disk.
+     * 
+     * @param op The operation to add
+     */
+    public void addOperation(PendingOp op) {
+        if (op != null) {
+            operations.add(op);
+            save();
+        }
+    }
 }
