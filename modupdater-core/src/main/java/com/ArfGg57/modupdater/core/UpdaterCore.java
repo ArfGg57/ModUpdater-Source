@@ -184,8 +184,9 @@ public class UpdaterCore {
                             // Record the move so we can restore or delete later
                             cleanupState.recordMovedFile(file.getAbsolutePath(), tempFile.getAbsolutePath());
                             
-                            // Record the full path for showing in confirmation dialog
-                            cleanupState.recordRemovedMod(file.getAbsolutePath());
+                            // Record the relative path for showing in confirmation dialog (e.g., "mods/test.jar")
+                            String relativePath = installLocation + "/" + file.getName();
+                            cleanupState.recordRemovedMod(relativePath);
                             
                             movedCount++;
                             logger.log("  Moved to: " + tempFile.getName());
