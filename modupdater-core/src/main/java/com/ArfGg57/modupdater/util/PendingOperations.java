@@ -227,7 +227,7 @@ public class PendingOperations {
     
     /**
      * Attempt to delete a file, with fallback to scheduling for next startup.
-     * During early coremod phase, tries harder with more retries since files shouldn't be locked yet.
+     * If early coremod phase completed, tries harder with more retries since most file locks should be cleared.
      * 
      * @param file The file to delete
      * @return true if deleted immediately, false if scheduled for later
@@ -237,19 +237,19 @@ public class PendingOperations {
             return true; // Nothing to do
         }
         
-        // During early phase, try harder with retries since files shouldn't be locked
-        boolean isEarlyPhase = false;
+        // If early coremod phase completed, try harder with retries since most locks should be cleared
+        boolean postEarlyPhase = false;
         try {
-            // Check if we're in early phase (avoid hard dependency on core package)
+            // Check if early phase ran (avoid hard dependency on core package)
             Class<?> lifecycleClass = Class.forName("com.ArfGg57.modupdater.core.ModUpdaterLifecycle");
             java.lang.reflect.Method wasEarlyMethod = lifecycleClass.getMethod("wasEarlyPhaseCompleted");
             Boolean wasEarly = (Boolean) wasEarlyMethod.invoke(null);
-            isEarlyPhase = wasEarly != null && wasEarly;
+            postEarlyPhase = wasEarly != null && wasEarly;
         } catch (Exception e) {
             // Early phase check not available, proceed normally
         }
         
-        int maxAttempts = isEarlyPhase ? 5 : 1; // More attempts during early phase
+        int maxAttempts = postEarlyPhase ? 5 : 1; // More attempts after early phase cleanup
         long sleepMs = 200;
         
         // Try immediate deletion with retries
@@ -298,7 +298,7 @@ public class PendingOperations {
     
     /**
      * Attempt to move/rename a file, with fallback to scheduling for next startup.
-     * During early coremod phase, tries harder with more retries since files shouldn't be locked yet.
+     * If early coremod phase completed, tries harder with more retries since most file locks should be cleared.
      * 
      * @param source The source file to move
      * @param target The target location
@@ -309,18 +309,18 @@ public class PendingOperations {
             return true; // Nothing to do
         }
         
-        // During early phase, try harder with retries since files shouldn't be locked
-        boolean isEarlyPhase = false;
+        // If early coremod phase completed, try harder with retries since most locks should be cleared
+        boolean postEarlyPhase = false;
         try {
             Class<?> lifecycleClass = Class.forName("com.ArfGg57.modupdater.core.ModUpdaterLifecycle");
             java.lang.reflect.Method wasEarlyMethod = lifecycleClass.getMethod("wasEarlyPhaseCompleted");
             Boolean wasEarly = (Boolean) wasEarlyMethod.invoke(null);
-            isEarlyPhase = wasEarly != null && wasEarly;
+            postEarlyPhase = wasEarly != null && wasEarly;
         } catch (Exception e) {
             // Early phase check not available, proceed normally
         }
         
-        int maxAttempts = isEarlyPhase ? 5 : 3; // More attempts during early phase
+        int maxAttempts = postEarlyPhase ? 5 : 3; // More attempts after early phase cleanup
         
         // Try immediate move with retries
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {

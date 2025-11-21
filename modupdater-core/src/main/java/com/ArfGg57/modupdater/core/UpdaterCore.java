@@ -999,15 +999,6 @@ public class UpdaterCore {
         if (percent > 100) percent = 100;
         gui.setProgress(percent);
     }
-    
-    /**
-     * Try to delete a file with retries and short sleeps.
-     * Useful when early phase has cleared most locks but some transient locks may remain.
-     * 
-     * @param file The file to delete
-     * @param maxRetries Maximum number of retry attempts
-     * @param sleepMs Milliseconds to sleep between retries
-     * @return true if deleted successfully, false otherwise
 
     /**
      * Find all files in the directory that belong to a given numberId.
