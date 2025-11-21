@@ -858,11 +858,11 @@ public class UpdaterCore {
         deletionThread.setDaemon(false);  // Not a daemon - should keep running
         deletionThread.start();
         
-        // Throw an Error instead of RuntimeException to crash the game and force a restart
-        // Errors are less likely to be caught by FML exception handlers
-        // This will bypass FMLSecurityManager's System.exit() blocking
+        // Throw a custom Error to crash the game and force a restart
+        // Using Error (not Exception) ensures it bypasses FML exception handlers
+        // This is necessary because FMLSecurityManager blocks System.exit()
         System.err.println("[ModUpdater] Triggering game crash to apply updates...");
-        throw new AssertionError("[ModUpdater] Restart required to complete mod updates. Please restart the game.");
+        throw new RestartRequiredError("[ModUpdater] Restart required to complete mod updates. Please restart the game.");
     }
 
     private List<JSONObject> buildSinceList(JSONArray arr, String fromExclusive, String toInclusive) {
