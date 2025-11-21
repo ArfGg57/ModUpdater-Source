@@ -30,10 +30,6 @@ public class UpdaterCore {
     private boolean configError = false;
     private List<File> pendingDeletes = new ArrayList<>();  // Track files that failed to delete
     
-    // Constants for pending delete cleanup
-    private static final int DELETION_WAIT_MS = 2000;  // Wait time before attempting deletion
-    private static final int DELETION_KEEP_ALIVE_MS = 3000;  // Keep process alive after deletion
-    
     /**
      * Get list of files that failed to delete (locked by the game)
      */
@@ -54,6 +50,24 @@ public class UpdaterCore {
                 gui.show("CONFIG ERROR: remote_config_url missing in " + remoteConfigPath);
                 throw new RuntimeException("ModUpdater configuration incomplete.");
             }
+            
+            // Validate the remote config URL format
+            if (!remoteConfigUrl.startsWith("http://") && !remoteConfigUrl.startsWith("https://")) {
+                gui.show("CONFIG ERROR: remote_config_url must start with http:// or https://");
+                gui.show("Current value: " + remoteConfigUrl);
+                throw new RuntimeException("Invalid remote_config_url format in " + remoteConfigPath);
+            }
+            
+            // Additional URL validation - try to parse it to ensure it's well-formed
+            try {
+                new java.net.URL(remoteConfigUrl);
+            } catch (java.net.MalformedURLException e) {
+                gui.show("CONFIG ERROR: remote_config_url is malformed: " + e.getMessage());
+                gui.show("Current value: " + remoteConfigUrl);
+                throw new RuntimeException("Malformed remote_config_url in " + remoteConfigPath, e);
+            }
+            
+            gui.show("Using remote config URL: " + remoteConfigUrl);
 
             String appliedVersion = FileUtils.readAppliedVersion(localVersionPath);
             gui.show("Local applied version: " + appliedVersion);
@@ -817,52 +831,30 @@ public class UpdaterCore {
     }
 
     /**
-     * Start a deletion thread for pending files and crash the game to force restart.
-     * This method will not return - it throws an Error to crash the game.
+     * Forcefully crash the game to force restart.
+     * This method will not return - it immediately halts the JVM.
+     * 
+     * Note: We use Runtime.halt() instead of System.exit() because FMLSecurityManager
+     * (Forge Mod Loader) blocks System.exit() calls by throwing ExitTrappedException.
+     * Runtime.halt() cannot be caught or blocked, ensuring the game actually crashes
+     * as required when files are locked and need a restart to be deleted.
      */
     private void startDeletionThreadAndCrash() {
-        System.out.println("[ModUpdater] Starting deletion thread for pending files...");
+        System.out.println("[ModUpdater] Triggering game crash to apply updates...");
+        System.err.println("[ModUpdater] Restart required to complete mod updates. Please restart the game.");
+        System.err.println("[ModUpdater] " + pendingDeletes.size() + " file(s) could not be deleted and will be removed on next startup.");
         
-        // Start a non-daemon thread to delete the files after a short delay
-        Thread deletionThread = new Thread(() -> {
-            try {
-                // Wait for the game to start shutting down
-                Thread.sleep(DELETION_WAIT_MS);
-                
-                System.out.println("[ModUpdater] Attempting to delete " + pendingDeletes.size() + " pending file(s)...");
-                int deletedCount = 0;
-                for (File file : pendingDeletes) {
-                    if (file.exists()) {
-                        boolean deleted = file.delete();
-                        if (deleted) {
-                            System.out.println("[ModUpdater] Deleted: " + file.getPath());
-                            deletedCount++;
-                        } else {
-                            System.out.println("[ModUpdater] Still locked: " + file.getPath());
-                        }
-                    }
-                }
-                
-                System.out.println("[ModUpdater] Deletion complete: " + deletedCount + " of " + pendingDeletes.size() + " files deleted.");
-                
-                // Keep the process alive for a few more seconds to ensure files are deleted
-                Thread.sleep(DELETION_KEEP_ALIVE_MS);
-                
-                System.out.println("[ModUpdater] Deletion thread complete.");
-                // Note: Don't call System.exit() as it's blocked by FMLSecurityManager
-                // The game crash from the Error will terminate the process
-            } catch (InterruptedException e) {
-                System.err.println("[ModUpdater] Deletion thread interrupted: " + e.getMessage());
-            }
-        }, "ModUpdater-DeletionThread");
-        deletionThread.setDaemon(false);  // Not a daemon - should keep running
-        deletionThread.start();
+        // List the locked files for debugging
+        for (File file : pendingDeletes) {
+            System.err.println("[ModUpdater]   - " + file.getPath());
+        }
         
-        // Throw a custom Error to crash the game and force a restart
-        // Using Error (not Exception) ensures it bypasses FML exception handlers
-        // This is necessary because FMLSecurityManager blocks System.exit()
-        System.err.println("[ModUpdater] Triggering game crash to apply updates...");
-        throw new RestartRequiredError("[ModUpdater] Restart required to complete mod updates. Please restart the game.");
+        // Forcefully crash the game using Runtime.halt()
+        // This is more forceful than throwing an Error or calling System.exit()
+        // Runtime.halt() immediately terminates the JVM without calling shutdown hooks
+        // and cannot be caught by SecurityManager or try-catch blocks
+        // Exit code 130 (128 + SIGINT) indicates forced termination requiring restart
+        Runtime.getRuntime().halt(130);
     }
 
     private List<JSONObject> buildSinceList(JSONArray arr, String fromExclusive, String toInclusive) {
