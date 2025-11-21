@@ -3,6 +3,7 @@ package com.ArfGg57.modupdater.ui;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseMotionAdapter;
@@ -38,7 +39,15 @@ public class RestartRequiredDialog {
         dialog = new JDialog((Frame) null, true); // Modal
         dialog.setUndecorated(true);
         dialog.setBackground(new Color(0, 0, 0, 0));
-        dialog.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
+        
+        // Allow dialog to be closed with ESC key or window close
+        dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+        
+        // Add ESC key binding
+        JRootPane rootPane = dialog.getRootPane();
+        rootPane.registerKeyboardAction(e -> dialog.dispose(),
+            KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0),
+            JComponent.WHEN_IN_FOCUSED_WINDOW);
         
         JPanel mainPanel = new JPanel(new BorderLayout(15, 15)) {
             @Override

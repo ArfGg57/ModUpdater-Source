@@ -30,6 +30,10 @@ public class UpdaterCore {
     private boolean configError = false;
     private List<File> pendingDeletes = new ArrayList<>();  // Track files that failed to delete
     
+    // Constants for pending delete cleanup
+    private static final int DELETION_WAIT_MS = 2000;  // Wait time before attempting deletion
+    private static final int DELETION_KEEP_ALIVE_MS = 3000;  // Keep process alive after deletion
+    
     /**
      * Get list of files that failed to delete (locked by the game)
      */
@@ -798,46 +802,59 @@ public class UpdaterCore {
                     System.out.println("[ModUpdater] User requested restart to complete updates.");
                     System.out.println("[ModUpdater] Starting deletion thread for pending files...");
                     
-                    // Start a daemon thread to delete the files after a short delay
-                    Thread deletionThread = new Thread(new Runnable() {
-                        public void run() {
-                            try {
-                                // Wait for the game to start shutting down
-                                Thread.sleep(2000);
-                                
-                                System.out.println("[ModUpdater] Attempting to delete " + pendingDeletes.size() + " pending file(s)...");
-                                int deletedCount = 0;
-                                for (File file : pendingDeletes) {
-                                    if (file.exists()) {
-                                        boolean deleted = file.delete();
-                                        if (deleted) {
-                                            System.out.println("[ModUpdater] Deleted: " + file.getPath());
-                                            deletedCount++;
-                                        } else {
-                                            System.out.println("[ModUpdater] Still locked: " + file.getPath());
-                                        }
+                    // Start a non-daemon thread to delete the files after a short delay
+                    Thread deletionThread = new Thread(() -> {
+                        try {
+                            // Wait for the game to start shutting down
+                            Thread.sleep(DELETION_WAIT_MS);
+                            
+                            System.out.println("[ModUpdater] Attempting to delete " + pendingDeletes.size() + " pending file(s)...");
+                            int deletedCount = 0;
+                            for (File file : pendingDeletes) {
+                                if (file.exists()) {
+                                    boolean deleted = file.delete();
+                                    if (deleted) {
+                                        System.out.println("[ModUpdater] Deleted: " + file.getPath());
+                                        deletedCount++;
+                                    } else {
+                                        System.out.println("[ModUpdater] Still locked: " + file.getPath());
                                     }
                                 }
-                                
-                                System.out.println("[ModUpdater] Deletion complete: " + deletedCount + " of " + pendingDeletes.size() + " files deleted.");
-                                
-                                // Keep the process alive for a few more seconds to ensure files are deleted
-                                Thread.sleep(3000);
-                                
-                                System.out.println("[ModUpdater] Deletion thread complete. Exiting...");
-                                System.exit(0);
-                            } catch (InterruptedException e) {
-                                System.err.println("[ModUpdater] Deletion thread interrupted: " + e.getMessage());
                             }
+                            
+                            System.out.println("[ModUpdater] Deletion complete: " + deletedCount + " of " + pendingDeletes.size() + " files deleted.");
+                            
+                            // Keep the process alive for a few more seconds to ensure files are deleted
+                            Thread.sleep(DELETION_KEEP_ALIVE_MS);
+                            
+                            System.out.println("[ModUpdater] Deletion thread complete. Exiting...");
+                            System.exit(0);
+                        } catch (InterruptedException e) {
+                            System.err.println("[ModUpdater] Deletion thread interrupted: " + e.getMessage());
                         }
                     }, "ModUpdater-DeletionThread");
                     deletionThread.setDaemon(false);  // Not a daemon - should keep running
                     deletionThread.start();
                     
-                    // Now crash the game by throwing an exception
+                    // Now trigger game exit by calling System.exit in a separate thread
+                    // This ensures the deletion thread continues running
                     System.err.println("[ModUpdater] Triggering game exit to apply updates...");
-                    throw new RuntimeException("ModUpdater: Restart required to complete updates. " +
-                        "Please restart the game. The updater will clean up pending files.");
+                    new Thread(() -> {
+                        try {
+                            // Give deletion thread a moment to start
+                            Thread.sleep(100);
+                            System.exit(1);  // Exit with error code to indicate restart needed
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        }
+                    }, "ModUpdater-ExitThread").start();
+                    
+                    // Keep main thread alive briefly
+                    try {
+                        Thread.sleep(500);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
                 }
             }
 
