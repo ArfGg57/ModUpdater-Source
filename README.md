@@ -49,6 +49,51 @@ Optional coremod support for processing pending file operations before mods load
 
 See [docs/COREMOD_SETUP.md](docs/COREMOD_SETUP.md) for setup instructions.
 
+## Early Loading System
+
+ModUpdater includes a sophisticated early-loading system that ensures reliable file operations:
+
+### How It Works
+
+1. **Coremod Phase** (Earliest - Before mod scanning)
+   - `ModUpdaterCoremod` loads as an FML coremod plugin
+   - Processes any pending file operations from `config/ModUpdater/pending-ops.json`
+   - Completes deferred deletions, moves, and replacements
+   - Marks early phase as completed
+
+2. **Tweaker Phase** (Early - Before Minecraft launches)
+   - `UpdaterTweaker` runs as a Launchwrapper tweaker
+   - Shows confirmation dialog for updates
+   - Checks if coremod already ran
+   - Performs main update logic if user agrees
+
+3. **PreInit Phase** (Normal - After mods load)
+   - `ModUpdater` @Mod preInit handler
+   - Checks if early phases already completed
+   - Only runs if coremod/tweaker didn't execute (backward compatibility)
+
+### Benefits
+
+- **Prevents File Locks**: Operations execute before Forge locks JAR files
+- **Immediate Deletion**: Outdated mods can be deleted immediately instead of requiring restart
+- **Atomic Replacements**: New versions replace old ones cleanly without conflicts
+- **Windows Compatibility**: Significantly improves reliability on Windows systems
+- **Graceful Fallback**: If immediate operations fail, they're deferred to next startup
+
+### Pending Operations
+
+When a file cannot be deleted/moved immediately (e.g., still locked), the operation is:
+1. Scheduled using `File.deleteOnExit()` for JVM exit cleanup
+2. Written to `config/ModUpdater/pending-ops.json` for next startup
+3. Processed by the coremod on next launch before files are locked again
+
+Each pending operation includes:
+- **Type**: DELETE, MOVE, or REPLACE
+- **Paths**: Source, target, and staged paths as needed
+- **Reason**: Human-readable explanation for debugging
+- **Timestamps**: When scheduled and when executed
+- **Idempotency**: Operations check if already completed before attempting
+
 ### Unified Manifest for Files and Mods
 
 The updater now tracks both mods and auxiliary files (configs, resources) in a unified manifest:

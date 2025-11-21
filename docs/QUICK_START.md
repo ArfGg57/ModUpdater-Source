@@ -130,6 +130,37 @@ ModUpdater creates a file at `config/ModUpdater/mod_metadata.json` that tracks i
 
 **Don't delete this file manually** - it's automatically managed.
 
+### Early Coremod Loading
+
+ModUpdater now includes an early-loading coremod that processes file operations **before** Forge loads mod JARs. This provides several benefits:
+
+#### What It Does
+- **Processes Pending Operations**: Any file deletions, moves, or replacements that were deferred from the previous run are completed before mods load
+- **Prevents File Locks**: By running before Forge scans and locks mod JARs, operations that would otherwise fail can now succeed
+- **Reliable Updates**: Particularly beneficial on Windows where file locks can prevent deletion of active JARs
+
+#### How It Works
+1. **During Launch**: The coremod initializes before regular mods
+2. **Reads Operations**: Checks `config/ModUpdater/pending-ops.json` for any pending operations
+3. **Executes**: Attempts to complete all pending operations (DELETE, MOVE, REPLACE)
+4. **Updates Tracking**: Removes successfully completed operations from the pending list
+
+#### Logging
+You'll see messages like these in your log:
+```
+[ModUpdaterCoremod] Initializing early-load phase...
+[ModUpdaterCoremod] Successfully processed 3 pending operation(s)
+[ModUpdaterCoremod] Early-load phase complete
+```
+
+#### Activation
+The coremod is automatically activated via manifest attributes in the JAR:
+- `FMLCorePlugin: com.ArfGg57.modupdater.coremod.ModUpdaterCoremod`
+- `FMLCorePluginContainsFMLMod: true`
+- `ForceLoadAsMod: true`
+
+No additional configuration needed - it works automatically!
+
 ### Manual Mod Changes
 
 #### Renamed a Mod?

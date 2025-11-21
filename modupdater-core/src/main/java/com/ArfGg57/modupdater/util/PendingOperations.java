@@ -227,6 +227,7 @@ public class PendingOperations {
     
     /**
      * Attempt to delete a file, with fallback to scheduling for next startup.
+     * During early coremod phase, tries harder with more retries since files shouldn't be locked yet.
      * 
      * @param file The file to delete
      * @return true if deleted immediately, false if scheduled for later
@@ -236,18 +237,45 @@ public class PendingOperations {
             return true; // Nothing to do
         }
         
-        // Try immediate deletion
-        if (file.delete()) {
-            if (logger != null) {
-                logger.log("Deleted file: " + file.getPath());
-            }
-            return true;
+        // During early phase, try harder with retries since files shouldn't be locked
+        boolean isEarlyPhase = false;
+        try {
+            // Check if we're in early phase (avoid hard dependency on core package)
+            Class<?> lifecycleClass = Class.forName("com.ArfGg57.modupdater.core.ModUpdaterLifecycle");
+            java.lang.reflect.Method wasEarlyMethod = lifecycleClass.getMethod("wasEarlyPhaseCompleted");
+            Boolean wasEarly = (Boolean) wasEarlyMethod.invoke(null);
+            isEarlyPhase = wasEarly != null && wasEarly;
+        } catch (Exception e) {
+            // Early phase check not available, proceed normally
         }
         
-        // Deletion failed - check if locked
+        int maxAttempts = isEarlyPhase ? 5 : 1; // More attempts during early phase
+        long sleepMs = 200;
+        
+        // Try immediate deletion with retries
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            if (file.delete()) {
+                if (logger != null) {
+                    logger.log("Deleted file" + (attempt > 1 ? " (attempt " + attempt + ")" : "") + ": " + file.getPath());
+                }
+                return true;
+            }
+            
+            // Not last attempt - sleep and retry
+            if (attempt < maxAttempts) {
+                try {
+                    Thread.sleep(sleepMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        
+        // Deletion failed after retries - check if locked
         if (isFileLocked(file)) {
             if (logger != null) {
-                logger.log("File is locked, scheduling for deletion on next startup: " + file.getPath());
+                logger.log("File is locked after " + maxAttempts + " attempt(s), scheduling for deletion on next startup: " + file.getPath());
             }
             
             // Schedule for JVM exit
@@ -262,7 +290,7 @@ public class PendingOperations {
         } else {
             // Not locked but still failed - log warning
             if (logger != null) {
-                logger.log("Warning: Failed to delete file (not locked): " + file.getPath());
+                logger.log("Warning: Failed to delete file after " + maxAttempts + " attempt(s) (not locked): " + file.getPath());
             }
             return false;
         }
@@ -270,6 +298,7 @@ public class PendingOperations {
     
     /**
      * Attempt to move/rename a file, with fallback to scheduling for next startup.
+     * During early coremod phase, tries harder with more retries since files shouldn't be locked yet.
      * 
      * @param source The source file to move
      * @param target The target location
@@ -280,34 +309,62 @@ public class PendingOperations {
             return true; // Nothing to do
         }
         
-        // Try immediate move
+        // During early phase, try harder with retries since files shouldn't be locked
+        boolean isEarlyPhase = false;
         try {
-            FileUtils.atomicMoveWithRetries(source, target, 3, 100);
-            if (logger != null) {
-                logger.log("Moved file: " + source.getPath() + " -> " + target.getPath());
-            }
-            return true;
+            Class<?> lifecycleClass = Class.forName("com.ArfGg57.modupdater.core.ModUpdaterLifecycle");
+            java.lang.reflect.Method wasEarlyMethod = lifecycleClass.getMethod("wasEarlyPhaseCompleted");
+            Boolean wasEarly = (Boolean) wasEarlyMethod.invoke(null);
+            isEarlyPhase = wasEarly != null && wasEarly;
         } catch (Exception e) {
-            // Move failed - check if locked
-            if (isFileLocked(source)) {
+            // Early phase check not available, proceed normally
+        }
+        
+        int maxAttempts = isEarlyPhase ? 5 : 3; // More attempts during early phase
+        
+        // Try immediate move with retries
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                FileUtils.atomicMoveWithRetries(source, target, 1, 100);
                 if (logger != null) {
-                    logger.log("File is locked, scheduling move for next startup: " + source.getPath() + " -> " + target.getPath());
+                    logger.log("Moved file" + (attempt > 1 ? " (attempt " + attempt + ")" : "") + ": " + source.getPath() + " -> " + target.getPath());
                 }
-                
-                // Record in pending operations
-                PendingOp op = new PendingOp(OpType.MOVE, source.getAbsolutePath(), target.getAbsolutePath());
-                operations.add(op);
-                save();
-                
-                return false;
-            } else {
-                // Not locked but still failed - log warning
-                if (logger != null) {
-                    logger.log("Warning: Failed to move file (not locked): " + source.getPath() + ": " + e.getMessage());
+                return true;
+            } catch (Exception e) {
+                // Move failed on this attempt
+                if (attempt == maxAttempts) {
+                    // Last attempt failed
+                    if (isFileLocked(source)) {
+                        if (logger != null) {
+                            logger.log("File is locked after " + maxAttempts + " attempt(s), scheduling move for next startup: " + source.getPath() + " -> " + target.getPath());
+                        }
+                        
+                        // Record in pending operations
+                        PendingOp op = new PendingOp(OpType.MOVE, source.getAbsolutePath(), target.getAbsolutePath());
+                        operations.add(op);
+                        save();
+                        
+                        return false;
+                    } else {
+                        // Not locked but still failed - log warning
+                        if (logger != null) {
+                            logger.log("Warning: Failed to move file after " + maxAttempts + " attempt(s) (not locked): " + source.getPath() + ": " + e.getMessage());
+                        }
+                        return false;
+                    }
+                } else {
+                    // Not last attempt - sleep and retry
+                    try {
+                        Thread.sleep(200);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return false;
+                    }
                 }
-                return false;
             }
         }
+        
+        return false;
     }
     
     /**

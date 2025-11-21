@@ -288,6 +288,10 @@ All requirements from the original issue have been successfully implemented:
 9. ✅ Backwards compatible
 10. ✅ Security validated
 11. ✅ Builds successfully
+12. ✅ Early coremod loading for file lock handling
+13. ✅ Pending operations system with idempotency
+14. ✅ Immediate deletion with retry mechanism
+15. ✅ Lifecycle management prevents duplicate execution
 
 **Status: READY FOR DEPLOYMENT** ✅
 
@@ -303,6 +307,47 @@ Before deploying to production, test the following scenarios:
 4. **Delete**: Delete mod file → Reinstalled
 5. **Remove**: Remove from mods.json → File deleted
 6. **Mix**: Combination of above → All handled correctly
+7. **Early Phase**: Locked mod file → Deleted on next startup via coremod
+8. **Pending Operations**: Read-only file → Scheduled and completed next launch
+9. **Duplicate Prevention**: Coremod + preInit → Only one execution
+10. **Hash-Based Rename**: User renames mod → Detected and handled correctly
+
+## Early Coremod Validation Checklist
+
+### Coremod Activation
+- [ ] Manifest includes `FMLCorePlugin: com.ArfGg57.modupdater.coremod.ModUpdaterCoremod`
+- [ ] Manifest includes `FMLCorePluginContainsFMLMod: true`
+- [ ] Manifest includes `ForceLoadAsMod: true`
+- [ ] Coremod loads before regular mods (check logs)
+- [ ] Early phase context is initialized correctly
+
+### Pending Operations Processing
+- [ ] Pending operations read from `config/ModUpdater/pending-ops.json`
+- [ ] DELETE operations complete successfully
+- [ ] MOVE operations complete successfully
+- [ ] REPLACE operations complete successfully
+- [ ] Completed operations removed from pending list
+- [ ] Failed operations remain for next attempt
+
+### Lifecycle Management
+- [ ] `EarlyPhaseContext.markEarlyPhase()` called in coremod constructor
+- [ ] `ModUpdaterLifecycle.wasEarlyPhaseCompleted()` returns true after coremod runs
+- [ ] ModUpdater preInit skips when early phase completed
+- [ ] Log messages distinguish between early and preInit execution
+- [ ] Shutdown hook installed to flush pending operations
+
+### Immediate Deletion Logic
+- [ ] `tryDeleteWithRetries()` attempts immediate deletion with retries
+- [ ] Early-phase-aware deletion in cleanup phase works correctly
+- [ ] Early-phase-aware deletion after installing new files works correctly
+- [ ] Fallback to pending operations when immediate deletion fails
+
+### Idempotency and Error Handling
+- [ ] DELETE operations skip if file already gone
+- [ ] MOVE operations handle all source/target existence combinations
+- [ ] REPLACE operations check for completed state
+- [ ] Reason field logged for debugging
+- [ ] executedTimestamp recorded on success
 
 ## Rollback Plan
 

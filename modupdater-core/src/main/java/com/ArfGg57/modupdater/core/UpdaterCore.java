@@ -380,18 +380,8 @@ public class UpdaterCore {
                         gui.show("Removing outdated ModUpdater-managed mod: " + file.getPath());
                         FileUtils.backupPathTo(file, backupRoot);
                         
-                        // If early phase already processed pending ops, try immediate deletion with retries
-                        boolean deleted = false;
-                        if (ModUpdaterLifecycle.wasEarlyPhaseCompleted()) {
-                            // Early phase ran - file locks should be minimal, try direct deletion with retries
-                            deleted = tryDeleteWithRetries(file, 3, 500);
-                            if (deleted) {
-                                gui.show("Successfully deleted file immediately (post-early-phase)");
-                            }
-                        }
-                        
-                        // If not deleted yet, use fallback to pending operations
-                        if (!deleted && !pendingOps.deleteWithFallback(file)) {
+                        // deleteWithFallback now handles retries intelligently based on early phase
+                        if (!pendingOps.deleteWithFallback(file)) {
                             gui.show("File locked, will retry on next startup");
                         }
                         
@@ -724,17 +714,8 @@ public class UpdaterCore {
                         gui.show("Removing old version: " + f.getPath());
                         FileUtils.backupPathTo(f, backupRoot);
                         
-                        // If early phase completed, try immediate deletion with retries
-                        boolean deleted = false;
-                        if (ModUpdaterLifecycle.wasEarlyPhaseCompleted()) {
-                            deleted = tryDeleteWithRetries(f, 3, 500);
-                            if (deleted) {
-                                gui.show("Successfully deleted old version immediately (post-early-phase)");
-                            }
-                        }
-                        
-                        // If not deleted yet, use fallback to pending operations
-                        if (!deleted && !pendingOps.deleteWithFallback(f)) {
+                        // deleteWithFallback now handles retries intelligently based on early phase
+                        if (!pendingOps.deleteWithFallback(f)) {
                             gui.show("File locked, will retry on next startup");
                         }
                     }
@@ -746,17 +727,8 @@ public class UpdaterCore {
                                 gui.show("Backing up existing target file: " + target.getPath());
                                 FileUtils.backupPathTo(target, backupRoot);
                                 
-                                // If early phase completed, try immediate deletion with retries
-                                boolean deleted = false;
-                                if (ModUpdaterLifecycle.wasEarlyPhaseCompleted()) {
-                                    deleted = tryDeleteWithRetries(target, 3, 500);
-                                    if (deleted) {
-                                        gui.show("Successfully deleted target file immediately (post-early-phase)");
-                                    }
-                                }
-                                
-                                // If not deleted yet, use fallback to pending operations
-                                if (!deleted && !pendingOps.deleteWithFallback(target)) {
+                                // deleteWithFallback now handles retries intelligently based on early phase
+                                if (!pendingOps.deleteWithFallback(target)) {
                                     gui.show("File locked, will retry on next startup");
                                 }
                             } else {
@@ -858,30 +830,6 @@ public class UpdaterCore {
      * @param maxRetries Maximum number of retry attempts
      * @param sleepMs Milliseconds to sleep between retries
      * @return true if deleted successfully, false otherwise
-     */
-    private boolean tryDeleteWithRetries(File file, int maxRetries, long sleepMs) {
-        if (file == null || !file.exists()) {
-            return true; // Nothing to delete
-        }
-        
-        for (int attempt = 1; attempt <= maxRetries; attempt++) {
-            if (file.delete()) {
-                return true;
-            }
-            
-            // Not last attempt - sleep and retry
-            if (attempt < maxRetries) {
-                try {
-                    Thread.sleep(sleepMs);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return false;
-                }
-            }
-        }
-        
-        return false;
-    }
 
     /**
      * Find all files in the directory that belong to a given numberId.
