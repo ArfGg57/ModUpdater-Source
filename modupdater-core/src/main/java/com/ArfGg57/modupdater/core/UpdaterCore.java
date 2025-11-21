@@ -822,9 +822,15 @@ public class UpdaterCore {
     private void startDeletionThreadAndCrash() {
         System.out.println("[ModUpdater] Starting deletion thread for pending files...");
         
+        // Use a latch to ensure deletion thread has started before we halt
+        final java.util.concurrent.CountDownLatch threadStarted = new java.util.concurrent.CountDownLatch(1);
+        
         // Start a non-daemon thread to delete the files after a short delay
         Thread deletionThread = new Thread(() -> {
             try {
+                // Signal that the thread has started
+                threadStarted.countDown();
+                
                 // Wait for the game to start shutting down
                 Thread.sleep(DELETION_WAIT_MS);
                 
@@ -855,19 +861,19 @@ public class UpdaterCore {
         deletionThread.setDaemon(false);  // Not a daemon - should keep running
         deletionThread.start();
         
+        // Wait for the deletion thread to actually start before halting
+        try {
+            threadStarted.await(5, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            System.err.println("[ModUpdater] Interrupted while waiting for deletion thread to start");
+        }
+        
         // Forcefully crash the game using Runtime.halt()
         // This is more forceful than throwing an Error or calling System.exit()
         // Runtime.halt() immediately terminates the JVM without calling shutdown hooks
         // and cannot be caught by SecurityManager or try-catch blocks
         System.err.println("[ModUpdater] Triggering game crash to apply updates...");
         System.err.println("[ModUpdater] Restart required to complete mod updates. Please restart the game.");
-        
-        // Give the deletion thread a moment to start, then halt
-        try {
-            Thread.sleep(100);
-        } catch (InterruptedException e) {
-            // Ignore
-        }
         
         // Halt the JVM with exit code 0 (normal termination from user perspective)
         // The deletion thread will continue running for a brief moment to delete files
