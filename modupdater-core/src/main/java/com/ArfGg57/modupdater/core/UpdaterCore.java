@@ -184,13 +184,8 @@ public class UpdaterCore {
                             // Record the move so we can restore or delete later
                             cleanupState.recordMovedFile(file.getAbsolutePath(), tempFile.getAbsolutePath());
                             
-                            // Get mod display name for confirmation dialog
-                            ModMetadata.ModEntry entry = metadata.getMod(belongsToNumberId);
-                            String displayName = file.getName();
-                            if (entry != null && entry.fileName != null) {
-                                displayName = entry.fileName;
-                            }
-                            cleanupState.recordRemovedMod(displayName);
+                            // Record the full path for showing in confirmation dialog
+                            cleanupState.recordRemovedMod(file.getAbsolutePath());
                             
                             movedCount++;
                             logger.log("  Moved to: " + tempFile.getName());

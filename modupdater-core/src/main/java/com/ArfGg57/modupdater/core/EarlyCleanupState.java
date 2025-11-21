@@ -20,7 +20,7 @@ public class EarlyCleanupState {
     private final Map<String, String> movedFiles = new HashMap<>();
     
     /**
-     * List of mod display names that were removed during early cleanup
+     * List of mod file paths (full path and name) that were removed during early cleanup
      */
     private final List<String> removedModNames = new ArrayList<>();
     
@@ -49,10 +49,10 @@ public class EarlyCleanupState {
     /**
      * Record a mod that was removed (for showing in confirmation dialog)
      * 
-     * @param modName Display name of the mod
+     * @param modPathAndName Full path and name of the removed mod file
      */
-    public void recordRemovedMod(String modName) {
-        removedModNames.add(modName);
+    public void recordRemovedMod(String modPathAndName) {
+        removedModNames.add(modPathAndName);
     }
     
     /**
@@ -67,7 +67,7 @@ public class EarlyCleanupState {
     /**
      * Get list of mods that were removed during early cleanup
      * 
-     * @return List of mod display names
+     * @return List of mod file paths (full path and name)
      */
     public List<String> getRemovedModNames() {
         return new ArrayList<>(removedModNames);
