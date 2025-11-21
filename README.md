@@ -51,21 +51,23 @@ See [docs/COREMOD_SETUP.md](docs/COREMOD_SETUP.md) for setup instructions.
 
 ## Early Loading System
 
-ModUpdater includes a sophisticated early-loading system that ensures reliable file operations:
+ModUpdater includes a sophisticated early-loading system that ensures reliable file operations **before mods are loaded**:
 
 ### How It Works
 
 1. **Coremod Phase** (Earliest - Before mod scanning)
-   - `ModUpdaterCoremod` loads as an FML coremod plugin
+   - `ModUpdaterCoremod` loads as an FML coremod plugin (SortingIndex=1)
    - Processes any pending file operations from `config/ModUpdater/pending-ops.json`
-   - Completes deferred deletions, moves, and replacements
+   - **NEW:** Fetches remote config headlessly (no GUI)
+   - **NEW:** Scans for outdated mods and deletes them immediately
+   - **NEW:** All cleanup happens BEFORE Forge scans/loads mods
    - Marks early phase as completed
 
 2. **Tweaker Phase** (Early - Before Minecraft launches)
    - `UpdaterTweaker` runs as a Launchwrapper tweaker
    - Shows confirmation dialog for updates
-   - Checks if coremod already ran
-   - Performs main update logic if user agrees
+   - Checks if coremod already performed cleanup
+   - Performs main update logic (downloads new mods) if user agrees
 
 3. **PreInit Phase** (Normal - After mods load)
    - `ModUpdater` @Mod preInit handler
@@ -74,11 +76,26 @@ ModUpdater includes a sophisticated early-loading system that ensures reliable f
 
 ### Benefits
 
+- **Prevents Loading Old Mods**: Outdated mods are deleted BEFORE Forge can scan and initialize them
+- **No Conflicts**: Duplicate mod versions never loaded simultaneously
+- **First-Run Deletion**: Files deleted/renamed on first launch, no restart needed
 - **Prevents File Locks**: Operations execute before Forge locks JAR files
 - **Immediate Deletion**: Outdated mods can be deleted immediately instead of requiring restart
 - **Atomic Replacements**: New versions replace old ones cleanly without conflicts
 - **Windows Compatibility**: Significantly improves reliability on Windows systems
 - **Graceful Fallback**: If immediate operations fail, they're deferred to next startup
+
+### Early Cleanup Process
+
+The coremod performs these steps before any mods load:
+
+1. **Fetch Remote Config**: Downloads latest mods.json (headless operation)
+2. **Build Valid Mod List**: Determines which mods should be present
+3. **Load Metadata**: Reads tracking info for installed mods
+4. **Scan Mod Folders**: Checks each installed mod against valid list
+5. **Identify Outdated**: Finds mods that are no longer in config
+6. **Delete Immediately**: Removes outdated mods with 5 retry attempts
+7. **Update Metadata**: Removes deleted mods from tracking database
 
 ### Pending Operations
 

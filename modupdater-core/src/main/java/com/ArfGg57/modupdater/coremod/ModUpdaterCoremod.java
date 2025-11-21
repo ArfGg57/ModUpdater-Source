@@ -65,6 +65,43 @@ public class ModUpdaterCoremod {
             e.printStackTrace();
         }
         
+        // Run early cleanup to remove outdated mods BEFORE they get loaded
+        try {
+            // Import UpdaterCore via reflection to avoid compile-time dependency
+            Class<?> updaterCoreClass = Class.forName("com.ArfGg57.modupdater.core.UpdaterCore");
+            Class<?> loggerInterface = Class.forName("com.ArfGg57.modupdater.core.UpdaterCore$SimpleLogger");
+            
+            // Create logger implementation
+            Object logger = java.lang.reflect.Proxy.newProxyInstance(
+                ModUpdaterCoremod.class.getClassLoader(),
+                new Class<?>[] { loggerInterface },
+                new java.lang.reflect.InvocationHandler() {
+                    public Object invoke(Object proxy, java.lang.reflect.Method method, Object[] args) {
+                        if (method.getName().equals("log") && args != null && args.length > 0) {
+                            System.out.println("[ModUpdaterCoremod] " + args[0]);
+                        }
+                        return null;
+                    }
+                }
+            );
+            
+            // Invoke runEarlyCleanup
+            java.lang.reflect.Method runEarlyCleanup = updaterCoreClass.getMethod("runEarlyCleanup", loggerInterface);
+            Boolean success = (Boolean) runEarlyCleanup.invoke(null, logger);
+            
+            if (success != null && success) {
+                System.out.println("[ModUpdaterCoremod] Early cleanup completed successfully");
+            } else {
+                System.out.println("[ModUpdaterCoremod] Early cleanup completed with warnings");
+            }
+        } catch (ClassNotFoundException e) {
+            System.out.println("[ModUpdaterCoremod] UpdaterCore not available, skipping early cleanup");
+        } catch (Exception e) {
+            System.err.println("[ModUpdaterCoremod] Error during early cleanup: " + e.getMessage());
+            e.printStackTrace();
+            // Don't fail the coremod initialization - continue with launch
+        }
+        
         // Install shutdown hook to persist any new pending operations
         ModUpdaterLifecycle.installShutdownHook();
         

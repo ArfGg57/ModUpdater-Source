@@ -132,24 +132,41 @@ ModUpdater creates a file at `config/ModUpdater/mod_metadata.json` that tracks i
 
 ### Early Coremod Loading
 
-ModUpdater now includes an early-loading coremod that processes file operations **before** Forge loads mod JARs. This provides several benefits:
+ModUpdater now includes an early-loading coremod that **actively checks for and removes outdated mods** before Forge loads mod JARs. This is a significant improvement over traditional mod loaders!
 
 #### What It Does
-- **Processes Pending Operations**: Any file deletions, moves, or replacements that were deferred from the previous run are completed before mods load
-- **Prevents File Locks**: By running before Forge scans and locks mod JARs, operations that would otherwise fail can now succeed
-- **Reliable Updates**: Particularly beneficial on Windows where file locks can prevent deletion of active JARs
+1. **Processes Pending Operations**: Completes any file deletions, moves, or replacements that were deferred from the previous run
+2. **Fetches Remote Config**: Downloads the latest mods.json to check which mods should be present (headless, no GUI)
+3. **Scans for Outdated Mods**: Identifies any mods that are no longer in the config or have been replaced
+4. **Deletes Immediately**: Removes outdated mods **before** Forge scans and locks them
+5. **Prevents File Locks**: By running before Forge scans the mods directory, operations that would otherwise fail can now succeed
+
+#### Key Benefits
+- ✅ **No Second Launch Required**: Deletions and renames happen on the **first run**
+- ✅ **Prevents Loading Old Mods**: Outdated mods are removed before they can initialize
+- ✅ **Avoids Conflicts**: No duplicate mod versions loaded simultaneously
+- ✅ **Windows Compatible**: Works reliably even on Windows where file locking is strict
 
 #### How It Works
-1. **During Launch**: The coremod initializes before regular mods
+1. **During Launch**: The coremod initializes before regular mods (SortingIndex=1)
 2. **Reads Operations**: Checks `config/ModUpdater/pending-ops.json` for any pending operations
-3. **Executes**: Attempts to complete all pending operations (DELETE, MOVE, REPLACE)
-4. **Updates Tracking**: Removes successfully completed operations from the pending list
+3. **Fetches Config**: Downloads remote config to determine current mod list
+4. **Scans Mods Folder**: Identifies outdated/removed mods using metadata tracking
+5. **Executes Deletions**: Attempts immediate deletion with 5 retry attempts
+6. **Updates Tracking**: Removes successfully deleted mods from metadata
 
 #### Logging
 You'll see messages like these in your log:
 ```
 [ModUpdaterCoremod] Initializing early-load phase...
 [ModUpdaterCoremod] Successfully processed 3 pending operation(s)
+[ModUpdaterCoremod] === Starting Early Cleanup Phase ===
+[ModUpdaterCoremod] Fetching remote config from: https://...
+[ModUpdaterCoremod] Remote config has 15 mod(s)
+[ModUpdaterCoremod] Removing outdated mod (early phase): oldmod-1.0.jar
+[ModUpdaterCoremod] Deleted file (attempt 1): mods/oldmod-1.0.jar
+[ModUpdaterCoremod] Removed 1 outdated mod(s) during early phase
+[ModUpdaterCoremod] === Early Cleanup Phase Complete ===
 [ModUpdaterCoremod] Early-load phase complete
 ```
 
