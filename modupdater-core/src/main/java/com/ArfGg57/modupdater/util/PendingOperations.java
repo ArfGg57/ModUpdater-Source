@@ -55,6 +55,8 @@ public class PendingOperations {
         public String stagedPath;  // for REPLACE: path to the new file to install
         public String checksum;    // for REPLACE: expected checksum of staged file
         public long timestamp;
+        public String reason;      // Human-readable reason for debugging
+        public long executedTimestamp; // When operation was executed (0 if not yet)
         
         public PendingOp() {}
         
@@ -63,6 +65,7 @@ public class PendingOperations {
             this.sourcePath = sourcePath;
             this.targetPath = targetPath;
             this.timestamp = System.currentTimeMillis();
+            this.executedTimestamp = 0;
         }
         
         public PendingOp(OpType type, String sourcePath, String targetPath, String stagedPath, String checksum) {
@@ -72,6 +75,7 @@ public class PendingOperations {
             this.stagedPath = stagedPath;
             this.checksum = checksum;
             this.timestamp = System.currentTimeMillis();
+            this.executedTimestamp = 0;
         }
         
         public JSONObject toJson() {
@@ -82,6 +86,8 @@ public class PendingOperations {
             if (stagedPath != null) obj.put("stagedPath", stagedPath);
             if (checksum != null) obj.put("checksum", checksum);
             obj.put("timestamp", timestamp);
+            if (reason != null) obj.put("reason", reason);
+            if (executedTimestamp > 0) obj.put("executedTimestamp", executedTimestamp);
             return obj;
         }
         
@@ -93,6 +99,8 @@ public class PendingOperations {
             op.stagedPath = obj.optString("stagedPath", null);
             op.checksum = obj.optString("checksum", null);
             op.timestamp = obj.optLong("timestamp", 0);
+            op.reason = obj.optString("reason", null);
+            op.executedTimestamp = obj.optLong("executedTimestamp", 0);
             return op;
         }
     }
@@ -353,14 +361,16 @@ public class PendingOperations {
                 if (op.type == OpType.DELETE) {
                     File file = new File(op.sourcePath);
                     if (!file.exists()) {
-                        // Already deleted (possibly by deleteOnExit)
+                        // Already deleted (possibly by deleteOnExit) - idempotent success
                         if (logger != null) {
-                            logger.log("Pending delete completed (file gone): " + op.sourcePath);
+                            String reasonMsg = op.reason != null ? " (reason: " + op.reason + ")" : "";
+                            logger.log("Pending delete completed (file gone): " + op.sourcePath + reasonMsg);
                         }
                         success = true;
                     } else if (file.delete()) {
                         if (logger != null) {
-                            logger.log("Completed pending delete: " + op.sourcePath);
+                            String reasonMsg = op.reason != null ? " (reason: " + op.reason + ")" : "";
+                            logger.log("Completed pending delete: " + op.sourcePath + reasonMsg);
                         }
                         success = true;
                     } else {
@@ -372,14 +382,28 @@ public class PendingOperations {
                     File src = new File(op.sourcePath);
                     File dst = new File(op.targetPath);
                     
-                    if (!src.exists()) {
-                        // Source gone - consider it moved or deleted
+                    // Idempotency checks
+                    if (!src.exists() && !dst.exists()) {
+                        // Both gone - something else handled it, consider success
                         success = true;
+                    } else if (!src.exists() && dst.exists()) {
+                        // Source gone, target exists - likely already moved
+                        if (logger != null) {
+                            logger.log("Pending move appears completed (target exists): " + op.targetPath);
+                        }
+                        success = true;
+                    } else if (src.exists() && dst.exists()) {
+                        // Both exist - target already there, delete source
+                        if (src.delete()) {
+                            success = true;
+                        }
                     } else {
+                        // src exists, dst doesn't - normal move
                         try {
                             FileUtils.atomicMoveWithRetries(src, dst, 3, 100);
                             if (logger != null) {
-                                logger.log("Completed pending move: " + op.sourcePath + " -> " + op.targetPath);
+                                String reasonMsg = op.reason != null ? " (reason: " + op.reason + ")" : "";
+                                logger.log("Completed pending move: " + op.sourcePath + " -> " + op.targetPath + reasonMsg);
                             }
                             success = true;
                         } catch (Exception e) {
@@ -393,7 +417,13 @@ public class PendingOperations {
                     File staged = new File(op.stagedPath);
                     File target = new File(op.targetPath);
                     
-                    if (!staged.exists()) {
+                    // Idempotency check: if target already exists with correct content and old/staged are gone
+                    if (target.exists() && !old.exists() && !staged.exists()) {
+                        if (logger != null) {
+                            logger.log("Pending replace appears completed (target exists, old/staged gone): " + op.targetPath);
+                        }
+                        success = true;
+                    } else if (!staged.exists()) {
                         // Staged file missing - can't complete operation
                         if (logger != null) {
                             logger.log("Warning: Staged file missing for REPLACE: " + op.stagedPath);
@@ -401,35 +431,39 @@ public class PendingOperations {
                         // Keep operation for potential retry
                         remaining.add(op);
                         continue;
-                    }
-                    
-                    // Delete old file if it exists
-                    if (old.exists()) {
-                        if (!old.delete()) {
-                            if (logger != null) {
-                                logger.log("Warning: Still cannot delete old file: " + op.sourcePath);
+                    } else {
+                        // Normal replace flow
+                        // Delete old file if it exists
+                        if (old.exists()) {
+                            if (!old.delete()) {
+                                if (logger != null) {
+                                    logger.log("Warning: Still cannot delete old file: " + op.sourcePath);
+                                }
+                                // Can't complete - keep for next run
+                                remaining.add(op);
+                                continue;
                             }
-                            // Can't complete - keep for next run
-                            remaining.add(op);
-                            continue;
                         }
-                    }
-                    
-                    // Move staged file to target
-                    try {
-                        FileUtils.atomicMoveWithRetries(staged, target, 3, 100);
-                        if (logger != null) {
-                            logger.log("Completed pending replace: " + op.sourcePath + " -> " + op.targetPath);
-                        }
-                        success = true;
-                    } catch (Exception e) {
-                        if (logger != null) {
-                            logger.log("Warning: Cannot move staged file to target: " + e.getMessage());
+                        
+                        // Move staged file to target
+                        try {
+                            FileUtils.atomicMoveWithRetries(staged, target, 3, 100);
+                            if (logger != null) {
+                                String reasonMsg = op.reason != null ? " (reason: " + op.reason + ")" : "";
+                                logger.log("Completed pending replace: " + op.sourcePath + " -> " + op.targetPath + reasonMsg);
+                            }
+                            success = true;
+                        } catch (Exception e) {
+                            if (logger != null) {
+                                logger.log("Warning: Cannot move staged file to target: " + e.getMessage());
+                            }
                         }
                     }
                 }
                 
                 if (success) {
+                    // Mark operation as executed
+                    op.executedTimestamp = System.currentTimeMillis();
                     completed++;
                 } else {
                     // Keep for next run

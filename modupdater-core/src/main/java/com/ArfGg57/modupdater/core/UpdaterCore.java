@@ -724,8 +724,17 @@ public class UpdaterCore {
                         gui.show("Removing old version: " + f.getPath());
                         FileUtils.backupPathTo(f, backupRoot);
                         
-                        // Try to delete with fallback to pending operations
-                        if (!pendingOps.deleteWithFallback(f)) {
+                        // If early phase completed, try immediate deletion with retries
+                        boolean deleted = false;
+                        if (ModUpdaterLifecycle.wasEarlyPhaseCompleted()) {
+                            deleted = tryDeleteWithRetries(f, 3, 500);
+                            if (deleted) {
+                                gui.show("Successfully deleted old version immediately (post-early-phase)");
+                            }
+                        }
+                        
+                        // If not deleted yet, use fallback to pending operations
+                        if (!deleted && !pendingOps.deleteWithFallback(f)) {
                             gui.show("File locked, will retry on next startup");
                         }
                     }
@@ -737,8 +746,17 @@ public class UpdaterCore {
                                 gui.show("Backing up existing target file: " + target.getPath());
                                 FileUtils.backupPathTo(target, backupRoot);
                                 
-                                // Try to delete with fallback to pending operations
-                                if (!pendingOps.deleteWithFallback(target)) {
+                                // If early phase completed, try immediate deletion with retries
+                                boolean deleted = false;
+                                if (ModUpdaterLifecycle.wasEarlyPhaseCompleted()) {
+                                    deleted = tryDeleteWithRetries(target, 3, 500);
+                                    if (deleted) {
+                                        gui.show("Successfully deleted target file immediately (post-early-phase)");
+                                    }
+                                }
+                                
+                                // If not deleted yet, use fallback to pending operations
+                                if (!deleted && !pendingOps.deleteWithFallback(target)) {
                                     gui.show("File locked, will retry on next startup");
                                 }
                             } else {
