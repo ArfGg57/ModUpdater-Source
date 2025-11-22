@@ -193,11 +193,14 @@ public class ModUpdaterDeferredCrash {
     /**
      * Schedules the deferred crash to execute outside the event handler context.
      * This is critical because exceptions thrown from within event handlers are
-     * caught and suppressed by Forge's event bus.
+     * caught and suppressed by Forge's event bus. The scheduled task executes
+     * on the next main thread tick after the event handler completes.
      * 
      * @param currentScreen The current GUI screen (may be null)
      */
     private void executeCrash(final GuiScreen currentScreen) {
+        // Mark as executed to prevent re-entry (flag is set before actual execution
+        // to prevent scheduling the crash multiple times from subsequent ticks)
         crashExecuted = true;
         
         System.out.println("[ModUpdaterDeferredCrash] ========================================");
@@ -212,10 +215,7 @@ public class ModUpdaterDeferredCrash {
             // Ignore unregister errors
         }
         
-        // Schedule the crash to happen OUTSIDE the event handler context
-        // This is crucial: Minecraft.addScheduledTask runs the task on the main thread
-        // but AFTER the current event handler completes, so the exception won't be caught
-        // by Forge's event bus error handling
+        // Execute crash outside event handler to avoid suppression by event bus
         Minecraft.getMinecraft().addScheduledTask(new Runnable() {
             @Override
             public void run() {
