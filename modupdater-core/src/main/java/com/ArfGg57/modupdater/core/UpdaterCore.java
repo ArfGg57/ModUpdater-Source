@@ -7,6 +7,7 @@ import com.ArfGg57.modupdater.metadata.ModMetadata;
 import com.ArfGg57.modupdater.resolver.FilenameResolver;
 import com.ArfGg57.modupdater.util.FileUtils;
 import com.ArfGg57.modupdater.ui.GuiUpdater;
+import com.ArfGg57.modupdater.ui.RestartRequiredDialog;
 import com.ArfGg57.modupdater.restart.CrashUtils;
 
 import org.json.JSONArray;
@@ -810,8 +811,7 @@ public class UpdaterCore {
                 gui.show("Launching cleanup helper process to show dialog after crash...");
                 
                 // Launch the cleanup helper process that will show the styled dialog after crash
-                String message = "A restart was required for this modpack update. Please relaunch the game.";
-                CrashUtils.launchRestartCleanupHelper(pendingDeletes, message);
+                CrashUtils.launchRestartCleanupHelper(pendingDeletes, RestartRequiredDialog.RESTART_MESSAGE);
                 
                 // Write locked file list for crash report
                 String listFile = CrashUtils.writeLockedFileList(pendingDeletes);

@@ -17,6 +17,9 @@ import java.util.List;
  */
 public class RestartRequiredDialog {
     
+    // Message constant
+    public static final String RESTART_MESSAGE = "A restart was required for this modpack update, please relaunch the game.";
+    
     // UI Constants matching other dialogs
     private static final Color COLOR_BG = new Color(34, 37, 45);
     private static final Color COLOR_TEXT_PRIMARY = new Color(220, 220, 220);
@@ -100,8 +103,7 @@ public class RestartRequiredDialog {
         centerPanel.setOpaque(false);
         
         // Message
-        JLabel messageLabel = new JLabel("<html><center>A restart was required for this modpack update,<br>" +
-                                         "please relaunch the game.</center></html>");
+        JLabel messageLabel = new JLabel("<html><center>" + RESTART_MESSAGE.replace(", please", ",<br>please") + "</center></html>");
         messageLabel.setFont(FONT_BODY);
         messageLabel.setForeground(COLOR_TEXT_PRIMARY);
         messageLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
