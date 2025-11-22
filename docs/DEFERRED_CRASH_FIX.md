@@ -291,7 +291,6 @@ Modify `CRASH_DELAY_TICKS` constant in source (default: 3 ticks ≈ 150ms)
 - Verify event bus unregister is working
 
 ## Debug Logging Reference
-## Debug Logging Reference
 
 The implementation includes debug logging to help diagnose issues:
 

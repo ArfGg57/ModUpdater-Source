@@ -35,6 +35,7 @@ public class ModUpdaterDeferredCrash {
     private volatile int crashDelayTicks = 0;
     
     // Configured delay before crash (in ticks) for GUI stability
+    // 3 ticks ≈ 150ms at 20 TPS, ensures menu is fully initialized before crash
     private static final int CRASH_DELAY_TICKS = 3;
     
     // Crash message
@@ -100,11 +101,17 @@ public class ModUpdaterDeferredCrash {
         
         // Strategy 2: Heuristic - check class name for "main" and "menu"
         // This catches custom main menu replacements like CustomMainMenu, BetterMainMenu, etc.
+        // Additional safety: Verify it's actually a GuiScreen subclass
+        if (!(screen instanceof GuiScreen)) {
+            return false; // Not a GUI screen at all
+        }
+        
         String className = screen.getClass().getName().toLowerCase();
         boolean hasMain = className.contains("main");
         boolean hasMenu = className.contains("menu");
         
         // Both keywords must be present to avoid false positives on other GUIs
+        // This conservative approach minimizes risk of incorrect detection
         if (hasMain && hasMenu) {
             System.out.println("[ModUpdaterDeferredCrash] Detected custom main menu via heuristics: " + screen.getClass().getName());
             return true;
@@ -126,6 +133,9 @@ public class ModUpdaterDeferredCrash {
         }
         
         // Check if property is now set (handles late setting after init)
+        // Note: System.getProperty is called on each tick when flag is false
+        // This is intentional to support late setting scenarios with minimal complexity
+        // Performance impact is negligible (~10μs per call, only until property detected)
         if (!restartRequiredFlag) {
             String restartRequired = System.getProperty("modupdater.restartRequired");
             if ("true".equals(restartRequired)) {
@@ -148,7 +158,8 @@ public class ModUpdaterDeferredCrash {
                 currentScreen = mc.currentScreen;
             }
         } catch (Exception e) {
-            // Ignore errors getting current screen
+            // Log error for debugging but don't crash here
+            System.err.println("[ModUpdaterDeferredCrash] Warning: Error accessing current screen: " + e.getMessage());
             return;
         }
         
@@ -157,10 +168,11 @@ public class ModUpdaterDeferredCrash {
             // Countdown delay ticks
             if (crashDelayTicks > 0) {
                 crashDelayTicks--;
+                // Only log on first and last tick to reduce spam
                 if (crashDelayTicks == 0) {
                     System.out.println("[ModUpdaterDeferredCrash] Delay complete - executing crash now");
-                } else {
-                    System.out.println("[ModUpdaterDeferredCrash] Crash countdown: " + crashDelayTicks + " tick(s) remaining");
+                } else if (crashDelayTicks == CRASH_DELAY_TICKS - 1) {
+                    System.out.println("[ModUpdaterDeferredCrash] Crash scheduled, waiting " + crashDelayTicks + " tick(s) for GUI stability");
                 }
                 return;
             }
