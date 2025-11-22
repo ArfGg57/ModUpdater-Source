@@ -101,11 +101,6 @@ public class ModUpdaterDeferredCrash {
         
         // Strategy 2: Heuristic - check class name for "main" and "menu"
         // This catches custom main menu replacements like CustomMainMenu, BetterMainMenu, etc.
-        // Additional safety: Verify it's actually a GuiScreen subclass
-        if (!(screen instanceof GuiScreen)) {
-            return false; // Not a GUI screen at all
-        }
-        
         String className = screen.getClass().getName().toLowerCase();
         boolean hasMain = className.contains("main");
         boolean hasMenu = className.contains("menu");
@@ -167,12 +162,13 @@ public class ModUpdaterDeferredCrash {
         if (crashScheduled) {
             // Countdown delay ticks
             if (crashDelayTicks > 0) {
+                // Log before decrement for accuracy
+                if (crashDelayTicks == CRASH_DELAY_TICKS) {
+                    System.out.println("[ModUpdaterDeferredCrash] Crash scheduled, waiting " + crashDelayTicks + " tick(s) for GUI stability");
+                }
                 crashDelayTicks--;
-                // Only log on first and last tick to reduce spam
                 if (crashDelayTicks == 0) {
                     System.out.println("[ModUpdaterDeferredCrash] Delay complete - executing crash now");
-                } else if (crashDelayTicks == CRASH_DELAY_TICKS - 1) {
-                    System.out.println("[ModUpdaterDeferredCrash] Crash scheduled, waiting " + crashDelayTicks + " tick(s) for GUI stability");
                 }
                 return;
             }
