@@ -4,7 +4,7 @@
     "name": "ModUpdater",
     "description": "Automatic modpack updater that manages mod downloads, updates, and cleanup. Appears in the Forge mods list to enforce restart when locked files prevent deletion.",
     "version": "2.20",
-    "mcversion": "1.7.10",
+    "mcversion": "*",
     "url": "",
     "updateUrl": "",
     "authorList": ["ArfGg57"],

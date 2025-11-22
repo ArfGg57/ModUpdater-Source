@@ -76,7 +76,7 @@ public final class RestartEnforcer {
                 }
             }, "ModUpdater-RestartEnforcer");
             
-            exitThread.setDaemon(false); // Ensure it doesn't prevent JVM exit
+            exitThread.setDaemon(false); // Ensure thread completes before JVM exits
             exitThread.start();
         } else {
             System.out.println("[ModUpdater] Cleanup attempted during init phase. Exit will be deferred to post-init.");
