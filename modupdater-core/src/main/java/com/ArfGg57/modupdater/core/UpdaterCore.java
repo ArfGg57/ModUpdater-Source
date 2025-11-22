@@ -818,6 +818,10 @@ public class UpdaterCore {
                 System.setProperty("modupdater.restartRequired", "true");
                 System.setProperty("modupdater.lockedFilesListFile", listFile);
                 System.setProperty("modupdater.restartMessage", "Modpack update requires a restart. Locked files will be removed.");
+                
+                // Debug logging to verify property is set (using System.out for debug, not gui)
+                System.out.println("[ModUpdater] DEBUG: System property 'modupdater.restartRequired' set to: " + System.getProperty("modupdater.restartRequired"));
+                System.out.println("[ModUpdater] DEBUG: Locked files count: " + pendingDeletes.size());
             }
 
         } catch (Error e) {
