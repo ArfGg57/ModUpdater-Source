@@ -23,6 +23,7 @@ repositories {
 
 dependencies {
     implementation project(':modupdater-core')
+    implementation project(':modupdater-standalone') // include deferred crash mod classes in fat jar
     implementation 'net.minecraft:launchwrapper:1.12'
     // Use the forgeSrc jar from libs for compile-time. Change to compileOnly if you ONLY need compile-time
     implementation files('libs/forgeSrc-1.7.10-10.13.4.1614-1.7.10.jar')
@@ -30,25 +31,25 @@ dependencies {
     // implementation fg.deobf(files('libs/forgeSrc-1.7.10-10.13.4.1614-1.7.10.jar'))
 }
 
-// Build a fat jar by including all compile-time dependencies' contents.
-// This jar will include your UpdaterTweaker and the modupdater-core classes and json lib.
+// Simple jar (only module classes)
 jar {
     manifest {
         attributes(
-                'Implementation-Title': archivesBaseName,
-                'Implementation-Version': version,
-                'TweakClass': 'com.ArfGg57.modupdater.tweak.UpdaterTweaker', // used by LaunchWrapper
-                'FMLCorePlugin': 'com.ArfGg57.modupdater.coremod.ModUpdaterCoremod',
-                'FMLCorePluginContainsFMLMod': 'true',
-                'ForceLoadAsMod': 'true'
+            'Implementation-Title': archivesBaseName,
+            'Implementation-Version': version,
+            'TweakClass': 'com.ArfGg57.modupdater.tweak.UpdaterTweaker'
         )
     }
-
+    // Embed all required classes directly (fat jar)
+    from { sourceSets.main.output }
+    from { project(':modupdater-core').sourceSets.main.output }
+    from { project(':modupdater-standalone').sourceSets.main.output }
+    // Unpack third-party dependency jars (e.g., json) but skip ForgeSrc (already provided by environment)
     from {
-        // Unpack and include dependency jars and class files
-        configurations.runtimeClasspath.collect { zipTree(it) }
+        configurations.runtimeClasspath
+            .filter { !(it.name =~ /forgeSrc-.*\.jar/) }
+            .collect { it.isDirectory() ? it : zipTree(it) }
     }
-
-    // Exclude signature files to avoid JAR signature issues
-    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    exclude 'META-INF/*.SF','META-INF/*.DSA','META-INF/*.RSA'
 }

@@ -120,20 +120,9 @@ public class ModUpdater {
     
     @SubscribeEvent
     public void onClientTick(TickEvent.ClientTickEvent event) {
-        // Only check on the END phase to ensure we're in a safe context
-        if (event.phase != TickEvent.Phase.END) {
-            return;
-        }
-        
-        // If crash already executed, nothing to do
-        if (crashExecuted) {
-            return;
-        }
-        
-        // Check if property is now set (handles late setting after init)
-        // Note: System.getProperty is called on each tick when flag is false
-        // This is intentional to support late setting scenarios with minimal complexity
-        // Performance impact is negligible (~10 microseconds per call, only until property detected)
+        if (event.phase != TickEvent.Phase.END) return;
+        if (crashExecuted) return;
+
         if (!restartRequiredFlag) {
             String restartRequired = System.getProperty("modupdater.restartRequired");
             if ("true".equals(restartRequired)) {
@@ -142,132 +131,72 @@ public class ModUpdater {
                 crashMessage = "ModUpdater deferred crash trigger. Restart required due to locked files.";
             }
         }
-        
-        // If restart is not required, nothing to do - just continue monitoring silently
-        if (!restartRequiredFlag) {
-            return;
-        }
-        
-        // Get current screen
+        if (!restartRequiredFlag) return;
+
         GuiScreen currentScreen = null;
         try {
             Minecraft mc = Minecraft.getMinecraft();
-            if (mc != null) {
-                currentScreen = mc.currentScreen;
-            }
+            if (mc != null) currentScreen = mc.currentScreen;
         } catch (Exception e) {
-            // Log error for debugging but don't crash here
             System.err.println("[ModUpdater] Warning: Error accessing current screen: " + e.getMessage());
             return;
         }
-        
-        // Check if crash is already scheduled
+
         if (crashScheduled) {
-            // Countdown delay ticks
             if (crashDelayTicks > 0) {
-                // Log before decrement for accuracy
                 if (crashDelayTicks == CRASH_DELAY_TICKS) {
                     System.out.println("[ModUpdater] Crash scheduled, waiting " + crashDelayTicks + " tick(s) for GUI stability");
                 }
                 crashDelayTicks--;
                 if (crashDelayTicks == 0) {
                     System.out.println("[ModUpdater] Delay complete - executing crash now");
+                    performCrash(currentScreen);
                 }
-                return;
-            }
-            
-            // Delay is complete - execute crash
-            if (!crashExecuted) {
-                executeCrash(currentScreen);
             }
             return;
         }
-        
-        // Not yet scheduled - check if we should schedule
+
         if (isMainMenuScreen(currentScreen)) {
-            System.out.println("[ModUpdater] Main menu detected: " + 
-                (currentScreen != null ? currentScreen.getClass().getName() : "null"));
+            System.out.println("[ModUpdater] Main menu detected: " + (currentScreen != null ? currentScreen.getClass().getName() : "null"));
             System.out.println("[ModUpdater] Scheduling crash with " + CRASH_DELAY_TICKS + " tick delay for GUI stability");
             crashScheduled = true;
             crashDelayTicks = CRASH_DELAY_TICKS;
         }
     }
-    
-    /**
-     * Schedules the deferred crash to execute outside the event handler context.
-     * This is critical because exceptions thrown from within event handlers are
-     * caught and suppressed by Forge's event bus. The scheduled task executes
-     * on the next main thread tick after the event handler completes.
-     * 
-     * @param currentScreen The current GUI screen (may be null)
-     */
-    private void executeCrash(final GuiScreen currentScreen) {
-        // Mark as executed to prevent re-entry (flag is set before actual execution
-        // to prevent scheduling the crash multiple times from subsequent ticks)
+
+    private void performCrash(final GuiScreen currentScreen) {
         crashExecuted = true;
-        
+        try { MinecraftForge.EVENT_BUS.unregister(this); } catch (Exception ignored) {}
+
         System.out.println("[ModUpdater] ========================================");
-        System.out.println("[ModUpdater] SCHEDULING DEFERRED CRASH");
+        System.out.println("[ModUpdater] EXECUTING DEFERRED CRASH (direct)");
         System.out.println("[ModUpdater] ========================================");
-        
-        // Unregister the event listener to prevent any further events
+
+        RuntimeException cause = new RuntimeException(crashMessage);
+        CrashReport report = CrashReport.makeCrashReport(cause, "ModUpdater forced Forge crash");
         try {
-            MinecraftForge.EVENT_BUS.unregister(this);
-            System.out.println("[ModUpdater] Event listener unregistered");
-        } catch (Exception e) {
-            // Ignore unregister errors
-        }
-        
-        // Execute crash outside event handler to avoid suppression by event bus
-        Minecraft.getMinecraft().addScheduledTask(new Runnable() {
-            @Override
-            public void run() {
-                System.out.println("[ModUpdater] EXECUTING CRASH (outside event handler)");
-                
-                RuntimeException cause = new RuntimeException(crashMessage);
-                CrashReport report = CrashReport.makeCrashReport(cause, "ModUpdater forced Forge crash");
-                
-                // Add enriched details section
-                try {
-                    report.getCategory().addCrashSection("ModUpdater Deferred Crash Details", "");
-                    
-                    // Property value at crash time
-                    String restartProp = System.getProperty("modupdater.restartRequired", "null");
-                    report.getCategory().addCrashSection("RestartRequiredProperty", restartProp);
-                    
-                    // Menu class name
-                    String menuClass = (currentScreen != null) ? currentScreen.getClass().getName() : "null";
-                    report.getCategory().addCrashSection("MenuClass", menuClass);
-                    
-                    // Delay ticks used
-                    report.getCategory().addCrashSection("DelayTicksUsed", String.valueOf(CRASH_DELAY_TICKS));
-                    
-                    // Timestamp
-                    report.getCategory().addCrashSection("CrashTimestamp", new java.util.Date().toString());
-                    
-                    // Include locked files list if present
-                    String listPath = System.getProperty("modupdater.lockedFilesListFile", "");
-                    boolean lockedFilesPresent = false;
-                    if (!listPath.isEmpty()) {
-                        java.nio.file.Path p = java.nio.file.Paths.get(listPath);
-                        if (java.nio.file.Files.exists(p)) {
-                            lockedFilesPresent = true;
-                            java.util.List<String> lines = java.nio.file.Files.readAllLines(p, java.nio.charset.StandardCharsets.UTF_8);
-                            report.getCategory().addCrashSection("ModUpdater Locked Files", String.join("\n", lines));
-                        }
-                    }
-                    report.getCategory().addCrashSection("LockedFilesPresent", String.valueOf(lockedFilesPresent));
-                    
-                } catch (Throwable t) {
-                    // ignore report enrichment errors
-                    System.err.println("[ModUpdater] Warning: Failed to enrich crash report: " + t.getMessage());
+            report.getCategory().addCrashSection("ModUpdater Deferred Crash Details", "");
+            String restartProp = System.getProperty("modupdater.restartRequired", "null");
+            report.getCategory().addCrashSection("RestartRequiredProperty", restartProp);
+            String menuClass = (currentScreen != null) ? currentScreen.getClass().getName() : "null";
+            report.getCategory().addCrashSection("MenuClass", menuClass);
+            report.getCategory().addCrashSection("DelayTicksUsed", String.valueOf(CRASH_DELAY_TICKS));
+            report.getCategory().addCrashSection("CrashTimestamp", new java.util.Date().toString());
+            String listPath = System.getProperty("modupdater.lockedFilesListFile", "");
+            boolean lockedFilesPresent = false;
+            if (!listPath.isEmpty()) {
+                java.nio.file.Path p = java.nio.file.Paths.get(listPath);
+                if (java.nio.file.Files.exists(p)) {
+                    lockedFilesPresent = true;
+                    java.util.List<String> lines = java.nio.file.Files.readAllLines(p, java.nio.charset.StandardCharsets.UTF_8);
+                    report.getCategory().addCrashSection("ModUpdater Locked Files", String.join("\n", lines));
                 }
-                
-                System.out.println("[ModUpdater] About to throw ReportedException for restart required");
-                throw new ReportedException(report);
             }
-        });
-        
-        System.out.println("[ModUpdater] Crash scheduled successfully - will execute after event handler completes");
+            report.getCategory().addCrashSection("LockedFilesPresent", String.valueOf(lockedFilesPresent));
+        } catch (Throwable t) {
+            System.err.println("[ModUpdater] Warning: Failed to enrich crash report: " + t.getMessage());
+        }
+        System.out.println("[ModUpdater] Throwing ReportedException now");
+        throw new ReportedException(report);
     }
 }
