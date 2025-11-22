@@ -1,7 +1,7 @@
 [{
   "modid":"modupdater",
   "name":"ModUpdater",
-  "description":"Automatic modpack updater that manages mod downloads and handles restart requirements.",
+  "description":"Automatic modpack updater that manages mod downloads and enforces restart via Forge crash when locked files prevent update completion.",
   "version":"2.20",
   "mcversion":"1.7.10",
   "url":"",
