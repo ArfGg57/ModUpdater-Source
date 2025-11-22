@@ -1,8 +1,8 @@
 [
   {
-    "modid": "modupdater",
-    "name": "ModUpdater",
-    "description": "Automatic modpack updater that manages mod downloads.",
+    "modid": "modupdater-tweaker",
+    "name": "ModUpdater Tweaker",
+    "description": "ModUpdater tweaker component - runs before Minecraft loads.",
     "version": "2.20",
     "mcversion": "*",
     "url": "",

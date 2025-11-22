@@ -5,14 +5,14 @@ import cpw.mods.fml.common.event.FMLInitializationEvent;
 import cpw.mods.fml.common.event.FMLPostInitializationEvent;
 
 /**
- * Forge mod container for ModUpdater.
+ * Forge mod container for ModUpdater Tweaker.
  * Provides lifecycle hooks to process restart requirements.
  */
 @Mod(modid = ModUpdaterMod.MODID, name = ModUpdaterMod.NAME, version = ModUpdaterMod.VERSION, acceptedMinecraftVersions = "*")
 public class ModUpdaterMod {
     
-    public static final String MODID = "modupdater";
-    public static final String NAME = "ModUpdater";
+    public static final String MODID = "modupdater-tweaker";
+    public static final String NAME = "ModUpdater Tweaker";
     public static final String VERSION = "2.20";
     
     /**
