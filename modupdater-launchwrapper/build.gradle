@@ -43,7 +43,10 @@ jar {
     // Embed all required classes directly (fat jar)
     from { sourceSets.main.output }
     from { project(':modupdater-core').sourceSets.main.output }
-    from { project(':modupdater-standalone').sourceSets.main.output }
+    // Include standalone module classes but exclude its mcmod.info to avoid conflicts
+    from (project(':modupdater-standalone').sourceSets.main.output) {
+        exclude 'mcmod.info'
+    }
     // Unpack third-party dependency jars (e.g., json) but skip ForgeSrc (already provided by environment)
     from {
         configurations.runtimeClasspath
