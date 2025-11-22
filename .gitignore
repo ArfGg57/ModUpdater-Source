@@ -37,3 +37,6 @@
 
 # Compiled class files
 *.class
+
+# Deprecated files
+*.deprecated

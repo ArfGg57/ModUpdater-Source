@@ -1,21 +1,8 @@
 [{
   "modid":"modupdater",
   "name":"Mod Updater",
-  "description":"Automatically downloads mods/configs before other mods initialize.",
+  "description":"Automatically downloads mods/configs before other mods initialize. Includes deferred crash handling for locked files.",
   "version":"1.1",
-  "mcversion":"1.7.10",
-  "url":"",
-  "authorList": ["You"],
-  "credits":"",
-  "logoFile":"",
-  "screenshots":[],
-  "dependencies":[]
-},
-{
-  "modid":"modupdaterdeferredcrash",
-  "name":"ModUpdater Deferred Crash",
-  "description":"Crashes the game when ModUpdater detects locked files that require a restart.",
-  "version":"1.0",
   "mcversion":"1.7.10",
   "url":"",
   "authorList": ["You"],
