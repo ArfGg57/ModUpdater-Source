@@ -72,39 +72,34 @@ public class ModUpdaterDeferredCrash {
     @SubscribeEvent
     public void onClientTick(TickEvent.ClientTickEvent event) {
         // Only check on the end of a tick to ensure we're in a safe context
-        if (event.phase == TickEvent.Phase.END) {
-            // Check both flags atomically by reading them into local variables
-            boolean shouldCrash = shouldCrashOnMenu;
-            boolean menuShown = menuDetected;
+        // Both flags are checked in a single if statement to avoid race conditions
+        if (event.phase == TickEvent.Phase.END && menuDetected && shouldCrashOnMenu) {
+            System.out.println("[ModUpdaterDeferredCrash] Triggering deferred crash from tick event");
+            shouldCrashOnMenu = false; // Prevent multiple crashes
+            menuDetected = false;
             
-            if (shouldCrash && menuShown) {
-                System.out.println("[ModUpdaterDeferredCrash] Triggering deferred crash from tick event");
-                shouldCrashOnMenu = false; // Prevent multiple crashes
-                menuDetected = false;
-                
-                // Unregister the event listener to prevent any further events
-                MinecraftForge.EVENT_BUS.unregister(this);
-                
-                RuntimeException cause = new RuntimeException(crashMessage);
-                CrashReport report = CrashReport.makeCrashReport(cause, "ModUpdater forced Forge crash");
-                
-                // Include locked files list contents in crash report detail section if present
-                try {
-                    String listPath = System.getProperty("modupdater.lockedFilesListFile", "");
-                    if (!listPath.isEmpty()) {
-                        java.nio.file.Path p = java.nio.file.Paths.get(listPath);
-                        if (java.nio.file.Files.exists(p)) {
-                            java.util.List<String> lines = java.nio.file.Files.readAllLines(p, java.nio.charset.StandardCharsets.UTF_8);
-                            report.getCategory().addCrashSection("ModUpdater Locked Files", String.join("\n", lines));
-                        }
+            // Unregister the event listener to prevent any further events
+            MinecraftForge.EVENT_BUS.unregister(this);
+            
+            RuntimeException cause = new RuntimeException(crashMessage);
+            CrashReport report = CrashReport.makeCrashReport(cause, "ModUpdater forced Forge crash");
+            
+            // Include locked files list contents in crash report detail section if present
+            try {
+                String listPath = System.getProperty("modupdater.lockedFilesListFile", "");
+                if (!listPath.isEmpty()) {
+                    java.nio.file.Path p = java.nio.file.Paths.get(listPath);
+                    if (java.nio.file.Files.exists(p)) {
+                        java.util.List<String> lines = java.nio.file.Files.readAllLines(p, java.nio.charset.StandardCharsets.UTF_8);
+                        report.getCategory().addCrashSection("ModUpdater Locked Files", String.join("\n", lines));
                     }
-                } catch (Throwable t) {
-                    // ignore report enrichment errors
                 }
-                
-                System.out.println("[ModUpdaterDeferredCrash] About to throw ReportedException for restart required");
-                throw new ReportedException(report);
+            } catch (Throwable t) {
+                // ignore report enrichment errors
             }
+            
+            System.out.println("[ModUpdaterDeferredCrash] About to throw ReportedException for restart required");
+            throw new ReportedException(report);
         }
     }
 }
