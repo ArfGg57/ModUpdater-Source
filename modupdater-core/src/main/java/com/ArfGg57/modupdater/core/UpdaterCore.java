@@ -808,12 +808,17 @@ public class UpdaterCore {
             // Check if there are any pending deletes (files that were locked)
             if (!pendingDeletes.isEmpty()) {
                 gui.show("Some files could not be deleted and require a restart. Deferring Forge crash until mod init.");
+                
+                // Write persistent restart artifacts that will survive JVM restart
+                CrashUtils.writePersistentLockedFileList(pendingDeletes);
+                CrashUtils.writeRestartFlag("Modpack update requires a restart. Locked files will be removed on next launch.");
+                
                 gui.show("Launching cleanup helper process to show dialog after crash...");
                 
-                // Launch the cleanup helper process that will show the styled dialog after crash
+                // Launch the cleanup helper process that will show the styled dialog after crash (keep for compatibility)
                 CrashUtils.launchRestartCleanupHelper(pendingDeletes, RestartRequiredDialog.RESTART_MESSAGE);
                 
-                // Write locked file list for crash report
+                // Write locked file list for crash report (keep for compatibility)
                 String listFile = CrashUtils.writeLockedFileList(pendingDeletes);
                 System.setProperty("modupdater.restartRequired", "true");
                 System.setProperty("modupdater.lockedFilesListFile", listFile);
