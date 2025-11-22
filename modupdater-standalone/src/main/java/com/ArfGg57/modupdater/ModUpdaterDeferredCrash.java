@@ -63,7 +63,7 @@ public class ModUpdaterDeferredCrash {
     
     @SubscribeEvent
     public void onGuiOpen(GuiOpenEvent event) {
-        if (shouldCrashOnMenu && event.gui instanceof GuiMainMenu) {
+        if (shouldCrashOnMenu && event.gui != null && event.gui instanceof GuiMainMenu) {
             System.out.println("[ModUpdaterDeferredCrash] Main menu detected in GuiOpenEvent - setting flag for crash");
             menuDetected = true;
         }
