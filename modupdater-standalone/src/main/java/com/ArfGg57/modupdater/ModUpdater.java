@@ -13,7 +13,7 @@ import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.crash.CrashReport;
 import net.minecraft.util.ReportedException;
 
-@Mod(modid = "modupdater", name = "Mod Updater", version = "1.1")
+@Mod(modid = "modupdater", name = "ModUpdater", version = "2.20")
 public class ModUpdater {
 
     // Internal flag tracking if restart is required (set once, never cleared until crash)
