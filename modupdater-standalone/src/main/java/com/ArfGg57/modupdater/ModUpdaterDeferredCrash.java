@@ -3,6 +3,7 @@ package com.ArfGg57.modupdater;
 import cpw.mods.fml.common.Mod;
 import cpw.mods.fml.common.event.FMLInitializationEvent;
 import cpw.mods.fml.common.eventhandler.SubscribeEvent;
+import cpw.mods.fml.common.gameevent.TickEvent;
 import net.minecraftforge.client.event.GuiOpenEvent;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraft.client.gui.GuiMainMenu;
@@ -19,6 +20,7 @@ public class ModUpdaterDeferredCrash {
 
     private volatile boolean shouldCrashOnMenu = false;
     private volatile String crashMessage = "";
+    private volatile boolean menuDetected = false;
 
     @Mod.EventHandler
     public void init(FMLInitializationEvent evt) {
@@ -47,13 +49,13 @@ public class ModUpdaterDeferredCrash {
         
         // Handle deferred crash for restart required - wait until main menu
         if ("true".equals(restartRequired)) {
-            System.out.println("[ModUpdaterDeferredCrash] Restart required - registering GUI event listener for menu crash");
+            System.out.println("[ModUpdaterDeferredCrash] Restart required - registering event listeners for menu crash");
             shouldCrashOnMenu = true;
             crashMessage = "ModUpdater deferred crash trigger. Restart required due to locked files.";
             
-            // Register this instance as an event listener
+            // Register this instance as an event listener for both GUI and tick events
             MinecraftForge.EVENT_BUS.register(this);
-            System.out.println("[ModUpdaterDeferredCrash] Event listener registered, will crash when main menu opens");
+            System.out.println("[ModUpdaterDeferredCrash] Event listeners registered, will crash when main menu opens");
         } else {
             System.out.println("[ModUpdaterDeferredCrash] No crash needed - continuing normal initialization");
         }
@@ -61,9 +63,20 @@ public class ModUpdaterDeferredCrash {
     
     @SubscribeEvent
     public void onGuiOpen(GuiOpenEvent event) {
-        if (shouldCrashOnMenu && event.gui != null && event.gui instanceof GuiMainMenu) {
-            System.out.println("[ModUpdaterDeferredCrash] Main menu detected - triggering deferred crash");
+        if (event.gui != null && shouldCrashOnMenu && event.gui instanceof GuiMainMenu) {
+            System.out.println("[ModUpdaterDeferredCrash] Main menu detected in GuiOpenEvent - setting flag for crash");
+            menuDetected = true;
+        }
+    }
+    
+    @SubscribeEvent
+    public void onClientTick(TickEvent.ClientTickEvent event) {
+        // Only check on the end of a tick to ensure we're in a safe context
+        // Both flags are checked in a single if statement to avoid race conditions
+        if (event.phase == TickEvent.Phase.END && menuDetected && shouldCrashOnMenu) {
+            System.out.println("[ModUpdaterDeferredCrash] Triggering deferred crash from tick event");
             shouldCrashOnMenu = false; // Prevent multiple crashes
+            menuDetected = false;
             
             // Unregister the event listener to prevent any further events
             MinecraftForge.EVENT_BUS.unregister(this);
