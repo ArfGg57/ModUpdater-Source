@@ -22,5 +22,5 @@
   "credits":"",
   "logoFile":"",
   "screenshots":[],
-  "dependencies":["modupdater"]
+  "dependencies":[]
 }]
