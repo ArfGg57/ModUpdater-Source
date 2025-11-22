@@ -2,7 +2,7 @@
   {
     "modid": "modupdater-tweaker",
     "name": "ModUpdater Tweaker",
-    "description": "ModUpdater tweaker component - runs before Minecraft loads.",
+    "description": "ModUpdater tweaker component - runs before Minecraft loads. Enforces automatic restart via Forge crash when locked files prevent update completion.",
     "version": "2.20",
     "mcversion": "*",
     "url": "",

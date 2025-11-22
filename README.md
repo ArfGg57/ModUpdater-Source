@@ -8,6 +8,7 @@ A Forge 1.7.10 mod that automatically updates mods, configs, and files from a re
 - 📦 Config file synchronization with intelligent tracking
 - 🔍 Smart rename detection using SHA-256 hashes
 - 🔒 Robust file lock handling for Windows compatibility
+- 💥 **Automatic restart enforcement via Forge crash when locked files prevent update**
 - ✨ Clean, modern UI for update confirmations
 - 📊 Comprehensive logging and error handling
 - 🎯 **NEW:** Intelligent filename extension inference
@@ -23,6 +24,28 @@ A Forge 1.7.10 mod that automatically updates mods, configs, and files from a re
 ## Quick Start
 
 See [docs/QUICK_START.md](docs/QUICK_START.md) for setup instructions.
+
+## Building from Source
+
+See [BUILD_GUIDE.md](BUILD_GUIDE.md) for detailed build instructions, including:
+- Required Java version and tools
+- Gradle build commands
+- Which JAR to distribute (launchwrapper module)
+- Testing the crash/restart feature
+- Troubleshooting common build issues
+
+## Restart Enforcement
+
+When updates cannot complete due to locked files (common on Windows), ModUpdater automatically enforces a restart:
+
+1. **Detection**: UpdaterCore sets `modupdater.restartRequired=true` when files are locked
+2. **Deferred Crash**: After the main menu appears, ModUpdater triggers a Forge crash after a 3-tick delay
+3. **Crash Report**: Includes detailed information about locked files and restart reason
+4. **User Experience**: Clean Forge crash report explaining restart is needed
+
+This ensures users can't continue playing with outdated mods when updates fail. The crash uses only Forge 1.7.10 compatible APIs (tick events, CrashReport) - no reliance on newer Minecraft scheduling methods.
+
+See [BUILD_GUIDE.md](BUILD_GUIDE.md) for testing instructions and configuration options.
 
 ## New Features
 
