@@ -28,8 +28,8 @@ public class ModUpdaterDeferredCrash {
             System.out.println("[ModUpdaterDeferredCrash] Crash condition met - triggering Forge crash");
             StringBuilder crashMsg = new StringBuilder("ModUpdater deferred crash trigger. ");
             if (declineReason != null && !declineReason.trim().isEmpty()) {
-                // Sanitize declineReason to prevent any potential log injection
-                String sanitized = declineReason.replaceAll("[\\r\\n]", " ").trim();
+                // Sanitize declineReason to prevent any potential log injection or control characters
+                String sanitized = declineReason.replaceAll("[\\p{C}]", " ").trim();
                 crashMsg.append("User declined update (").append(sanitized).append("). ");
             }
             if ("true".equals(restartRequired)) crashMsg.append("Restart required due to locked files. ");
