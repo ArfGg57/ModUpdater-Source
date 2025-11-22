@@ -94,7 +94,7 @@ public class ManifestFetcher {
                 // If no separate hash file, we'll calculate it after download
                 if (sha256Hash == null) {
                     logger.log("No SHA256 hash file found, will verify after download");
-                    sha256Hash = ""; // Empty string indicates we need to calculate it
+                    sha256Hash = null; // Keep as null to indicate we need to calculate it
                 }
                 
                 return new UpdateManifest(

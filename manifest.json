@@ -1,4 +1,5 @@
 {
+  "_comment": "This is a template manifest. Replace placeholder values before deploying a release. See SELF_UPDATE.md for details.",
   "modUpdater": {
     "latest": "2.1.0",
     "download": {

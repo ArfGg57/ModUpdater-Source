@@ -76,7 +76,7 @@ public class SelfUpdateDownloader {
             logger.log("File size verified: " + downloadedFile.length() + " bytes");
         }
         
-        // Verify SHA-256 hash
+        // Verify SHA-256 hash if provided
         if (manifest.getSha256Hash() != null && !manifest.getSha256Hash().isEmpty()) {
             logger.log("Verifying SHA-256 hash...");
             String actualHash = HashUtils.sha256Hex(downloadedFile);
@@ -90,7 +90,8 @@ public class SelfUpdateDownloader {
             }
             logger.log("SHA-256 hash verified successfully");
         } else {
-            logger.log("Warning: No SHA-256 hash provided, skipping verification");
+            logger.log("Warning: No SHA-256 hash provided in manifest");
+            logger.log("For security, consider always providing SHA-256 hashes in releases");
         }
         
         // TODO: Verify signature if provided and required
@@ -123,6 +124,11 @@ public class SelfUpdateDownloader {
     
     /**
      * Verify a signature file (placeholder for future implementation)
+     * 
+     * Note: This method is reserved for future implementation of GPG/RSA signature verification.
+     * Currently not used. Will require adding a crypto library or using Java's built-in security APIs.
+     * 
+     * @return false (always, until implemented)
      */
     private boolean verifySignature(File jarFile, File signatureFile, File publicKeyFile) throws Exception {
         // TODO: Implement GPG/RSA signature verification

@@ -18,6 +18,9 @@ import java.util.List;
  */
 public class BootstrapInstaller {
     
+    // Configurable delay before starting update (in seconds)
+    private static final int BOOTSTRAP_DELAY_SECONDS = 5;
+    
     /**
      * Logger interface for output messages
      */
@@ -120,7 +123,7 @@ public class BootstrapInstaller {
         sb.append("echo Waiting for Minecraft to close...\n");
         sb.append("\n");
         sb.append("REM Wait a bit for the game to fully close\n");
-        sb.append("timeout /t 5 /nobreak >nul\n");
+        sb.append("timeout /t ").append(BOOTSTRAP_DELAY_SECONDS).append(" /nobreak >nul\n");
         sb.append("\n");
         sb.append("REM Backup current JAR\n");
         sb.append("if exist \"").append(currentJar.getAbsolutePath()).append("\" (\n");
@@ -183,7 +186,7 @@ public class BootstrapInstaller {
         sb.append("echo \"Waiting for Minecraft to close...\"\n");
         sb.append("\n");
         sb.append("# Wait a bit for the game to fully close\n");
-        sb.append("sleep 5\n");
+        sb.append("sleep ").append(BOOTSTRAP_DELAY_SECONDS).append("\n");
         sb.append("\n");
         sb.append("# Backup current JAR\n");
         sb.append("if [ -f \"").append(currentJar.getAbsolutePath()).append("\" ]; then\n");

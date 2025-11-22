@@ -29,6 +29,10 @@ public class SelfUpdateCoordinator {
     private static final String LAST_CHECK_FILE = CONFIG_DIR + "last_update_check.txt";
     private static final String STAGING_DIR = CONFIG_DIR + "staging/";
     
+    // Default fallback version - should match current release
+    // This is used when version cannot be determined from JAR manifest
+    private static final String FALLBACK_VERSION = "2.1.0";
+    
     /**
      * Logger interface for output messages
      */
@@ -73,7 +77,13 @@ public class SelfUpdateCoordinator {
             logger.log("Current ModUpdater version: " + currentVersion);
             
             // Fetch latest version manifest
-            ManifestFetcher fetcher = new ManifestFetcher(logger);
+            ManifestFetcher fetcher = new ManifestFetcher(
+                new ManifestFetcher.Logger() {
+                    public void log(String message) {
+                        logger.log(message);
+                    }
+                }
+            );
             UpdateManifest manifest = fetcher.fetchLatest(config);
             
             logger.log("Latest available version: " + manifest.getVersion());
@@ -107,19 +117,34 @@ public class SelfUpdateCoordinator {
                 stagingDir.mkdirs();
             }
             
-            SelfUpdateDownloader downloader = new SelfUpdateDownloader(logger, gui);
+            SelfUpdateDownloader downloader = new SelfUpdateDownloader(
+                new SelfUpdateDownloader.Logger() {
+                    public void log(String message) {
+                        logger.log(message);
+                    }
+                },
+                gui
+            );
             File newJar = downloader.downloadAndVerify(manifest, stagingDir);
             
             // Find current JAR location
             File currentJar = findCurrentJar();
             if (currentJar == null) {
                 logger.log("Warning: Could not locate current JAR, will perform clean install");
-                currentJar = new File("mods/!!!!!modupdater-2.20.jar"); // Default location
+                // Use pattern-based default location - the exclamation marks ensure early loading
+                // The actual version in filename doesn't matter as it will be replaced
+                currentJar = new File("mods/!!!!!modupdater.jar");
             }
             
             // Install bootstrap for next launch
             logger.log("Installing update bootstrap...");
-            BootstrapInstaller installer = new BootstrapInstaller(logger);
+            BootstrapInstaller installer = new BootstrapInstaller(
+                new BootstrapInstaller.Logger() {
+                    public void log(String message) {
+                        logger.log(message);
+                    }
+                }
+            );
             boolean success = installer.installBootstrap(currentJar, newJar, stagingDir);
             
             if (success) {
@@ -208,8 +233,8 @@ public class SelfUpdateCoordinator {
             return pkg.getImplementationVersion();
         }
         
-        // Default fallback version
-        return "2.1.0";
+        // Return fallback version constant
+        return FALLBACK_VERSION;
     }
     
     /**
@@ -351,7 +376,14 @@ public class SelfUpdateCoordinator {
     public static boolean executePendingUpdate(Logger logger) {
         try {
             File stagingDir = new File(STAGING_DIR);
-            return BootstrapInstaller.executeBootstrap(stagingDir, logger);
+            return BootstrapInstaller.executeBootstrap(
+                stagingDir, 
+                new BootstrapInstaller.Logger() {
+                    public void log(String message) {
+                        logger.log(message);
+                    }
+                }
+            );
         } catch (Exception e) {
             logger.log("Failed to execute pending update: " + e.getMessage());
             return false;
