@@ -1264,10 +1264,9 @@ public class ModConfirmationDialog {
             dialog.dispose();
         }
         
-        // Handle exit if user declined
+        // Handle exit if user declined (no direct termination here; tweaker will crash)
         if (!agreed) {
-            System.err.println("[ModConfirmationDialog] User declined update. Exiting...");
-            System.exit(1);
+            System.err.println("[ModConfirmationDialog] User declined update. Signaling tweaker to crash.");
         }
     }
 

@@ -27,6 +27,7 @@
 /run
 /libs
 /build_command.txt
+/modupdater-launchwrapper/libs/
 
 # CurseForge configuration
 /curseforge.properties

@@ -7,6 +7,8 @@ import com.ArfGg57.modupdater.metadata.ModMetadata;
 import com.ArfGg57.modupdater.resolver.FilenameResolver;
 import com.ArfGg57.modupdater.util.FileUtils;
 import com.ArfGg57.modupdater.ui.GuiUpdater;
+import com.ArfGg57.modupdater.restart.CrashUtils;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -27,9 +29,10 @@ public class UpdaterCore {
     private final String modMetadataPath = localConfigDir + "mod_metadata.json"; // tracks installed mods
 
     private GuiUpdater gui;
-    private boolean configError = false;
-    private List<File> pendingDeletes = new ArrayList<>();  // Track files that failed to delete
-    
+    private final List<File> pendingDeletes = new ArrayList<>();  // Track files that failed to delete
+
+    public UpdaterCore() {}
+
     /**
      * Get list of files that failed to delete (locked by the game)
      */
@@ -530,7 +533,7 @@ public class UpdaterCore {
                                                 modMetadata.recordMod(numberId, existingFile.getName(), expectedHash, source);
                                                 modMetadata.save();
                                             }
-                                        }
+                                    }
                                     } else {
                                         gui.show("Mod hash mismatch (expected: " + expectedHash.substring(0, Math.min(8, expectedHash.length())) + "..., got: " + actual.substring(0, Math.min(8, actual.length())) + "...); will redownload: " + existingFile.getPath());
                                         needDownload = true;
@@ -803,59 +806,30 @@ public class UpdaterCore {
             
             // Check if there are any pending deletes (files that were locked)
             if (!pendingDeletes.isEmpty()) {
-                gui.show("Some files could not be deleted and require a restart.");
-                gui.close();  // Close the progress GUI before showing the restart dialog
-                
-                // Show restart required dialog
-                com.ArfGg57.modupdater.ui.RestartRequiredDialog restartDialog = 
-                    new com.ArfGg57.modupdater.ui.RestartRequiredDialog(pendingDeletes);
-                restartDialog.showDialog();
-                
-                if (restartDialog.wasContinued()) {
-                    // User clicked Continue - we need to crash the game but keep the updater running
-                    System.out.println("[ModUpdater] User requested restart to complete updates.");
-                    startDeletionThreadAndCrash();
-                } else if (restartDialog.wasClosedWithoutContinue()) {
-                    // User closed the dialog without clicking Continue - also crash to force restart
-                    System.out.println("[ModUpdater] User closed restart dialog without clicking Continue.");
-                    startDeletionThreadAndCrash();
-                }
+                gui.show("Some files could not be deleted and require a restart. Deferring Forge crash until mod init.");
+                // Write locked file list for later cleanup
+                String listFile = CrashUtils.writeLockedFileList(pendingDeletes);
+                System.setProperty("modupdater.restartRequired", "true");
+                System.setProperty("modupdater.lockedFilesListFile", listFile);
+                System.setProperty("modupdater.restartMessage", "Modpack update requires a restart. Locked files will be removed.");
             }
 
+        } catch (Error e) {
+            throw e;
         } catch (Exception e) {
             gui.show("Update failed: " + e.getMessage());
             e.printStackTrace();
         } finally {
-            if (gui != null && !configError) gui.close();
+            if (gui != null) gui.close();
         }
     }
 
     /**
      * Forcefully crash the game to force restart.
-     * This method will not return - it immediately halts the JVM.
-     * 
-     * Note: We use Runtime.halt() instead of System.exit() because FMLSecurityManager
-     * (Forge Mod Loader) blocks System.exit() calls by throwing ExitTrappedException.
-     * Runtime.halt() cannot be caught or blocked, ensuring the game actually crashes
-     * as required when files are locked and need a restart to be deleted.
      */
-    private void startDeletionThreadAndCrash() {
-        System.out.println("[ModUpdater] Triggering game crash to apply updates...");
-        System.err.println("[ModUpdater] Restart required to complete mod updates. Please restart the game.");
-        System.err.println("[ModUpdater] " + pendingDeletes.size() + " file(s) could not be deleted and will be removed on next startup.");
-        
-        // List the locked files for debugging
-        for (File file : pendingDeletes) {
-            System.err.println("[ModUpdater]   - " + file.getPath());
-        }
-        
-        // Forcefully crash the game using Runtime.halt()
-        // This is more forceful than throwing an Error or calling System.exit()
-        // Runtime.halt() immediately terminates the JVM without calling shutdown hooks
-        // and cannot be caught by SecurityManager or try-catch blocks
-        // Exit code 130 (128 + SIGINT) indicates forced termination requiring restart
-        Runtime.getRuntime().halt(130);
-    }
+    private void startDeletionThreadAndCrash() { /* deprecated no-op after deferral */ }
+
+    public void handleUserDeclinedBeforeLaunch() { /* deprecated; tweaker sets property directly */ }
 
     private List<JSONObject> buildSinceList(JSONArray arr, String fromExclusive, String toInclusive) {
         List<JSONObject> out = new ArrayList<>();

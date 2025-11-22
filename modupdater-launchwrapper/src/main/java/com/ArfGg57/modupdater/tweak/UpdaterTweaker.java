@@ -1,8 +1,8 @@
 package com.ArfGg57.modupdater.tweak;
 
+import com.ArfGg57.modupdater.core.UpdaterCore;
 import com.ArfGg57.modupdater.ui.ModConfirmationDialog;
 import com.ArfGg57.modupdater.ui.ModConfirmationDialog.ModEntry;
-import com.ArfGg57.modupdater.core.UpdaterCore;
 import net.minecraft.launchwrapper.ITweaker;
 import net.minecraft.launchwrapper.LaunchClassLoader;
 
@@ -12,89 +12,52 @@ import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Tweaker that shows ModConfirmationDialog before Minecraft launches.
- * Works with the provided ModConfirmationDialog and UpdaterCore implementations.
- */
+/** Tweaker that shows ModConfirmationDialog before Minecraft launches. */
 public class UpdaterTweaker implements ITweaker {
 
     private final UpdaterCore core;
 
-    public UpdaterTweaker() {
-        this.core = new UpdaterCore();
-    }
+    public UpdaterTweaker() { this.core = new UpdaterCore(); }
 
     @Override
-    public void acceptOptions(List<String> args, File gameDir, File assetsDir, String profile) {
-        // No-op for now; you can store gameDir/profile here if you ever need them.
-    }
+    public void acceptOptions(List<String> args, File gameDir, File assetsDir, String profile) { }
 
     @Override
     public void injectIntoClassLoader(LaunchClassLoader classLoader) {
-        boolean shouldExit = false;
-        int exitCode = 0;
-
+        boolean userDeclined = false;
         try {
-            // Build empty lists; the dialog will enrich them using remote config and local state
             final List<ModEntry> mods = new ArrayList<>();
             final List<String> files = new ArrayList<>();
             final List<String> deletes = new ArrayList<>();
-
-            // Build the dialog first so it can enrich lists (detect missing files) before deciding to show
             final ModConfirmationDialog[] dlgHolder = new ModConfirmationDialog[1];
-
-            SwingUtilities.invokeAndWait(() -> {
-                dlgHolder[0] = new ModConfirmationDialog(core, mods, files, deletes);
-            });
-
+            SwingUtilities.invokeAndWait(() -> dlgHolder[0] = new ModConfirmationDialog(core, mods, files, deletes));
             if (dlgHolder[0] != null && dlgHolder[0].hasAnyItems()) {
-                // Show modal dialog on EDT
-                SwingUtilities.invokeAndWait(() -> dlgHolder[0].showDialog());
-
-                // After dialog closes: if user pressed Quit, stop the JVM before Minecraft launches
+                SwingUtilities.invokeAndWait(dlgHolder[0]::showDialog);
                 if (!dlgHolder[0].wasAgreed()) {
-                    System.out.println("ModUpdater: user chose Quit in confirmation dialog. Exiting...");
-                    shouldExit = true;
-                    exitCode = 0;
+                    System.out.println("[ModUpdater] User declined update; deferring Forge crash until mod initialization.");
+                    userDeclined = true;
                 } else {
-                    // User agreed: run the updater
-                    System.out.println("ModUpdater: user agreed. Running updater synchronously before launch...");
+                    System.out.println("[ModUpdater] User agreed; running updater before launch.");
                     core.runUpdate();
                 }
             } else {
-                System.out.println("ModUpdater: No updates detected after enrichment. Skipping confirmation GUI.");
+                System.out.println("[ModUpdater] No updates detected; continuing launch.");
             }
-        } catch (InvocationTargetException ite) {
-            ite.printStackTrace();
-            System.err.println("ModUpdater: fatal error in confirmation dialog (InvocationTargetException). Exiting.");
-            shouldExit = true;
-            exitCode = 1;
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-            ie.printStackTrace();
-            System.err.println("ModUpdater: interrupted while showing confirmation dialog. Exiting.");
-            shouldExit = true;
-            exitCode = 1;
+        } catch (InvocationTargetException | InterruptedException e) {
+            e.printStackTrace();
+            System.out.println("[ModUpdater] Dialog error; deferring crash.");
+            userDeclined = true;
         } catch (Exception e) {
             e.printStackTrace();
-            System.err.println("ModUpdater: fatal error while preparing confirmation lists or dialog. Exiting.");
-            shouldExit = true;
-            exitCode = 1;
+            System.out.println("[ModUpdater] Unexpected error; deferring crash.");
+            userDeclined = true;
         }
-
-        // Call System.exit OUTSIDE the try/catch so SecurityException is not swallowed
-        if (shouldExit) {
-            System.exit(exitCode);
+        if (userDeclined) {
+            // Set system property for deferred crash mod to pick up in FML init.
+            System.setProperty("modupdater.deferCrash", "confirmation_dialog_declined");
         }
     }
 
-    @Override
-    public String getLaunchTarget() {
-        return "net.minecraft.client.main.Main";
-    }
-
-    @Override
-    public String[] getLaunchArguments() {
-        return new String[0];
-    }
+    @Override public String getLaunchTarget() { return "net.minecraft.client.main.Main"; }
+    @Override public String[] getLaunchArguments() { return new String[0]; }
 }
