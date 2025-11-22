@@ -130,7 +130,7 @@ public class ModUpdaterDeferredCrash {
         // Check if property is now set (handles late setting after init)
         // Note: System.getProperty is called on each tick when flag is false
         // This is intentional to support late setting scenarios with minimal complexity
-        // Performance impact is negligible (~10μs per call, only until property detected)
+        // Performance impact is negligible (~10 microseconds per call, only until property detected)
         if (!restartRequiredFlag) {
             String restartRequired = System.getProperty("modupdater.restartRequired");
             if ("true".equals(restartRequired)) {
