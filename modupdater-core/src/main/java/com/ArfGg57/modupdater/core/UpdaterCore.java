@@ -9,6 +9,7 @@ import com.ArfGg57.modupdater.util.FileUtils;
 import com.ArfGg57.modupdater.ui.GuiUpdater;
 import com.ArfGg57.modupdater.ui.RestartRequiredDialog;
 import com.ArfGg57.modupdater.restart.CrashUtils;
+import com.ArfGg57.modupdater.selfupdate.SelfUpdateCoordinator;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -46,6 +47,9 @@ public class UpdaterCore {
         gui.show("Initializing ModUpdater...");
 
         try {
+            // Check for ModUpdater self-updates BEFORE checking for mod updates
+            checkSelfUpdate();
+            
             ensureLocalConfigExists();
 
             JSONObject localConfig = FileUtils.readJson(remoteConfigPath);
@@ -896,5 +900,35 @@ public class UpdaterCore {
         RenamedFileResolver tempResolver = new RenamedFileResolver(metadata, null);
         File[] files = tempResolver.findAllFilesForMod(dir, numberId);
         return Arrays.asList(files);
+    }
+    
+    /**
+     * Check for ModUpdater self-updates and stage them if available
+     */
+    private void checkSelfUpdate() {
+        try {
+            gui.show("Checking for ModUpdater self-updates...");
+            
+            SelfUpdateCoordinator coordinator = new SelfUpdateCoordinator(
+                new SelfUpdateCoordinator.Logger() {
+                    public void log(String message) {
+                        gui.show("[Self-Update] " + message);
+                    }
+                },
+                gui
+            );
+            
+            boolean updateStaged = coordinator.checkAndUpdate();
+            
+            if (updateStaged) {
+                gui.show("ModUpdater update staged successfully!");
+                gui.show("Update will be applied on next Minecraft launch");
+            } else {
+                gui.show("No ModUpdater updates available");
+            }
+        } catch (Exception e) {
+            gui.show("Self-update check failed (non-critical): " + e.getMessage());
+            // Don't throw - self-update failures shouldn't block mod updates
+        }
     }
 }

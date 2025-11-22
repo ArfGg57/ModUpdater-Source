@@ -58,7 +58,7 @@ public class FileUtils {
         }
     }
 
-    private static String readUrlToString(String urlStr, String apiKey) throws Exception {
+    public static String readUrlToString(String urlStr, String apiKey) throws Exception {
         HttpURLConnection connection = null;
         try {
             URL url = new URL(urlStr);
