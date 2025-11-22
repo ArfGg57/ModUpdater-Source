@@ -24,10 +24,14 @@ public class ModUpdaterDeferredCrash {
         System.out.println("[ModUpdaterDeferredCrash] modupdater.deferCrash = " + declineReason);
         System.out.println("[ModUpdaterDeferredCrash] modupdater.restartRequired = " + restartRequired);
         
-        if ((declineReason != null && !declineReason.isEmpty()) || "true".equals(restartRequired)) {
+        if ((declineReason != null && !declineReason.trim().isEmpty()) || "true".equals(restartRequired)) {
             System.out.println("[ModUpdaterDeferredCrash] Crash condition met - triggering Forge crash");
             StringBuilder crashMsg = new StringBuilder("ModUpdater deferred crash trigger. ");
-            if (declineReason != null) crashMsg.append("User declined update (" + declineReason + "). ");
+            if (declineReason != null && !declineReason.trim().isEmpty()) {
+                // Sanitize declineReason to prevent any potential log injection
+                String sanitized = declineReason.replaceAll("[\\r\\n]", " ").trim();
+                crashMsg.append("User declined update (").append(sanitized).append("). ");
+            }
             if ("true".equals(restartRequired)) crashMsg.append("Restart required due to locked files. ");
             RuntimeException cause = new RuntimeException(crashMsg.toString().trim());
             CrashReport report = CrashReport.makeCrashReport(cause, "ModUpdater forced Forge crash");
