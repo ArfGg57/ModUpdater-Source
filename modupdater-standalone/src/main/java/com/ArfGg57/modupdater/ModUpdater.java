@@ -33,8 +33,16 @@ public class ModUpdater {
 
     @Mod.EventHandler
     public void preInit(FMLPreInitializationEvent event) {
+        // Check if tweaker already ran (skip update to avoid duplicate processing)
+        String tweakerRan = System.getProperty("modupdater.tweakerRan");
+        if ("true".equals(tweakerRan)) {
+            System.out.println("[ModUpdater] Tweaker already processed updates; skipping preInit update (backward compatibility mode inactive)");
+            return;
+        }
+        
+        // Tweaker didn't run - this is standalone mode (backward compatibility)
+        System.out.println("[ModUpdater] Tweaker not detected; running update in preInit (standalone/backward compatibility mode)");
         try {
-            System.out.println("[ModUpdater] Running update in preInit");
             UpdaterCore core = new UpdaterCore();
             core.runUpdate();
         } catch (Exception e) {

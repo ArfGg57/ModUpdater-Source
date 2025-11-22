@@ -56,6 +56,8 @@ public class UpdaterTweaker implements ITweaker {
             // Set system property for deferred crash mod to pick up in FML init.
             System.setProperty("modupdater.deferCrash", "confirmation_dialog_declined");
         }
+        // Set flag to indicate tweaker has run (whether user agreed or declined)
+        System.setProperty("modupdater.tweakerRan", "true");
     }
 
     @Override public String getLaunchTarget() { return "net.minecraft.client.main.Main"; }
