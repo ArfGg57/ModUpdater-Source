@@ -100,8 +100,8 @@ public class RestartRequiredDialog {
         centerPanel.setOpaque(false);
         
         // Message
-        JLabel messageLabel = new JLabel("<html><center>Some files could not be deleted because they are currently in use.<br>" +
-                                         "Please restart the game to complete the update.</center></html>");
+        JLabel messageLabel = new JLabel("<html><center>A restart was required for this modpack update,<br>" +
+                                         "please relaunch the game.</center></html>");
         messageLabel.setFont(FONT_BODY);
         messageLabel.setForeground(COLOR_TEXT_PRIMARY);
         messageLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
@@ -139,17 +139,17 @@ public class RestartRequiredDialog {
         
         mainPanel.add(centerPanel, BorderLayout.CENTER);
         
-        // Bottom panel with Continue button
+        // Bottom panel with Close button
         JPanel bottomPanel = new JPanel();
         bottomPanel.setLayout(new FlowLayout(FlowLayout.CENTER, 10, 0));
         bottomPanel.setOpaque(false);
         
-        JButton continueButton = createStyledButton("Continue");
-        continueButton.addActionListener(e -> {
+        JButton closeButton = createStyledButton("Close");
+        closeButton.addActionListener(e -> {
             continued = true;
             dialog.dispose();
         });
-        bottomPanel.add(continueButton);
+        bottomPanel.add(closeButton);
         
         mainPanel.add(bottomPanel, BorderLayout.SOUTH);
         
@@ -198,21 +198,21 @@ public class RestartRequiredDialog {
     }
     
     /**
-     * Show the dialog (blocks until user clicks Continue)
+     * Show the dialog (blocks until user clicks Close)
      */
     public void showDialog() {
         dialog.setVisible(true);
     }
     
     /**
-     * Check if user clicked Continue
+     * Check if user clicked Close
      */
     public boolean wasContinued() {
         return continued;
     }
     
     /**
-     * Check if user closed dialog without clicking Continue
+     * Check if user closed dialog without clicking Close
      */
     public boolean wasClosedWithoutContinue() {
         return closedWithoutContinue;
