@@ -17,8 +17,8 @@ import net.minecraft.util.ReportedException;
 @Mod(modid = "modupdaterdeferredcrash", name = "ModUpdater Deferred Crash", version = "1.0", acceptableRemoteVersions = "*", dependencies = "after:modupdater")
 public class ModUpdaterDeferredCrash {
 
-    private boolean shouldCrashOnMenu = false;
-    private String crashMessage = "";
+    private volatile boolean shouldCrashOnMenu = false;
+    private volatile String crashMessage = "";
 
     @Mod.EventHandler
     public void init(FMLInitializationEvent evt) {
@@ -61,9 +61,12 @@ public class ModUpdaterDeferredCrash {
     
     @SubscribeEvent
     public void onGuiOpen(GuiOpenEvent event) {
-        if (shouldCrashOnMenu && event.gui instanceof GuiMainMenu) {
+        if (shouldCrashOnMenu && event.gui != null && event.gui instanceof GuiMainMenu) {
             System.out.println("[ModUpdaterDeferredCrash] Main menu detected - triggering deferred crash");
             shouldCrashOnMenu = false; // Prevent multiple crashes
+            
+            // Unregister the event listener to prevent any further events
+            MinecraftForge.EVENT_BUS.unregister(this);
             
             RuntimeException cause = new RuntimeException(crashMessage);
             CrashReport report = CrashReport.makeCrashReport(cause, "ModUpdater forced Forge crash");
