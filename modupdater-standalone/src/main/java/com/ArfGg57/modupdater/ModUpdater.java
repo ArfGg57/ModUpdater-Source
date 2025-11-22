@@ -1,6 +1,7 @@
 package com.ArfGg57.modupdater;
 
 import com.ArfGg57.modupdater.core.UpdaterCore;
+import com.ArfGg57.modupdater.restart.CrashCoordinator;
 import cpw.mods.fml.common.Mod;
 import cpw.mods.fml.common.event.FMLPreInitializationEvent;
 import cpw.mods.fml.common.event.FMLInitializationEvent;
@@ -19,9 +20,8 @@ public class ModUpdater {
     // Internal flag tracking if restart is required (set once, never cleared until crash)
     private volatile boolean restartRequiredFlag = false;
     
-    // Crash scheduling state
+    // Crash scheduling state (instance-specific, but coordinated via CrashCoordinator)
     private volatile boolean crashScheduled = false;
-    private volatile boolean crashExecuted = false;
     private volatile int crashDelayTicks = 0;
     
     // Configured delay before crash (in ticks) for GUI stability
@@ -33,8 +33,16 @@ public class ModUpdater {
 
     @Mod.EventHandler
     public void preInit(FMLPreInitializationEvent event) {
+        // Check if tweaker already ran (skip update to avoid duplicate processing)
+        String tweakerRan = System.getProperty("modupdater.tweakerRan");
+        if ("true".equals(tweakerRan)) {
+            System.out.println("[ModUpdater] Tweaker already processed updates; skipping preInit update (backward compatibility mode inactive)");
+            return;
+        }
+        
+        // Tweaker didn't run - this is standalone mode (backward compatibility)
+        System.out.println("[ModUpdater] Tweaker not detected; running update in preInit (standalone/backward compatibility mode)");
         try {
-            System.out.println("[ModUpdater] Running update in preInit");
             UpdaterCore core = new UpdaterCore();
             core.runUpdate();
         } catch (Exception e) {
@@ -121,7 +129,8 @@ public class ModUpdater {
     @SubscribeEvent
     public void onClientTick(TickEvent.ClientTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
-        if (crashExecuted) return;
+        // If crash already executed by any mod instance, stop processing
+        if (CrashCoordinator.isCrashExecuted()) return;
 
         if (!restartRequiredFlag) {
             String restartRequired = System.getProperty("modupdater.restartRequired");
@@ -165,7 +174,12 @@ public class ModUpdater {
     }
 
     private void performCrash(final GuiScreen currentScreen) {
-        crashExecuted = true;
+        // Try to claim the crash execution (thread-safe, prevents duplicate crashes)
+        if (!CrashCoordinator.tryClaim()) {
+            System.out.println("[ModUpdater] Another mod instance already claimed crash execution, skipping");
+            return;
+        }
+        
         try { MinecraftForge.EVENT_BUS.unregister(this); } catch (Exception ignored) {}
 
         System.out.println("[ModUpdater] ========================================");
