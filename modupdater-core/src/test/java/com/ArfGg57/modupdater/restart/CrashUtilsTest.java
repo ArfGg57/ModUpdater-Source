@@ -68,11 +68,12 @@ public class CrashUtilsTest {
     
     @Test
     public void testWriteAndReadLockedFiles() throws IOException {
-        // Create test file list
+        // Create test file list using cross-platform temp directory
+        String tmpDir = System.getProperty("java.io.tmpdir");
         List<File> testFiles = new ArrayList<>();
-        testFiles.add(new File("/tmp/test1.jar"));
-        testFiles.add(new File("/tmp/test2.jar"));
-        testFiles.add(new File("/tmp/test3.jar"));
+        testFiles.add(new File(tmpDir, "test1.jar"));
+        testFiles.add(new File(tmpDir, "test2.jar"));
+        testFiles.add(new File(tmpDir, "test3.jar"));
         
         // Write locked files
         CrashUtils.writePersistentLockedFileList(testFiles);
@@ -116,7 +117,7 @@ public class CrashUtilsTest {
         // Write all artifacts
         CrashUtils.writeRestartFlag("Test message");
         List<File> testFiles = new ArrayList<>();
-        testFiles.add(new File("/tmp/test.jar"));
+        testFiles.add(new File(System.getProperty("java.io.tmpdir"), "test.jar"));
         CrashUtils.writePersistentLockedFileList(testFiles);
         
         // Verify they exist
