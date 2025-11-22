@@ -9,14 +9,23 @@ import net.minecraft.util.ReportedException;
  * Performs a proper Forge crash (ReportedException) if the tweaker set a deferred crash flag.
  * Ensures CrashReport is generated only after Forge/Minecraft classes are initialized.
  */
-@Mod(modid = "modupdaterdeferredcrash", name = "ModUpdater Deferred Crash", version = "1.0", acceptableRemoteVersions = "*")
+@Mod(modid = "modupdaterdeferredcrash", name = "ModUpdater Deferred Crash", version = "1.0", acceptableRemoteVersions = "*", dependencies = "after:modupdater")
 public class ModUpdaterDeferredCrash {
 
     @Mod.EventHandler
     public void init(FMLInitializationEvent evt) {
+        // Log that we entered the init handler
+        System.out.println("[ModUpdaterDeferredCrash] Init event handler called");
+        
         String declineReason = System.getProperty("modupdater.deferCrash");
         String restartRequired = System.getProperty("modupdater.restartRequired");
+        
+        // Log the property values for debugging
+        System.out.println("[ModUpdaterDeferredCrash] modupdater.deferCrash = " + declineReason);
+        System.out.println("[ModUpdaterDeferredCrash] modupdater.restartRequired = " + restartRequired);
+        
         if ((declineReason != null && !declineReason.isEmpty()) || (restartRequired != null && restartRequired.equals("true"))) {
+            System.out.println("[ModUpdaterDeferredCrash] Crash condition met - triggering Forge crash");
             StringBuilder crashMsg = new StringBuilder("ModUpdater deferred crash trigger. ");
             if (declineReason != null) crashMsg.append("User declined update (" + declineReason + "). ");
             if (restartRequired != null && restartRequired.equals("true")) crashMsg.append("Restart required due to locked files. ");
@@ -35,7 +44,10 @@ public class ModUpdaterDeferredCrash {
             } catch (Throwable t) {
                 // ignore report enrichment errors
             }
+            System.out.println("[ModUpdaterDeferredCrash] About to throw ReportedException");
             throw new ReportedException(report);
+        } else {
+            System.out.println("[ModUpdaterDeferredCrash] No crash needed - continuing normal initialization");
         }
     }
 }
