@@ -1,0 +1,14 @@
+{
+  "_comment": "This is a template manifest. Replace placeholder values before deploying a release. See SELF_UPDATE.md for details.",
+  "modUpdater": {
+    "latest": "2.1.0",
+    "download": {
+      "primary": "https://github.com/ArfGg57/ModUpdater-Source/releases/download/v2.1.0/!!!!!modupdater-2.20.jar",
+      "sha256": "replace_with_actual_sha256_hash_of_jar_file",
+      "signature": "https://github.com/ArfGg57/ModUpdater-Source/releases/download/v2.1.0/!!!!!modupdater-2.20.jar.sig",
+      "size": 0,
+      "required": false
+    },
+    "changelog": "## ModUpdater 2.1.0\n\n### New Features\n- Self-update system for automatic updates\n- Remote version discovery via GitHub Releases API\n- Secure download with SHA-256 verification\n- Atomic JAR replacement using bootstrap\n- Rollback support on update failure\n\n### Improvements\n- Enhanced logging for update process\n- Better error messages\n- User notification dialogs\n\n### Configuration\n- Self-update enabled by default\n- Configurable update checks (24h interval)\n- Optional signature verification support"
+  }
+}

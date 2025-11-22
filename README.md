@@ -16,6 +16,7 @@ A Forge 1.7.10 mod that automatically updates mods, configs, and files from a re
 - 🛡️ **NEW:** Enhanced pending operations system (MOVE/DELETE/REPLACE)
 - 📋 **NEW:** Unified manifest tracking for mods AND auxiliary files
 - 🗑️ **NEW:** Version-specific deletion system with safety mode
+- 🔁 **NEW:** Self-update system for ModUpdater itself
 - ✅ **FIXED:** Idempotent updates - no repeated downloads of unchanged files
 - 🗑️ **FIXED:** Delete tracking - operations only execute once
 - 🔄 **FIXED:** Smart overwrite - only replaces on actual content change
@@ -163,10 +164,51 @@ Recent updates have fixed several critical issues:
 
 See [docs/FIXES_COMPREHENSIVE_v3.md](docs/FIXES_COMPREHENSIVE_v3.md) for complete details.
 
+## Self-Update System
+
+ModUpdater can now automatically update itself! The self-update system:
+
+- **Automatic Detection**: Checks GitHub Releases for new versions
+- **Secure Downloads**: SHA-256 hash verification
+- **Safe Installation**: Atomic JAR replacement using bootstrap launcher
+- **Rollback Support**: Automatic backup and recovery on failure
+- **User Control**: Configurable update intervals and prompts
+
+### How It Works
+
+1. ModUpdater checks for updates at startup (default: every 24 hours)
+2. If a newer version is found, it downloads and verifies the JAR
+3. Update is staged for installation on next Minecraft launch
+4. Bootstrap script replaces the old JAR with the new one
+5. Minecraft continues launching with the updated ModUpdater
+
+### Configuration
+
+Self-update is **enabled by default**. To customize:
+
+```json
+// config/ModUpdater/self_update.json
+{
+  "enabled": true,
+  "source_type": "github_releases",
+  "github_repo": "ArfGg57/ModUpdater-Source",
+  "check_interval_hours": 24,
+  "auto_install": false
+}
+```
+
+See [SELF_UPDATE.md](SELF_UPDATE.md) for complete documentation including:
+- Setup instructions
+- Release process
+- Signing procedure
+- Troubleshooting guide
+- Security considerations
+
 ## Documentation
 
 - **User Guides**
   - [Quick Start Guide](docs/QUICK_START.md) - Get started quickly
+  - [Self-Update Guide](SELF_UPDATE.md) - Automatic ModUpdater updates
   - [Mods JSON Schema](docs/MODS_JSON_SCHEMA.md) - Configuration format reference
   - [Deletion Configuration](docs/CONFIG.md) - Version-specific deletion system
   - [Filename Resolution](docs/FILENAME_RESOLUTION.md) - Extension inference guide
