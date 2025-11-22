@@ -2,15 +2,23 @@ package com.ArfGg57.modupdater;
 
 import cpw.mods.fml.common.Mod;
 import cpw.mods.fml.common.event.FMLInitializationEvent;
+import cpw.mods.fml.common.eventhandler.SubscribeEvent;
+import net.minecraftforge.client.event.GuiOpenEvent;
+import net.minecraftforge.common.MinecraftForge;
+import net.minecraft.client.gui.GuiMainMenu;
 import net.minecraft.crash.CrashReport;
 import net.minecraft.util.ReportedException;
 
 /**
  * Performs a proper Forge crash (ReportedException) if the tweaker set a deferred crash flag.
  * Ensures CrashReport is generated only after Forge/Minecraft classes are initialized.
+ * For restart required, the crash is deferred until the main menu screen is reached.
  */
 @Mod(modid = "modupdaterdeferredcrash", name = "ModUpdater Deferred Crash", version = "1.0", acceptableRemoteVersions = "*", dependencies = "after:modupdater")
 public class ModUpdaterDeferredCrash {
+
+    private volatile boolean shouldCrashOnMenu = false;
+    private volatile String crashMessage = "";
 
     @Mod.EventHandler
     public void init(FMLInitializationEvent evt) {
@@ -24,17 +32,45 @@ public class ModUpdaterDeferredCrash {
         System.out.println("[ModUpdaterDeferredCrash] modupdater.deferCrash = " + declineReason);
         System.out.println("[ModUpdaterDeferredCrash] modupdater.restartRequired = " + restartRequired);
         
-        if ((declineReason != null && !declineReason.trim().isEmpty()) || "true".equals(restartRequired)) {
-            System.out.println("[ModUpdaterDeferredCrash] Crash condition met - triggering Forge crash");
+        // Handle immediate crash for decline reason
+        if (declineReason != null && !declineReason.trim().isEmpty()) {
+            System.out.println("[ModUpdaterDeferredCrash] User declined update - triggering immediate Forge crash");
+            // Sanitize declineReason to prevent any potential log injection or control characters
+            String sanitized = declineReason.replaceAll("[\\p{C}]", " ").trim();
             StringBuilder crashMsg = new StringBuilder("ModUpdater deferred crash trigger. ");
-            if (declineReason != null && !declineReason.trim().isEmpty()) {
-                // Sanitize declineReason to prevent any potential log injection or control characters
-                String sanitized = declineReason.replaceAll("[\\p{C}]", " ").trim();
-                crashMsg.append("User declined update (").append(sanitized).append("). ");
-            }
-            if ("true".equals(restartRequired)) crashMsg.append("Restart required due to locked files. ");
+            crashMsg.append("User declined update (").append(sanitized).append("). ");
             RuntimeException cause = new RuntimeException(crashMsg.toString().trim());
             CrashReport report = CrashReport.makeCrashReport(cause, "ModUpdater forced Forge crash");
+            System.out.println("[ModUpdaterDeferredCrash] About to throw ReportedException for declined update");
+            throw new ReportedException(report);
+        }
+        
+        // Handle deferred crash for restart required - wait until main menu
+        if ("true".equals(restartRequired)) {
+            System.out.println("[ModUpdaterDeferredCrash] Restart required - registering GUI event listener for menu crash");
+            shouldCrashOnMenu = true;
+            crashMessage = "ModUpdater deferred crash trigger. Restart required due to locked files.";
+            
+            // Register this instance as an event listener
+            MinecraftForge.EVENT_BUS.register(this);
+            System.out.println("[ModUpdaterDeferredCrash] Event listener registered, will crash when main menu opens");
+        } else {
+            System.out.println("[ModUpdaterDeferredCrash] No crash needed - continuing normal initialization");
+        }
+    }
+    
+    @SubscribeEvent
+    public void onGuiOpen(GuiOpenEvent event) {
+        if (shouldCrashOnMenu && event.gui != null && event.gui instanceof GuiMainMenu) {
+            System.out.println("[ModUpdaterDeferredCrash] Main menu detected - triggering deferred crash");
+            shouldCrashOnMenu = false; // Prevent multiple crashes
+            
+            // Unregister the event listener to prevent any further events
+            MinecraftForge.EVENT_BUS.unregister(this);
+            
+            RuntimeException cause = new RuntimeException(crashMessage);
+            CrashReport report = CrashReport.makeCrashReport(cause, "ModUpdater forced Forge crash");
+            
             // Include locked files list contents in crash report detail section if present
             try {
                 String listPath = System.getProperty("modupdater.lockedFilesListFile", "");
@@ -48,10 +84,9 @@ public class ModUpdaterDeferredCrash {
             } catch (Throwable t) {
                 // ignore report enrichment errors
             }
-            System.out.println("[ModUpdaterDeferredCrash] About to throw ReportedException");
+            
+            System.out.println("[ModUpdaterDeferredCrash] About to throw ReportedException for restart required");
             throw new ReportedException(report);
-        } else {
-            System.out.println("[ModUpdaterDeferredCrash] No crash needed - continuing normal initialization");
         }
     }
 }
