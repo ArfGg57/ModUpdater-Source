@@ -35,8 +35,12 @@ public class CrashCoordinator {
     
     /**
      * Reset the crash state (for testing purposes only).
-     * Should not be used in production code.
+     * WARNING: Should NEVER be used in production code as it could allow bypassing crash enforcement.
+     * This method is provided solely for unit testing and should be marked @VisibleForTesting.
+     * 
+     * @deprecated This method exists only for testing and should not be called in production code.
      */
+    @Deprecated
     public static void reset() {
         synchronized (lock) {
             crashExecuted = false;
