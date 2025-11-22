@@ -160,8 +160,7 @@ The improved implementation includes comprehensive logging at each stage:
 
 ### Crash Countdown
 ```
-[ModUpdaterDeferredCrash] Crash countdown: 2 tick(s) remaining
-[ModUpdaterDeferredCrash] Crash countdown: 1 tick(s) remaining
+[ModUpdaterDeferredCrash] Crash scheduled, waiting 3 tick(s) for GUI stability
 [ModUpdaterDeferredCrash] Delay complete - executing crash now
 ```
 
@@ -201,7 +200,8 @@ The crash report now includes additional diagnostic sections:
 **Verify:** 
 - Init logs show property detected at init time
 - Main menu detection logs appear
-- Crash countdown logs appear (3, 2, 1, 0)
+- Crash scheduled log shows delay (e.g., "waiting 3 tick(s)")
+- Delay complete log appears
 - Crash report includes all diagnostic sections
 - Cleanup dialog appears after crash
 
@@ -232,7 +232,7 @@ To test this fix:
 5. Verify in the logs:
    - `[ModUpdaterDeferredCrash] Init event handler called` appears
    - `[ModUpdaterDeferredCrash] Tick loop active` appears
-   - If locked files are detected: main menu detection and crash countdown logs appear
+   - If locked files are detected: main menu detection and crash delay logs appear
    - The game crashes back to the launcher
    - The cleanup dialog appears and removes locked files
 6. Check crash report file for enhanced diagnostic sections
@@ -313,7 +313,7 @@ The implementation includes debug logging to help diagnose issues:
 - `[ModUpdaterDeferredCrash] Detected custom main menu via heuristics: <class>` - Custom menu detected
 - `[ModUpdaterDeferredCrash] Main menu detected: <class>` - Main menu detected
 - `[ModUpdaterDeferredCrash] Scheduling crash with 3 tick delay for GUI stability` - Crash scheduled
-- `[ModUpdaterDeferredCrash] Crash countdown: N tick(s) remaining` - Countdown in progress
+- `[ModUpdaterDeferredCrash] Crash scheduled, waiting N tick(s) for GUI stability` - Initial countdown log
 - `[ModUpdaterDeferredCrash] Delay complete - executing crash now` - About to crash
 
 *Crash Phase:*
