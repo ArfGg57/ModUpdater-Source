@@ -1,5 +1,6 @@
 package com.ArfGg57.modupdater;
 
+import com.ArfGg57.modupdater.restart.CrashCoordinator;
 import cpw.mods.fml.common.Mod;
 import cpw.mods.fml.common.event.FMLInitializationEvent;
 import cpw.mods.fml.common.eventhandler.SubscribeEvent;
@@ -26,9 +27,8 @@ public class ModUpdaterMod {
     // Internal flag tracking if restart is required (set once, never cleared until crash)
     private volatile boolean restartRequiredFlag = false;
     
-    // Crash scheduling state
+    // Crash scheduling state (instance-specific, but coordinated via CrashCoordinator)
     private volatile boolean crashScheduled = false;
-    private volatile boolean crashExecuted = false;
     private volatile int crashDelayTicks = 0;
     
     // Configured delay before crash (in ticks) for GUI stability
@@ -129,8 +129,8 @@ public class ModUpdaterMod {
         // Only process at END phase to ensure frame is complete
         if (event.phase != TickEvent.Phase.END) return;
         
-        // If crash already executed, stop processing
-        if (crashExecuted) return;
+        // If crash already executed by any mod instance, stop processing
+        if (CrashCoordinator.isCrashExecuted()) return;
 
         // Poll for restart required property (handles late setting by UpdaterCore)
         if (!restartRequiredFlag) {
@@ -187,7 +187,11 @@ public class ModUpdaterMod {
      * @param currentScreen The current GUI screen at time of crash
      */
     private void performCrash(final GuiScreen currentScreen) {
-        crashExecuted = true;
+        // Try to claim the crash execution (thread-safe, prevents duplicate crashes)
+        if (!CrashCoordinator.tryClaim()) {
+            System.out.println("[ModUpdater-Tweaker] Another mod instance already claimed crash execution, skipping");
+            return;
+        }
         
         // Unregister event handler to prevent further ticks
         try { 
