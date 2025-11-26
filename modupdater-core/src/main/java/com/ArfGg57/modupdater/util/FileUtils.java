@@ -147,6 +147,89 @@ public class FileUtils {
         }
     }
 
+    // --- simple download without GUI ---
+    /**
+     * Simple file download that doesn't require a GUI.
+     * Suitable for use from the post-restart handler mod.
+     * 
+     * @param urlStr URL to download from
+     * @param dest Destination file
+     * @throws Exception if download fails
+     */
+    public static void downloadFile(String urlStr, File dest) throws Exception {
+        downloadFile(urlStr, dest, 3); // Default 3 retries
+    }
+    
+    /**
+     * Simple file download with configurable retries.
+     * 
+     * @param urlStr URL to download from
+     * @param dest Destination file
+     * @param maxRetries Maximum number of retries
+     * @throws Exception if download fails after all retries
+     */
+    public static void downloadFile(String urlStr, File dest, int maxRetries) throws Exception {
+        int attempt = 0;
+        Exception last = null;
+        while (attempt < maxRetries) {
+            attempt++;
+            InputStream in = null;
+            OutputStream out = null;
+            HttpURLConnection conn = null;
+            try {
+                URL url = new URL(urlStr);
+                String protocol = url.getProtocol();
+
+                if (dest.getParentFile() != null && !dest.getParentFile().exists()) {
+                    dest.getParentFile().mkdirs();
+                }
+
+                if ("file".equals(protocol)) {
+                    File f = new File(url.toURI());
+                    if (!f.exists()) throw new FileNotFoundException("Local file not found: " + f.getAbsolutePath());
+                    try (InputStream fis = new FileInputStream(f);
+                         OutputStream fos = new FileOutputStream(dest)) {
+                        byte[] buf = new byte[8192];
+                        int r;
+                        while ((r = fis.read(buf)) != -1) fos.write(buf, 0, r);
+                    }
+                } else {
+                    // http(s) and generic URLConnection
+                    conn = (HttpURLConnection) url.openConnection();
+                    conn.setRequestProperty("User-Agent", API_USER_AGENT);
+                    conn.setConnectTimeout(API_TIMEOUT);
+                    conn.setReadTimeout(API_TIMEOUT);
+                    conn.setInstanceFollowRedirects(true);
+
+                    int code = conn.getResponseCode();
+                    if (code >= 400) {
+                        String err = readStream(conn.getErrorStream());
+                        throw new IOException("HTTP " + code + " - " + err);
+                    }
+
+                    in = conn.getInputStream();
+                    out = new FileOutputStream(dest);
+                    byte[] buf = new byte[8192];
+                    int r;
+                    while ((r = in.read(buf)) != -1) out.write(buf, 0, r);
+                    out.flush();
+                }
+                return; // Success
+            } catch (Exception e) {
+                last = e;
+                System.err.println("[ModUpdater] Download attempt " + attempt + " failed: " + e.getMessage());
+                try { Thread.sleep(1000L * attempt); } catch (InterruptedException ignored) {}
+                if (dest.exists()) dest.delete();
+            } finally {
+                try { if (in != null) in.close(); } catch (Exception ignored) {}
+                try { if (out != null) out.close(); } catch (Exception ignored) {}
+                if (conn != null) conn.disconnect();
+            }
+        }
+        throw new IOException("Download failed after " + maxRetries + " attempts: " + 
+            (last != null ? last.getMessage() : "unknown error"));
+    }
+
     // --- download with verification (basic) ---
     /**
      * NOTE: This function keeps the same signature for compatibility but no longer uses hash.

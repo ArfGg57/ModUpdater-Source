@@ -1,2 +1,2 @@
 rootProject.name = 'ModUpdater-Source'
-include 'modupdater-core', 'modupdater-launchwrapper'
+include 'modupdater-core', 'modupdater-launchwrapper', 'modupdater-mod'

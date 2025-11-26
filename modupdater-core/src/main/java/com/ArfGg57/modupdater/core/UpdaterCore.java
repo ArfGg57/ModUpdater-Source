@@ -4,6 +4,8 @@ import com.ArfGg57.modupdater.deletion.DeletionProcessor;
 import com.ArfGg57.modupdater.hash.HashUtils;
 import com.ArfGg57.modupdater.hash.RenamedFileResolver;
 import com.ArfGg57.modupdater.metadata.ModMetadata;
+import com.ArfGg57.modupdater.pending.PendingUpdateOperation;
+import com.ArfGg57.modupdater.pending.PendingUpdateOpsManager;
 import com.ArfGg57.modupdater.resolver.FilenameResolver;
 import com.ArfGg57.modupdater.util.FileUtils;
 import com.ArfGg57.modupdater.ui.GuiUpdater;
@@ -32,6 +34,7 @@ public class UpdaterCore {
 
     private GuiUpdater gui;
     private final List<File> pendingDeletes = new ArrayList<>();  // Track files that failed to delete
+    private final PendingUpdateOpsManager pendingUpdateOps = new PendingUpdateOpsManager();  // Track pending update operations
 
     public UpdaterCore() {}
 
@@ -200,7 +203,17 @@ public class UpdaterCore {
             gui.show("Deletion phase completed: " + deletionCount + " item(s) deleted");
             
             // Track any failed deletions from the deletion processor
-            pendingDeletes.addAll(deletionProcessor.getFailedDeletes());
+            // These are pure DELETE operations (from deletes.json), not updates
+            for (File failedFile : deletionProcessor.getFailedDeletes()) {
+                pendingDeletes.add(failedFile);
+                
+                // Create a DELETE operation for the pending ops file
+                PendingUpdateOperation deleteOp = PendingUpdateOperation.createDelete(
+                    failedFile.getAbsolutePath(),
+                    "Delete from deletes.json"
+                );
+                pendingUpdateOps.addOperation(deleteOp);
+            }
             
             // Note: Metadata is saved inside DeletionProcessor after deletions
             
@@ -407,8 +420,15 @@ public class UpdaterCore {
                         
                         // Try to delete the file - track it if deletion fails
                         if (!file.delete()) {
-                            gui.show("File locked - tracking for deletion after restart");
+                            gui.show("File locked - saving pending DELETE operation");
                             pendingDeletes.add(file);
+                            
+                            // Create a DELETE operation (not an update, just removal)
+                            PendingUpdateOperation deleteOp = PendingUpdateOperation.createDelete(
+                                file.getAbsolutePath(),
+                                "Remove outdated mod: " + file.getName() + " (numberId=" + belongsToNumberId + ")"
+                            );
+                            pendingUpdateOps.addOperation(deleteOp);
                         }
                         
                         if (belongsToNumberId != null) {
@@ -734,6 +754,11 @@ public class UpdaterCore {
                     if (!existingFiles.isEmpty()) {
                         gui.show("Removing " + existingFiles.size() + " old version(s) of this mod...");
                     }
+                    
+                    // Track if any file deletion failed - if so, we can't install the new mod yet
+                    boolean deletionFailed = false;
+                    File failedDeleteFile = null;
+                    
                     for (File f : existingFiles) {
                         try {
                             if (f.getCanonicalPath().equals(tmp.getCanonicalPath())) {
@@ -749,13 +774,15 @@ public class UpdaterCore {
                         
                         // Try to delete the file - track it if deletion fails
                         if (!f.delete()) {
-                            gui.show("File locked - tracking for deletion after restart");
+                            gui.show("File locked - this is an UPDATE operation");
+                            deletionFailed = true;
+                            failedDeleteFile = f;
                             pendingDeletes.add(f);
                         }
                     }
 
                     // if target exists (with finalName) backup/delete
-                    if (target.exists()) {
+                    if (target.exists() && !deletionFailed) {
                         try {
                             if (!target.getCanonicalPath().equals(tmp.getCanonicalPath())) {
                                 gui.show("Backing up existing target file: " + target.getPath());
@@ -764,6 +791,8 @@ public class UpdaterCore {
                                 // Try to delete the file - track it if deletion fails
                                 if (!target.delete()) {
                                     gui.show("File locked - tracking for deletion after restart");
+                                    deletionFailed = true;
+                                    failedDeleteFile = target;
                                     pendingDeletes.add(target);
                                 }
                             } else {
@@ -772,6 +801,35 @@ public class UpdaterCore {
                         } catch (Exception ex) {
                             gui.show("Warning: Error resolving target path; skipping delete: " + target.getPath());
                         }
+                    }
+                    
+                    // If deletion failed, don't install the new mod yet
+                    // Instead, save a pending UPDATE operation for the mod handler to process after restart
+                    if (deletionFailed && failedDeleteFile != null) {
+                        gui.show("Cannot install new mod because old file is locked");
+                        gui.show("Saving pending UPDATE operation for post-restart handler...");
+                        
+                        // Delete the temp file since we're not installing now
+                        if (tmp.exists()) {
+                            tmp.delete();
+                        }
+                        
+                        // Create and save the pending UPDATE operation
+                        PendingUpdateOperation updateOp = PendingUpdateOperation.createUpdate(
+                            failedDeleteFile.getAbsolutePath(),
+                            downloadUrl,
+                            finalName,
+                            installLocation,
+                            expectedHash,
+                            "Mod update for " + (displayName.isEmpty() ? finalName : displayName) + " (numberId=" + numberId + ")"
+                        );
+                        pendingUpdateOps.addOperation(updateOp);
+                        
+                        gui.show("Pending UPDATE operation saved - will be processed after restart");
+                        
+                        completed++;
+                        updateProgress(completed, totalTasks);
+                        continue; // Skip the installation, continue to next mod
                     }
 
                     // move tmp -> final
@@ -808,6 +866,20 @@ public class UpdaterCore {
             gui.setProgress(100);
 
             FileUtils.pruneBackups("modupdater/backup", backupKeep, gui);
+            
+            // Check if there are any pending update operations (files that were locked)
+            if (pendingUpdateOps.hasOperations()) {
+                gui.show("Some operations could not be completed due to locked files.");
+                gui.show("Saving " + pendingUpdateOps.getOperations().size() + " pending operation(s) for post-restart handler...");
+                
+                try {
+                    pendingUpdateOps.save();
+                    gui.show("Pending operations saved to: " + PendingUpdateOpsManager.getPendingOpsFilePath());
+                } catch (Exception e) {
+                    gui.show("ERROR: Failed to save pending operations: " + e.getMessage());
+                    e.printStackTrace();
+                }
+            }
             
             // Check if there are any pending deletes (files that were locked)
             if (!pendingDeletes.isEmpty()) {
