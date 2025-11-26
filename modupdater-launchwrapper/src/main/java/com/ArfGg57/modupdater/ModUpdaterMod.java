@@ -31,7 +31,8 @@ public class ModUpdaterMod {
     private volatile boolean restartRequiredFlag = false;
     
     // Flag to track if mod post-initialization is complete (similar to ding mod pattern)
-    public static boolean postInit = false;
+    // Using volatile for thread-safe access from event handlers
+    public static volatile boolean postInit = false;
     
     // Crash scheduling state (instance-specific, but coordinated via CrashCoordinator)
     private volatile boolean crashScheduled = false;

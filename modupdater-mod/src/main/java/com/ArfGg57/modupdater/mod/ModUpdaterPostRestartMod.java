@@ -60,7 +60,8 @@ public class ModUpdaterPostRestartMod {
     private volatile boolean hasPendingOps = false;
     
     // Flag to track if mod post-initialization is complete (similar to ding mod pattern)
-    public static boolean postInit = false;
+    // Using volatile for thread-safe access from event handlers
+    public static volatile boolean postInit = false;
     
     // Flag to track if we already processed operations or crashed
     private final AtomicBoolean actionTaken = new AtomicBoolean(false);
