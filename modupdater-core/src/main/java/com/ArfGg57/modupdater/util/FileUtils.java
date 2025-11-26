@@ -24,6 +24,10 @@ public class FileUtils {
 
     private static final String API_USER_AGENT = "ModUpdater/1.7.10-ArfGg57";
     private static final int API_TIMEOUT = 10000;
+    
+    // Download retry configuration
+    private static final int DEFAULT_DOWNLOAD_RETRIES = 3;
+    private static final int RETRY_DELAY_BASE_MS = 1000;
 
     // --- JSON helpers ---
     public static JSONObject readJson(String path) throws Exception {
@@ -157,7 +161,7 @@ public class FileUtils {
      * @throws Exception if download fails
      */
     public static void downloadFile(String urlStr, File dest) throws Exception {
-        downloadFile(urlStr, dest, 3); // Default 3 retries
+        downloadFile(urlStr, dest, DEFAULT_DOWNLOAD_RETRIES);
     }
     
     /**
@@ -193,8 +197,8 @@ public class FileUtils {
                         int r;
                         while ((r = fis.read(buf)) != -1) fos.write(buf, 0, r);
                     }
-                } else {
-                    // http(s) and generic URLConnection
+                } else if ("http".equals(protocol) || "https".equals(protocol)) {
+                    // http(s) URLs use HttpURLConnection
                     conn = (HttpURLConnection) url.openConnection();
                     conn.setRequestProperty("User-Agent", API_USER_AGENT);
                     conn.setConnectTimeout(API_TIMEOUT);
@@ -213,12 +217,14 @@ public class FileUtils {
                     int r;
                     while ((r = in.read(buf)) != -1) out.write(buf, 0, r);
                     out.flush();
+                } else {
+                    throw new IOException("Unsupported protocol: " + protocol + " (only file, http, and https are supported)");
                 }
                 return; // Success
             } catch (Exception e) {
                 last = e;
                 System.err.println("[ModUpdater] Download attempt " + attempt + " failed: " + e.getMessage());
-                try { Thread.sleep(1000L * attempt); } catch (InterruptedException ignored) {}
+                try { Thread.sleep(RETRY_DELAY_BASE_MS * attempt); } catch (InterruptedException ignored) {}
                 if (dest.exists()) dest.delete();
             } finally {
                 try { if (in != null) in.close(); } catch (Exception ignored) {}

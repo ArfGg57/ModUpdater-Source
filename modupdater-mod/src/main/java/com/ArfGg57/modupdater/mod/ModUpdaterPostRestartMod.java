@@ -38,6 +38,11 @@ public class ModUpdaterPostRestartMod {
     public static final String NAME = "ModUpdater Post-Restart Handler";
     public static final String VERSION = "2.20";
     
+    // Configuration constants
+    private static final int INITIAL_DELAY_MS = 500;        // Delay before starting operations
+    private static final int DELETE_RETRY_COUNT = 5;         // Number of retries for file deletion
+    private static final int DELETE_RETRY_DELAY_MS = 200;    // Delay between deletion retries
+    
     // Flag to track if we have pending operations
     private volatile boolean hasPendingOps = false;
     
@@ -110,7 +115,7 @@ public class ModUpdaterPostRestartMod {
      */
     private void processOperationsAndExit() {
         try {
-            Thread.sleep(500); // Give the game a moment to stabilize
+            Thread.sleep(INITIAL_DELAY_MS); // Give the game a moment to stabilize
         } catch (InterruptedException ignored) {}
         
         System.out.println("[ModUpdater-Mod] ========================================");
@@ -154,8 +159,8 @@ public class ModUpdaterPostRestartMod {
             boolean deleted = oldFile.delete();
             if (!deleted) {
                 // Try with retries
-                for (int i = 0; i < 5 && oldFile.exists(); i++) {
-                    Thread.sleep(200);
+                for (int i = 0; i < DELETE_RETRY_COUNT && oldFile.exists(); i++) {
+                    Thread.sleep(DELETE_RETRY_DELAY_MS);
                     System.gc(); // Suggest GC to release file handles
                     deleted = oldFile.delete();
                     if (deleted) break;
