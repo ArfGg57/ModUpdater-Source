@@ -35,6 +35,12 @@ public class ModUpdaterMod {
     // 3 ticks ≈ 150ms at 20 TPS, ensures menu is fully initialized before crash
     private static final int CRASH_DELAY_TICKS = 3;
     
+    // Timeout fallback - if restart required but main menu not detected after this many ticks,
+    // crash anyway. 600 ticks = 30 seconds at 20 TPS. This handles edge cases where main menu
+    // detection fails completely.
+    private static final int TIMEOUT_TICKS = 600;
+    private volatile int ticksSinceRestartRequired = 0;
+    
     // Crash message
     private volatile String crashMessage = "";
     
@@ -86,7 +92,7 @@ public class ModUpdaterMod {
      * Detects if the given screen is a main menu (vanilla or custom replacement).
      * Uses multiple detection strategies compatible with Forge 1.7.10:
      * 1. instanceof GuiMainMenu (vanilla detection)
-     * 2. Class name heuristics (contains both "main" and "menu" case-insensitive)
+     * 2. Class name heuristics for common custom main menu patterns
      * 
      * @param screen The GUI screen to check
      * @return true if this appears to be a main menu screen
@@ -101,16 +107,37 @@ public class ModUpdaterMod {
             return true;
         }
         
-        // Strategy 2: Heuristic - check class name for "main" and "menu"
-        // This catches custom main menu replacements like CustomMainMenu, BetterMainMenu, etc.
+        // Strategy 2: Heuristic - check class name for common main menu patterns
+        // This catches custom main menu replacements
         String className = screen.getClass().getName().toLowerCase();
-        boolean hasMain = className.contains("main");
-        boolean hasMenu = className.contains("menu");
         
-        // Both keywords must be present to avoid false positives on other GUIs
-        // This conservative approach minimizes risk of incorrect detection
-        if (hasMain && hasMenu) {
-            System.out.println("[ModUpdater-Tweaker] Detected custom main menu via heuristics: " + screen.getClass().getName());
+        // Pattern 1: Contains both "main" and "menu" (e.g., MainMenuScreen, GuiMainMenu)
+        if (className.contains("main") && className.contains("menu")) {
+            System.out.println("[ModUpdater-Tweaker] Detected main menu (main+menu pattern): " + screen.getClass().getName());
+            return true;
+        }
+        
+        // Pattern 2: Contains "custommenu" or "guicustom" (CustomMainMenu mod uses GuiCustomMenu)
+        if (className.contains("custommenu") || className.contains("guicustom")) {
+            System.out.println("[ModUpdater-Tweaker] Detected main menu (custom pattern): " + screen.getClass().getName());
+            return true;
+        }
+        
+        // Pattern 3: Contains "title" and "screen" or "menu" (e.g., TitleScreen, TitleMenu)
+        if (className.contains("title") && (className.contains("screen") || className.contains("menu"))) {
+            System.out.println("[ModUpdater-Tweaker] Detected main menu (title pattern): " + screen.getClass().getName());
+            return true;
+        }
+        
+        // Pattern 4: Ends with "mainmenu" or "titlemenu" or "titlescreen"
+        if (className.endsWith("mainmenu") || className.endsWith("titlemenu") || className.endsWith("titlescreen")) {
+            System.out.println("[ModUpdater-Tweaker] Detected main menu (suffix pattern): " + screen.getClass().getName());
+            return true;
+        }
+        
+        // Pattern 5: lumien's CustomMainMenu mod specifically uses these patterns
+        if (className.contains("lumien") && className.contains("menu")) {
+            System.out.println("[ModUpdater-Tweaker] Detected main menu (lumien pattern): " + screen.getClass().getName());
             return true;
         }
         
@@ -121,6 +148,7 @@ public class ModUpdaterMod {
      * Client tick event handler for Forge 1.7.10.
      * Continuously monitors for restart requirement and main menu appearance.
      * When both conditions are met, schedules a crash with delay for GUI stability.
+     * Also includes a timeout fallback to crash if main menu detection fails after 30 seconds.
      * 
      * @param event ClientTickEvent from Forge event bus
      */
@@ -139,11 +167,15 @@ public class ModUpdaterMod {
                 System.out.println("[ModUpdater-Tweaker] Restart required property detected late (after init)");
                 restartRequiredFlag = true;
                 crashMessage = "ModUpdater deferred crash trigger. Restart required due to locked files.";
+                ticksSinceRestartRequired = 0; // Start counting from detection
             }
         }
         
         // If restart not required, nothing to do
         if (!restartRequiredFlag) return;
+        
+        // Increment tick counter when restart is required
+        ticksSinceRestartRequired++;
 
         // Safely access Minecraft and current screen
         GuiScreen currentScreen = null;
@@ -174,6 +206,18 @@ public class ModUpdaterMod {
         if (isMainMenuScreen(currentScreen)) {
             System.out.println("[ModUpdater-Tweaker] Main menu detected: " + (currentScreen != null ? currentScreen.getClass().getName() : "null"));
             System.out.println("[ModUpdater-Tweaker] Scheduling crash with " + CRASH_DELAY_TICKS + " tick delay for GUI stability");
+            crashScheduled = true;
+            crashDelayTicks = CRASH_DELAY_TICKS;
+            return;
+        }
+        
+        // Timeout fallback: If we've been waiting too long without detecting main menu,
+        // crash anyway. This handles edge cases where main menu detection completely fails.
+        if (ticksSinceRestartRequired >= TIMEOUT_TICKS && !crashScheduled) {
+            System.out.println("[ModUpdater-Tweaker] WARNING: Main menu not detected after " + TIMEOUT_TICKS + " ticks");
+            System.out.println("[ModUpdater-Tweaker] Current screen: " + (currentScreen != null ? currentScreen.getClass().getName() : "null"));
+            System.out.println("[ModUpdater-Tweaker] Triggering timeout fallback crash - restart is required");
+            crashMessage = "ModUpdater deferred crash trigger (timeout fallback). Restart required due to locked files.";
             crashScheduled = true;
             crashDelayTicks = CRASH_DELAY_TICKS;
         }
