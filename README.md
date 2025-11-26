@@ -35,7 +35,33 @@ See [BUILD_GUIDE.md](BUILD_GUIDE.md) for detailed build instructions, including:
 - Testing the crash/restart feature
 - Troubleshooting common build issues
 
-## Restart Enforcement
+## Two-JAR System
+
+ModUpdater now uses a two-JAR architecture for handling updates that fail due to locked files:
+
+### JAR Files
+1. **!!!!!modupdater.jar** - The main tweaker JAR that handles most update logic
+2. **!!!!!modupdater-mod.jar** - The post-restart handler mod that completes deferred operations
+
+### How It Works
+
+When a file cannot be deleted during an update (because it's locked by Forge):
+1. The tweaker saves a "pending update operation" to `config/ModUpdater/pending-update-ops.json`
+2. For UPDATE operations, the new mod is NOT installed yet - only the deletion is scheduled
+3. The game crashes with a Forge crash report explaining the restart requirement
+4. On next launch, the post-restart handler mod:
+   - Checks for pending operations
+   - Deletes the old files (now unlocked)
+   - Downloads and installs new files (for updates)
+   - Shows a completion dialog
+   - Exits the game so new mods can be loaded
+
+This ensures:
+- Old locked mods are properly removed
+- New mods are only installed after old versions are deleted
+- Users get a clear explanation of what happened
+
+## Restart Enforcement (Legacy)
 
 When updates cannot complete due to locked files (common on Windows), ModUpdater automatically enforces a restart:
 
@@ -236,8 +262,10 @@ ModUpdater-Source/
 │   └── src/main/java/com/ArfGg57/modupdater/
 │       ├── hash/             # Hash utilities and rename detection
 │       ├── metadata/         # Metadata management
+│       ├── pending/          # Pending update operations
 │       └── util/             # General utilities
-├── modupdater-launchwrapper/ # LaunchWrapper integration
+├── modupdater-launchwrapper/ # LaunchWrapper tweaker integration
+├── modupdater-mod/           # Post-restart handler mod
 ├── modupdater-standalone/    # Standalone launcher
 └── docs/                     # Documentation
 ```
@@ -247,6 +275,12 @@ ModUpdater-Source/
 ```bash
 ./gradlew build
 ```
+
+This produces two main JARs:
+- `modupdater-launchwrapper/build/libs/!!!!!modupdater-X.XX.jar` - The tweaker
+- `modupdater-mod/build/libs/!!!!!modupdater-mod-X.XX.jar` - The post-restart handler
+
+Both JARs should be placed in the `mods` folder.
 
 Requires Java 8 for compatibility with Forge 1.7.10.
 

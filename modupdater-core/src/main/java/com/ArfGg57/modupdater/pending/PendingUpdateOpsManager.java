@@ -130,14 +130,17 @@ public class PendingUpdateOpsManager {
     
     /**
      * Delete the pending operations file.
+     * @return true if the file was deleted or didn't exist, false if deletion failed
      */
-    public static void clearPendingOperations() {
+    public static boolean clearPendingOperations() {
         Path filePath = Paths.get(PENDING_OPS_FILE);
         try {
-            Files.deleteIfExists(filePath);
+            boolean deleted = Files.deleteIfExists(filePath);
             System.out.println("[ModUpdater] Cleared pending operations file");
+            return true;
         } catch (IOException e) {
             System.err.println("[ModUpdater] Failed to clear pending operations file: " + e.getMessage());
+            return false;
         }
     }
     

@@ -224,7 +224,11 @@ public class FileUtils {
             } catch (Exception e) {
                 last = e;
                 System.err.println("[ModUpdater] Download attempt " + attempt + " failed: " + e.getMessage());
-                try { Thread.sleep(RETRY_DELAY_BASE_MS * attempt); } catch (InterruptedException ignored) {}
+                try { 
+                    Thread.sleep(RETRY_DELAY_BASE_MS * attempt); 
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
                 if (dest.exists()) dest.delete();
             } finally {
                 try { if (in != null) in.close(); } catch (Exception ignored) {}

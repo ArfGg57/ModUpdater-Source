@@ -116,7 +116,10 @@ public class ModUpdaterPostRestartMod {
     private void processOperationsAndExit() {
         try {
             Thread.sleep(INITIAL_DELAY_MS); // Give the game a moment to stabilize
-        } catch (InterruptedException ignored) {}
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            System.out.println("[ModUpdater-Mod] Interrupted during initial delay, continuing...");
+        }
         
         System.out.println("[ModUpdater-Mod] ========================================");
         System.out.println("[ModUpdater-Mod] Processing pending update operations...");
@@ -160,7 +163,12 @@ public class ModUpdaterPostRestartMod {
             if (!deleted) {
                 // Try with retries
                 for (int i = 0; i < DELETE_RETRY_COUNT && oldFile.exists(); i++) {
-                    Thread.sleep(DELETE_RETRY_DELAY_MS);
+                    try {
+                        Thread.sleep(DELETE_RETRY_DELAY_MS);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new Exception("Interrupted while retrying deletion");
+                    }
                     System.gc(); // Suggest GC to release file handles
                     deleted = oldFile.delete();
                     if (deleted) break;
