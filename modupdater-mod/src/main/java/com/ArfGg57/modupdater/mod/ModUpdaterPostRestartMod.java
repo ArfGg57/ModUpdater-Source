@@ -6,9 +6,12 @@ import com.ArfGg57.modupdater.pending.PendingUpdateOpsManager;
 import com.ArfGg57.modupdater.restart.CrashCoordinator;
 import com.ArfGg57.modupdater.util.FileUtils;
 import cpw.mods.fml.common.Mod;
-import cpw.mods.fml.common.event.FMLInitializationEvent;
+import cpw.mods.fml.common.event.FMLPreInitializationEvent;
+import cpw.mods.fml.common.event.FMLPostInitializationEvent;
+import cpw.mods.fml.common.eventhandler.EventPriority;
 import cpw.mods.fml.common.eventhandler.SubscribeEvent;
 import cpw.mods.fml.common.gameevent.TickEvent;
+import net.minecraftforge.client.event.GuiOpenEvent;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiMainMenu;
@@ -56,6 +59,10 @@ public class ModUpdaterPostRestartMod {
     // Flag to track if we have pending operations (post-restart mode)
     private volatile boolean hasPendingOps = false;
     
+    // Flag to track if mod post-initialization is complete (similar to ding mod pattern)
+    // Using volatile for thread-safe access from event handlers
+    public static volatile boolean postInit = false;
+    
     // Flag to track if we already processed operations or crashed
     private final AtomicBoolean actionTaken = new AtomicBoolean(false);
     
@@ -73,8 +80,8 @@ public class ModUpdaterPostRestartMod {
     private final List<String> failedFiles = new ArrayList<>();
     
     @Mod.EventHandler
-    public void init(FMLInitializationEvent event) {
-        System.out.println("[ModUpdater-Mod] Initializing post-restart handler...");
+    public void preInit(FMLPreInitializationEvent event) {
+        System.out.println("[ModUpdater-Mod] Pre-initializing post-restart handler...");
         
         // Check if restart is required (crash enforcement mode)
         String restartRequired = System.getProperty("modupdater.restartRequired");
@@ -85,9 +92,9 @@ public class ModUpdaterPostRestartMod {
             restartRequiredFlag = true;
             crashMessage = "ModUpdater deferred crash trigger. Restart required due to locked files.";
             
-            // Register tick handler for crash enforcement
+            // Register event handler for crash enforcement
             MinecraftForge.EVENT_BUS.register(this);
-            System.out.println("[ModUpdater-Mod] Tick handler registered for crash enforcement");
+            System.out.println("[ModUpdater-Mod] Event handler registered for crash enforcement");
             return; // Don't check for pending ops, we're going to crash anyway
         }
         
@@ -99,7 +106,7 @@ public class ModUpdaterPostRestartMod {
                 System.out.println("[ModUpdater-Mod] Found " + pendingOps.getOperations().size() + " pending operation(s)");
                 System.out.println("[ModUpdater-Mod] Will process when main menu is reached");
                 
-                // Register tick handler to detect main menu
+                // Register event handler to detect main menu
                 MinecraftForge.EVENT_BUS.register(this);
             } else {
                 System.out.println("[ModUpdater-Mod] No pending operations found");
@@ -109,9 +116,66 @@ public class ModUpdaterPostRestartMod {
         }
     }
     
+    @Mod.EventHandler
+    public void postInit(FMLPostInitializationEvent event) {
+        System.out.println("[ModUpdater-Mod] Post-initialization complete");
+        postInit = true;
+    }
+    
+    /**
+     * GuiOpenEvent handler - more reliable way to detect main menu opening.
+     * Uses LOWEST priority to ensure all other handlers run first (similar to ding mod pattern).
+     */
+    @SubscribeEvent(priority = EventPriority.LOWEST)
+    public void onGuiOpen(GuiOpenEvent event) {
+        // Only process after post-init is complete
+        if (!postInit) return;
+        
+        // Only process once
+        if (actionTaken.get()) return;
+        
+        // If crash already executed by any mod instance, stop processing
+        if (CrashCoordinator.isCrashExecuted()) {
+            actionTaken.set(true);
+            return;
+        }
+        
+        // Check if the GUI being opened is a main menu
+        if (!isMainMenuScreen(event.gui)) return;
+        
+        System.out.println("[ModUpdater-Mod] Main menu opened (via GuiOpenEvent): " + 
+            (event.gui != null ? event.gui.getClass().getName() : "null"));
+        
+        // Handle crash enforcement mode
+        if (restartRequiredFlag) {
+            System.out.println("[ModUpdater-Mod] Scheduling crash with " + CRASH_DELAY_TICKS + " tick delay for GUI stability");
+            crashScheduled = true;
+            crashDelayTicks = CRASH_DELAY_TICKS;
+            return;
+        }
+        
+        // Handle post-restart mode (pending operations)
+        if (hasPendingOps) {
+            if (actionTaken.compareAndSet(false, true)) {
+                System.out.println("[ModUpdater-Mod] Main menu detected (via GuiOpenEvent) - processing pending operations...");
+                
+                // Unregister event handler
+                try {
+                    MinecraftForge.EVENT_BUS.unregister(this);
+                } catch (Exception ignored) {}
+                
+                // Process operations in a separate thread to avoid blocking the game
+                new Thread(this::processOperationsAndExit, "ModUpdater-PostRestart").start();
+            }
+        }
+    }
+    
     @SubscribeEvent
     public void onClientTick(TickEvent.ClientTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
+        
+        // Only process after post-init is complete (similar to ding mod pattern)
+        if (!postInit) return;
         
         // Increment tick counter
         ticksSinceInit++;
