@@ -1,15 +1,8 @@
-buildscript {
-    repositories {
-        mavenCentral()
-        maven { url = "https://maven.minecraftforge.net/" }
-    }
-}
-
 apply plugin: 'java'
 
 group = 'com.ArfGg57.modupdater'
 version = '2.20'
-archivesBaseName = '!!!!!modupdater'
+archivesBaseName = '!!!!!modupdater-mod'
 
 sourceCompatibility = 1.8
 targetCompatibility = 1.8
@@ -17,25 +10,21 @@ targetCompatibility = 1.8
 repositories {
     mavenCentral()
     maven { url = 'https://maven.minecraftforge.net/' }
-    maven { url = 'https://libraries.minecraft.net' } // <- keep this
+    maven { url = 'https://libraries.minecraft.net' }
 }
 
 dependencies {
     implementation project(':modupdater-core')
-    implementation 'net.minecraft:launchwrapper:1.12'
-    // Use the forgeSrc jar from core libs for compile-time. Change to compileOnly if you ONLY need compile-time
-    implementation files('../modupdater-core/libs/forgeSrc-1.7.10-10.13.4.1614-1.7.10.jar')
-    // If you use ForgeGradle and want FG to remap/deobf it in the dev environment, you can instead use:
-    // implementation fg.deobf(files('libs/forgeSrc-1.7.10-10.13.4.1614-1.7.10.jar'))
+    // Use the forgeSrc jar from core libs for compile-time
+    compileOnly files('../modupdater-core/libs/forgeSrc-1.7.10-10.13.4.1614-1.7.10.jar')
 }
 
-// Simple jar (only module classes)
+// Fat jar that includes core classes and dependencies
 jar {
     manifest {
         attributes(
             'Implementation-Title': archivesBaseName,
-            'Implementation-Version': version,
-            'TweakClass': 'com.ArfGg57.modupdater.tweak.UpdaterTweaker'
+            'Implementation-Version': version
         )
     }
     // Embed all required classes directly (fat jar)
@@ -49,4 +38,17 @@ jar {
     }
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     exclude 'META-INF/*.SF','META-INF/*.DSA','META-INF/*.RSA'
+}
+
+// Process resources (mcmod.info)
+processResources {
+    inputs.property "version", project.version
+
+    from(sourceSets.main.resources.srcDirs) {
+        include 'mcmod.info'
+        expand 'version': project.version
+    }
+    from(sourceSets.main.resources.srcDirs) {
+        exclude 'mcmod.info'
+    }
 }
