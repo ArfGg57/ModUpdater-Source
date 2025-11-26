@@ -265,14 +265,30 @@ public class ModUpdaterMod {
             report.getCategory().addCrashSection("CrashTimestamp", new java.util.Date().toString());
             
             // Try to read locked files list if available
+            // Security: Only read the file if it's in a temp directory or config directory
             String listPath = System.getProperty("modupdater.lockedFilesListFile", "");
             boolean lockedFilesPresent = false;
             if (!listPath.isEmpty()) {
                 java.nio.file.Path p = java.nio.file.Paths.get(listPath);
-                if (java.nio.file.Files.exists(p)) {
-                    lockedFilesPresent = true;
-                    java.util.List<String> lines = java.nio.file.Files.readAllLines(p, java.nio.charset.StandardCharsets.UTF_8);
-                    report.getCategory().addCrashSection("ModUpdater Locked Files", String.join("\n", lines));
+                // Security validation: Only read files from temp directory or config directory
+                String absolutePath = p.toAbsolutePath().toString().toLowerCase();
+                boolean isSafeLocation = absolutePath.contains("temp") || 
+                                          absolutePath.contains("tmp") || 
+                                          absolutePath.contains("config") ||
+                                          absolutePath.contains("modupdater");
+                if (isSafeLocation && java.nio.file.Files.exists(p)) {
+                    // Security: Limit file size to 100KB to prevent memory issues
+                    long fileSize = java.nio.file.Files.size(p);
+                    if (fileSize <= 100 * 1024) {
+                        lockedFilesPresent = true;
+                        java.util.List<String> lines = java.nio.file.Files.readAllLines(p, java.nio.charset.StandardCharsets.UTF_8);
+                        // Limit to first 100 lines
+                        if (lines.size() > 100) {
+                            lines = lines.subList(0, 100);
+                            lines.add("... (truncated, " + (lines.size() - 100) + " more lines)");
+                        }
+                        report.getCategory().addCrashSection("ModUpdater Locked Files", String.join("\n", lines));
+                    }
                 }
             }
             report.getCategory().addCrashSection("LockedFilesPresent", String.valueOf(lockedFilesPresent));
