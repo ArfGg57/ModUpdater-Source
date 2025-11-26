@@ -1,6 +1,7 @@
 package com.ArfGg57.modupdater.selfupdate;
 
 import com.ArfGg57.modupdater.util.FileUtils;
+import com.ArfGg57.modupdater.version.VersionComparator;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -49,6 +50,7 @@ public class ManifestFetcher {
         // Parse release information
         String tagName = release.getString("tag_name");
         String version = tagName.startsWith("v") ? tagName.substring(1) : tagName;
+        String originalTag = version; // keep original for logging
         String changelog = release.optString("body", "");
         boolean prerelease = release.optBoolean("prerelease", false);
         
@@ -64,7 +66,18 @@ public class ManifestFetcher {
             if (name.endsWith(".jar") && name.contains("modupdater")) {
                 String downloadUrl = asset.getString("browser_download_url");
                 long fileSize = asset.optLong("size", 0);
-                
+
+                // If tag version isn't semantic (e.g. 'TEST'), try to derive from asset filename
+                if (VersionComparator.parse(version) == null) {
+                    String inferred = deriveVersionFromAssetName(name);
+                    if (inferred != null && VersionComparator.parse(inferred) != null) {
+                        logger.log("Inferred semantic version '" + inferred + "' from asset name (tag '" + originalTag + "' not semantic)");
+                        version = inferred;
+                    } else {
+                        logger.log("Tag '" + originalTag + "' and asset name did not yield semantic version; treating as same version");
+                    }
+                }
+
                 logger.log("Found JAR asset: " + name + " (" + fileSize + " bytes)");
                 
                 // Look for .sha256 file as a separate asset
@@ -163,5 +176,18 @@ public class ManifestFetcher {
             fileSize,
             required
         );
+    }
+
+    // Attempt to extract a semantic version (digits.digits[.digits]) from asset filename
+    private String deriveVersionFromAssetName(String name) {
+        if (name == null) return null;
+        // Strip leading exclamation marks or prefixes
+        String cleaned = name.replaceAll("^!+", "");
+        // Common patterns: modupdater-2.21.jar, !!!!!modupdater-2.21.jar
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("modupdater-([0-9]+\\.[0-9]+(?:\\.[0-9]+)?)\\.jar").matcher(cleaned);
+        if (m.find()) {
+            return m.group(1);
+        }
+        return null;
     }
 }

@@ -159,6 +159,8 @@ public class ModConfirmationDialog {
     private void enrichListsWithCheckCurrentVersion() {
         CheckingUpdatesDialog checkingDialog = null;
         try {
+            // Ensure configs before any reads
+            ensureLocalConfigsForDialog();
             // Show checking dialog
             checkingDialog = new CheckingUpdatesDialog();
             checkingDialog.show();
@@ -1256,6 +1258,28 @@ public class ModConfirmationDialog {
         }
     }
 
+
+    /** Ensure local ModUpdater configs exist so reading doesn't fail. */
+    private void ensureLocalConfigsForDialog() {
+        try {
+            String baseDir = "config/ModUpdater";
+            FileUtils.ensureDir(baseDir);
+            JSONObject defaultConfig = new JSONObject()
+                    .put("remoteBaseUrl", "https://raw.githubusercontent.com/ArfGg57/ModUpdater-Config/main/")
+                    .put("modsJson", "mods.json")
+                    .put("filesJson", "files.json")
+                    .put("deletesJson", "deletes.json")
+                    .put("sinceVersion", "1.0.0")
+                    .put("selfUpdate", new JSONObject().put("enabled", true))
+                    // Keep legacy key for compatibility with existing flow
+                    .put("remote_config_url", "");
+            FileUtils.ensureJsonFile(baseDir + "/config.json", defaultConfig);
+            FileUtils.ensureJsonFile(baseDir + "/deletes.json", new JSONObject().put("deletes", new JSONArray()));
+            FileUtils.ensureJsonFile(baseDir + "/files.json", new JSONObject().put("files", new JSONArray()));
+        } catch (Exception e) {
+            System.err.println("[ModConfirmationDialog] Failed to ensure default configs: " + e.getMessage());
+        }
+    }
 
     // Close dialog immediately without animation
     private void closeDialog() {

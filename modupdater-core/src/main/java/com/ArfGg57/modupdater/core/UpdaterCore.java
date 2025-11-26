@@ -45,6 +45,37 @@ public class UpdaterCore {
         return new ArrayList<>(pendingDeletes);
     }
 
+    /** Ensure local ModUpdater config files exist (auto-generate defaults if missing). */
+    private void ensureLocalConfigs() {
+        try {
+            // Base dir
+            String baseDir = "config/ModUpdater";
+            FileUtils.ensureDir(baseDir);
+
+            // config.json default
+            JSONObject defaultConfig = new JSONObject()
+                    .put("remoteBaseUrl", "https://raw.githubusercontent.com/ArfGg57/ModUpdater-Config/main/")
+                    .put("modsJson", "mods.json")
+                    .put("filesJson", "files.json")
+                    .put("deletesJson", "deletes.json")
+                    .put("sinceVersion", "1.0.0")
+                    .put("selfUpdate", new JSONObject().put("enabled", true));
+            FileUtils.ensureJsonFile(baseDir + "/config.json", defaultConfig);
+
+            // local deletes.json default
+            JSONObject defaultDeletes = new JSONObject()
+                    .put("deletes", new JSONArray());
+            FileUtils.ensureJsonFile(baseDir + "/deletes.json", defaultDeletes);
+
+            // local files.json default
+            JSONObject defaultFiles = new JSONObject()
+                    .put("files", new JSONArray());
+            FileUtils.ensureJsonFile(baseDir + "/files.json", defaultFiles);
+        } catch (Exception e) {
+            System.err.println("[ModUpdater] Failed to ensure default configs: " + e.getMessage());
+        }
+    }
+
     public void runUpdate() {
         gui = new GuiUpdater();
         gui.show("Initializing ModUpdater...");
@@ -54,6 +85,7 @@ public class UpdaterCore {
             checkSelfUpdate();
             
             ensureLocalConfigExists();
+            ensureLocalConfigs();
 
             JSONObject localConfig = FileUtils.readJson(remoteConfigPath);
             String remoteConfigUrl = localConfig.optString("remote_config_url", "").trim();

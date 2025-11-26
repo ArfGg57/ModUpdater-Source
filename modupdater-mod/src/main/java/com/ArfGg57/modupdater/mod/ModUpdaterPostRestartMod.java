@@ -18,6 +18,8 @@ import net.minecraft.client.gui.GuiMainMenu;
 import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.crash.CrashReport;
 import net.minecraft.util.ReportedException;
+import java.lang.management.ManagementFactory;
+import java.util.Arrays;
 
 import javax.swing.*;
 import java.awt.*;
@@ -25,7 +27,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
-
+import java.io.IOException;
 /**
  * ModUpdater Mod Component - handles two scenarios:
  * 
@@ -130,46 +132,86 @@ public class ModUpdaterPostRestartMod {
     public void onGuiOpen(GuiOpenEvent event) {
         // Only process after post-init is complete
         if (!postInit) return;
-        
+
         // Only process once
         if (actionTaken.get()) return;
-        
+
         // If crash already executed by any mod instance, stop processing
         if (CrashCoordinator.isCrashExecuted()) {
             actionTaken.set(true);
             return;
         }
-        
+
         // Check if the GUI being opened is a main menu
         if (!isMainMenuScreen(event.gui)) return;
-        
-        System.out.println("[ModUpdater-Mod] Main menu opened (via GuiOpenEvent): " + 
-            (event.gui != null ? event.gui.getClass().getName() : "null"));
-        
-        // Handle crash enforcement mode
+
+        System.out.println("[ModUpdater-Mod] Main menu opened (via GuiOpenEvent): " +
+                (event.gui != null ? event.gui.getClass().getName() : "null"));
+
+        // If this is crash enforcement mode, mark we've taken action so we don't double-run
         if (restartRequiredFlag) {
-            System.out.println("[ModUpdater-Mod] Scheduling crash with " + CRASH_DELAY_TICKS + " tick delay for GUI stability");
-            crashScheduled = true;
-            crashDelayTicks = CRASH_DELAY_TICKS;
-            return;
+            actionTaken.set(true);
         }
-        
-        // Handle post-restart mode (pending operations)
-        if (hasPendingOps) {
-            if (actionTaken.compareAndSet(false, true)) {
-                System.out.println("[ModUpdater-Mod] Main menu detected (via GuiOpenEvent) - processing pending operations...");
-                
-                // Unregister event handler
-                try {
-                    MinecraftForge.EVENT_BUS.unregister(this);
-                } catch (Exception ignored) {}
-                
-                // Process operations in a separate thread to avoid blocking the game
-                new Thread(this::processOperationsAndExit, "ModUpdater-PostRestart").start();
+
+        // --- Launch cleanup helper if configured (optional) ---
+        String helperCmd = System.getProperty("modupdater.cleanupHelperCmd", "").trim();
+        if (!helperCmd.isEmpty()) {
+            try {
+                String[] cmd = helperCmd.split(" ");
+                ProcessBuilder pb = new ProcessBuilder(cmd);
+                pb.directory(new File(Minecraft.getMinecraft().mcDataDir, "config/ModUpdater"));
+                pb.start();
+                System.out.println("[ModUpdater-Mod] Launched cleanup helper via modupdater.cleanupHelperCmd");
+            } catch (IOException ioe) {
+                System.err.println("[ModUpdater-Mod] Failed to launch cleanup helper: " + ioe.getMessage());
+            } catch (SecurityException se) {
+                System.err.println("[ModUpdater-Mod] SecurityException launching cleanup helper: " + se.getMessage());
             }
+        } else {
+            System.out.println("[ModUpdater-Mod] No cleanup helper command property; relying on previously-launched helper.");
         }
+
+        // --- Spawn external process to forcibly kill the JVM (works around FML security manager) ---
+        new Thread(() -> {
+            try { Thread.sleep(150L); } catch (InterruptedException ignored) {}
+
+            System.out.println("[ModUpdater-Mod] Preparing external kill of JVM to release locked files");
+
+            // Get current JVM PID (RuntimeMXBean name format "pid@host")
+            String jvmName = ManagementFactory.getRuntimeMXBean().getName();
+            String pid = jvmName;
+            if (jvmName != null && jvmName.contains("@")) {
+                pid = jvmName.split("@")[0];
+            }
+            System.out.println("[ModUpdater-Mod] Current JVM PID: " + pid);
+
+            // Build OS-specific kill command
+            String os = System.getProperty("os.name").toLowerCase();
+            String[] killCmd;
+            if (os.contains("win")) {
+                // Use taskkill to force-terminate the JVM process
+                killCmd = new String[] { "cmd", "/c", "taskkill", "/PID", pid, "/F" };
+            } else {
+                // Unix-like: use kill -9
+                killCmd = new String[] { "/bin/sh", "-c", "kill -9 " + pid };
+            }
+
+            System.out.println("[ModUpdater-Mod] Executing external kill command: " + Arrays.toString(killCmd));
+            try {
+                ProcessBuilder pb = new ProcessBuilder(killCmd);
+                pb.inheritIO(); // optional: makes command output appear in logs
+                pb.start();
+                System.out.println("[ModUpdater-Mod] External kill command started successfully");
+            } catch (IOException ioe) {
+                System.err.println("[ModUpdater-Mod] Failed to start external kill command: " + ioe.getMessage());
+            } catch (SecurityException se) {
+                System.err.println("[ModUpdater-Mod] SecurityException starting kill process: " + se.getMessage());
+            }
+        }, "ModUpdater-ForceKill").start();
     }
-    
+
+
+
     @SubscribeEvent
     public void onClientTick(TickEvent.ClientTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;

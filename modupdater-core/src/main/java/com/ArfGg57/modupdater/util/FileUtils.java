@@ -13,6 +13,8 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.nio.charset.StandardCharsets; // Recommended for consistent encoding
 import java.nio.file.Files; // For java.nio.file.Files.move
+import java.nio.file.Path;
+import java.nio.file.Paths;
 
 /**
  * File utilities: JSON/network, backup, atomic move, unzip, simple version compare.
@@ -127,6 +129,30 @@ public class FileUtils {
             try (FileOutputStream fos = new FileOutputStream(file)) {
                 fos.write(defaultContent.getBytes(StandardCharsets.UTF_8));
             }
+        }
+    }
+
+    /** Ensure a directory exists. */
+    public static void ensureDir(String dirPath) throws IOException {
+        Path p = Paths.get(dirPath);
+        if (!Files.exists(p)) {
+            Files.createDirectories(p);
+        }
+    }
+
+    /** Write a JSONObject to a file (UTF-8). */
+    public static void writeJson(String path, JSONObject json) throws IOException {
+        ensureDir(new File(path).getParent());
+        try (FileOutputStream fos = new FileOutputStream(path)) {
+            fos.write(json.toString(2).getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    /** Ensure file exists; if missing, create with provided JSON content. */
+    public static void ensureJsonFile(String path, JSONObject defaultContent) throws IOException {
+        File f = new File(path);
+        if (!f.exists()) {
+            writeJson(path, defaultContent);
         }
     }
 
