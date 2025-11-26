@@ -2,9 +2,12 @@ package com.ArfGg57.modupdater;
 
 import com.ArfGg57.modupdater.restart.CrashCoordinator;
 import cpw.mods.fml.common.Mod;
-import cpw.mods.fml.common.event.FMLInitializationEvent;
+import cpw.mods.fml.common.event.FMLPreInitializationEvent;
+import cpw.mods.fml.common.event.FMLPostInitializationEvent;
+import cpw.mods.fml.common.eventhandler.EventPriority;
 import cpw.mods.fml.common.eventhandler.SubscribeEvent;
 import cpw.mods.fml.common.gameevent.TickEvent;
+import net.minecraftforge.client.event.GuiOpenEvent;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiMainMenu;
@@ -27,6 +30,9 @@ public class ModUpdaterMod {
     // Internal flag tracking if restart is required (set once, never cleared until crash)
     private volatile boolean restartRequiredFlag = false;
     
+    // Flag to track if mod post-initialization is complete (similar to ding mod pattern)
+    public static boolean postInit = false;
+    
     // Crash scheduling state (instance-specific, but coordinated via CrashCoordinator)
     private volatile boolean crashScheduled = false;
     private volatile int crashDelayTicks = 0;
@@ -45,14 +51,14 @@ public class ModUpdaterMod {
     private volatile String crashMessage = "";
     
     /**
-     * FML Initialization event.
+     * FML Pre-Initialization event.
      * Checks for decline reason (immediate crash) and restart required flag (deferred crash).
-     * Registers tick event handler for continuous monitoring using Forge 1.7.10 APIs.
+     * Registers event handlers for continuous monitoring using Forge 1.7.10 APIs.
      */
     @Mod.EventHandler
-    public void init(FMLInitializationEvent event) {
+    public void preInit(FMLPreInitializationEvent event) {
         // Log that we entered the init handler
-        System.out.println("[ModUpdater-Tweaker] Init event handler called");
+        System.out.println("[ModUpdater-Tweaker] PreInit event handler called");
         
         String declineReason = System.getProperty("modupdater.deferCrash");
         String restartRequired = System.getProperty("modupdater.restartRequired");
@@ -76,16 +82,55 @@ public class ModUpdaterMod {
         
         // Check if restart is required now (early detection)
         if ("true".equals(restartRequired)) {
-            System.out.println("[ModUpdater-Tweaker] Restart required detected at init time");
+            System.out.println("[ModUpdater-Tweaker] Restart required detected at preInit time");
             restartRequiredFlag = true;
             crashMessage = "ModUpdater deferred crash trigger. Restart required due to locked files.";
         }
         
-        // ALWAYS register tick listener for robust monitoring using Forge 1.7.10 event system
+        // ALWAYS register event listeners for robust monitoring using Forge 1.7.10 event system
         // This allows detection even if property is set late or GuiOpenEvent is missed
-        System.out.println("[ModUpdater-Tweaker] Registering tick event listener for continuous monitoring");
+        System.out.println("[ModUpdater-Tweaker] Registering event listeners for continuous monitoring");
         MinecraftForge.EVENT_BUS.register(this);
-        System.out.println("[ModUpdater-Tweaker] Tick loop active - will monitor for main menu and property changes");
+        System.out.println("[ModUpdater-Tweaker] Event handlers active - will monitor for main menu and property changes");
+    }
+    
+    /**
+     * FML Post-Initialization event.
+     * Marks initialization as complete (similar to ding mod pattern).
+     */
+    @Mod.EventHandler
+    public void postInit(FMLPostInitializationEvent event) {
+        System.out.println("[ModUpdater-Tweaker] PostInit event handler called - initialization complete");
+        postInit = true;
+    }
+    
+    /**
+     * GuiOpenEvent handler - more reliable way to detect main menu opening.
+     * Uses LOWEST priority to ensure all other handlers run first (similar to ding mod pattern).
+     */
+    @SubscribeEvent(priority = EventPriority.LOWEST)
+    public void onGuiOpen(GuiOpenEvent event) {
+        // Only process after post-init is complete
+        if (!postInit) return;
+        
+        // If crash already executed by any mod instance, stop processing
+        if (CrashCoordinator.isCrashExecuted()) return;
+        
+        // If restart not required, nothing to do
+        if (!restartRequiredFlag) return;
+        
+        // Check if the GUI being opened is a main menu
+        if (!isMainMenuScreen(event.gui)) return;
+        
+        System.out.println("[ModUpdater-Tweaker] Main menu opened (via GuiOpenEvent): " + 
+            (event.gui != null ? event.gui.getClass().getName() : "null"));
+        
+        // Schedule crash (will be executed in tick handler)
+        if (!crashScheduled) {
+            System.out.println("[ModUpdater-Tweaker] Scheduling crash with " + CRASH_DELAY_TICKS + " tick delay for GUI stability");
+            crashScheduled = true;
+            crashDelayTicks = CRASH_DELAY_TICKS;
+        }
     }
     
     /**
@@ -156,6 +201,9 @@ public class ModUpdaterMod {
     public void onClientTick(TickEvent.ClientTickEvent event) {
         // Only process at END phase to ensure frame is complete
         if (event.phase != TickEvent.Phase.END) return;
+        
+        // Only process after post-init is complete (similar to ding mod pattern)
+        if (!postInit) return;
         
         // If crash already executed by any mod instance, stop processing
         if (CrashCoordinator.isCrashExecuted()) return;
