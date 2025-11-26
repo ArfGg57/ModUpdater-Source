@@ -34,6 +34,7 @@ public class RestartCleanupMain {
         // Initialize the GUI on the EDT
         SwingUtilities.invokeAndWait(() -> {
             gui = new PostRestartUpdateGui();
+            gui.setOnCloseCallback(() -> System.exit(0));  // Exit when user clicks Close
             gui.show();
         });
         

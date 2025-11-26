@@ -54,6 +54,7 @@ public class PostRestartUpdateGui {
     
     // State tracking
     private volatile boolean updateComplete = false;
+    private Runnable onCloseCallback = null;
 
     public PostRestartUpdateGui() {
         // Anti-aliasing
@@ -160,8 +161,10 @@ public class PostRestartUpdateGui {
         closeButton = createStyledButton("Close");
         closeButton.setVisible(false);
         closeButton.addActionListener(e -> {
-            frame.dispose();
-            System.exit(0);
+            close();
+            if (onCloseCallback != null) {
+                onCloseCallback.run();
+            }
         });
         
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
@@ -253,7 +256,9 @@ public class PostRestartUpdateGui {
      */
     public void close() {
         progressAnimator.stop();
-        ((AnimatedProgressBarUI) progressBar.getUI()).stopAnimation();
+        if (progressBar.getUI() instanceof AnimatedProgressBarUI) {
+            ((AnimatedProgressBarUI) progressBar.getUI()).stopAnimation();
+        }
         frame.setVisible(false);
         frame.dispose();
     }
@@ -263,6 +268,14 @@ public class PostRestartUpdateGui {
      */
     public boolean isComplete() {
         return updateComplete;
+    }
+
+    /**
+     * Set a callback to be invoked when the Close button is clicked.
+     * This allows the caller to handle application termination.
+     */
+    public void setOnCloseCallback(Runnable callback) {
+        this.onCloseCallback = callback;
     }
 
     // --- Button styling ---
