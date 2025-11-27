@@ -1,6 +1,7 @@
 package com.ArfGg57.modupdater;
 
 import com.ArfGg57.modupdater.restart.CrashCoordinator;
+import com.ArfGg57.modupdater.restart.CleanupHelperLauncher;
 import cpw.mods.fml.common.Mod;
 import cpw.mods.fml.common.event.FMLPreInitializationEvent;
 import cpw.mods.fml.common.event.FMLPostInitializationEvent;
@@ -136,22 +137,31 @@ public class ModUpdaterMod {
         System.out.println("[ModUpdater-Tweaker] Main menu opened (via GuiOpenEvent): " +
                 (event.gui != null ? event.gui.getClass().getName() : "null"));
 
-        // Launch helper if configured (optional)
-        String helperCmd = System.getProperty("modupdater.cleanupHelperCmd", "").trim();
-        if (!helperCmd.isEmpty()) {
-            try {
-                String[] cmd = helperCmd.split(" ");
-                ProcessBuilder pb = new ProcessBuilder(cmd);
-                pb.directory(new File(Minecraft.getMinecraft().mcDataDir, "config/ModUpdater"));
-                pb.start();
-                System.out.println("[ModUpdater-Tweaker] Launched cleanup helper via modupdater.cleanupHelperCmd");
-            } catch (IOException ioe) {
-                System.err.println("[ModUpdater-Tweaker] Failed to launch cleanup helper: " + ioe.getMessage());
-            } catch (SecurityException se) {
-                System.err.println("[ModUpdater-Tweaker] SecurityException launching cleanup helper: " + se.getMessage());
+        // Launch the cleanup helper before the game is killed
+        File mcDir = Minecraft.getMinecraft().mcDataDir;
+        boolean helperLaunched = CleanupHelperLauncher.launchCleanupHelper(mcDir);
+        
+        // Fallback: try legacy modupdater.cleanupHelperCmd property
+        if (!helperLaunched) {
+            String helperCmd = System.getProperty("modupdater.cleanupHelperCmd", "").trim();
+            if (!helperCmd.isEmpty()) {
+                try {
+                    String[] cmd = helperCmd.split(" ");
+                    ProcessBuilder pb = new ProcessBuilder(cmd);
+                    pb.directory(new File(mcDir, "config/ModUpdater"));
+                    pb.start();
+                    System.out.println("[ModUpdater-Tweaker] Launched cleanup helper via modupdater.cleanupHelperCmd");
+                    helperLaunched = true;
+                } catch (IOException ioe) {
+                    System.err.println("[ModUpdater-Tweaker] Failed to launch cleanup helper: " + ioe.getMessage());
+                } catch (SecurityException se) {
+                    System.err.println("[ModUpdater-Tweaker] SecurityException launching cleanup helper: " + se.getMessage());
+                }
             }
-        } else {
-            System.out.println("[ModUpdater-Tweaker] No cleanup helper command property; relying on previously-launched helper.");
+        }
+        
+        if (!helperLaunched) {
+            System.out.println("[ModUpdater-Tweaker] Cleanup helper not available; pending operations will be processed on next game launch.");
         }
 
         // Force-kill thread (OS-level)
@@ -425,20 +435,33 @@ public class ModUpdaterMod {
             System.err.println("[ModUpdater-Mod] Warning: Failed to write crash report file: " + t.getMessage());
         }
 
-        // ----- OPTIONALLY LAUNCH THE CLEANUP HELPER FROM HERE -----
-        String helperCmd = System.getProperty("modupdater.cleanupHelperCmd", "").trim();
-        if (!helperCmd.isEmpty()) {
-            try {
-                String[] cmd = helperCmd.split(" ");
-                ProcessBuilder pb = new ProcessBuilder(cmd);
-                pb.directory(new File(Minecraft.getMinecraft().mcDataDir, "config/ModUpdater"));
-                pb.start();
-                System.out.println("[ModUpdater-Mod] Launched cleanup helper via modupdater.cleanupHelperCmd");
-            } catch (IOException ioe) {
-                System.err.println("[ModUpdater-Mod] Failed to launch cleanup helper: " + ioe.getMessage());
+        // ----- LAUNCH THE CLEANUP HELPER BEFORE CRASHING -----
+        // The cleanup helper runs in a separate process, waits for the game to exit,
+        // then processes pending operations (deletes/downloads).
+        File mcDir = Minecraft.getMinecraft().mcDataDir;
+        
+        // First try using the new CleanupHelperLauncher
+        boolean helperLaunched = CleanupHelperLauncher.launchCleanupHelper(mcDir);
+        
+        // Fallback: try legacy modupdater.cleanupHelperCmd property
+        if (!helperLaunched) {
+            String helperCmd = System.getProperty("modupdater.cleanupHelperCmd", "").trim();
+            if (!helperCmd.isEmpty()) {
+                try {
+                    String[] cmd = helperCmd.split(" ");
+                    ProcessBuilder pb = new ProcessBuilder(cmd);
+                    pb.directory(new File(mcDir, "config/ModUpdater"));
+                    pb.start();
+                    System.out.println("[ModUpdater-Mod] Launched cleanup helper via modupdater.cleanupHelperCmd");
+                    helperLaunched = true;
+                } catch (IOException ioe) {
+                    System.err.println("[ModUpdater-Mod] Failed to launch cleanup helper: " + ioe.getMessage());
+                }
             }
-        } else {
-            System.out.println("[ModUpdater-Mod] No cleanup helper command provided; relying on previously-launched helper (if any).");
+        }
+        
+        if (!helperLaunched) {
+            System.out.println("[ModUpdater-Mod] Cleanup helper not available; pending operations will be processed on next game launch.");
         }
 
         // Small delay to allow logs and streams to flush, then hard stop the JVM.

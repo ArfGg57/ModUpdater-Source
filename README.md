@@ -276,13 +276,43 @@ ModUpdater-Source/
 ./gradlew build
 ```
 
-This produces two main JARs:
+This produces three JARs:
 - `modupdater-launchwrapper/build/libs/!!!!!modupdater-X.XX.jar` - The tweaker
 - `modupdater-mod/build/libs/!!!!!modupdater-mod-X.XX.jar` - The post-restart handler
+- `modupdater-cleanup/build/libs/modupdater-cleanup-X.XX.jar` - The cleanup helper (separate JAR)
 
-Both JARs should be placed in the `mods` folder.
+Both the tweaker and post-restart handler JARs should be placed in the `mods` folder.
+The cleanup helper JAR is **optional** but recommended for improved reliability on Windows.
+If present, it will be automatically launched before game crashes to handle pending operations.
 
 Requires Java 8 for compatibility with Forge 1.7.10.
+
+## Cleanup Helper System
+
+When ModUpdater encounters locked files during updates (common on Windows), it now uses a **separate JAR cleanup helper** that runs in its own JVM:
+
+### How It Works
+
+1. **Detection**: When files can't be deleted during update, ModUpdater schedules pending operations
+2. **Helper Launch**: Before the game crashes/halts, ModUpdater launches `modupdater-cleanup.jar` in a separate process
+3. **Process Monitoring**: The cleanup helper waits for the game process to fully exit
+4. **Operation Processing**: Once the game is terminated (and file locks are released), the helper processes pending operations:
+   - Deletes outdated mod files
+   - Downloads and installs new mod versions
+5. **GUI Feedback**: Shows a progress window during the cleanup process
+6. **Completion**: Displays a completion message and prompts the user to relaunch the game
+
+### Benefits
+
+- **Reliable File Operations**: Runs after game process is completely terminated
+- **No File Locks**: Files are no longer locked by the JVM, so operations succeed
+- **Independent Process**: Doesn't crash along with the main game
+- **User Feedback**: Clear progress indication and completion notification
+
+### Installation
+
+Place `modupdater-cleanup.jar` in your `mods` folder alongside the other ModUpdater JARs.
+The cleanup helper will be automatically detected and used when needed.
 
 ## Disclaimer
 
