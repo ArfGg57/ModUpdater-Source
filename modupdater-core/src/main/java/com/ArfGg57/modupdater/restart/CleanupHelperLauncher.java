@@ -115,10 +115,10 @@ public class CleanupHelperLauncher {
      */
     private static File findCleanupHelperJar(File gameDir) {
         // Look for the cleanup helper JAR in various locations
+        // Note: The "!!!!!" prefix is part of the mod naming convention used by this project
+        // to ensure specific load order in Forge.
         String[] searchPaths = {
             "mods/" + CLEANUP_HELPER_JAR,
-            "mods/!!!!!modupdater-cleanup.jar",
-            "mods/modupdater-cleanup-2.20.jar",
             "config/ModUpdater/" + CLEANUP_HELPER_JAR,
             CLEANUP_HELPER_JAR
         };
@@ -131,7 +131,9 @@ public class CleanupHelperLauncher {
         }
         
         // Also try to find any JAR containing "modupdater-cleanup" in the mods folder
+        // This handles version-specific names like modupdater-cleanup-2.20.jar
         File modsDir = new File(gameDir, "mods");
+        if (modsDir.exists() && modsDir.isDirectory()) {
         if (modsDir.exists() && modsDir.isDirectory()) {
             File[] files = modsDir.listFiles((dir, name) -> 
                 name.toLowerCase().contains("modupdater-cleanup") && name.endsWith(".jar"));

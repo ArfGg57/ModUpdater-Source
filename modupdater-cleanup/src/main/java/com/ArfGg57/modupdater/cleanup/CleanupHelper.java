@@ -8,6 +8,8 @@ import com.ArfGg57.modupdater.hash.HashUtils;
 
 import javax.swing.*;
 import java.io.File;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.List;
 
 /**
@@ -26,14 +28,17 @@ import java.util.List;
  */
 public class CleanupHelper {
     
-    // Configuration
+    // Configuration constants
     private static final int PROCESS_WAIT_INTERVAL_MS = 500;
     private static final int MAX_PROCESS_WAIT_MS = 60000; // 60 seconds max wait
-    private static final int DELETE_RETRY_COUNT = 10;
-    private static final int DELETE_RETRY_DELAY_MS = 500;
+    private static final int DELETE_RETRY_COUNT = 10;     // Number of retries for file deletion
+    private static final int DELETE_RETRY_DELAY_MS = 500; // Delay between deletion retries
+    private static final int ATOMIC_MOVE_RETRIES = 5;     // Retries for atomic move operations
+    private static final int ATOMIC_MOVE_DELAY_MS = 200;  // Delay between atomic move retries
     
     private static PostRestartUpdateGui gui;
-    private static String gameDir = ".";
+    private static File gameDirFile = new File(".");
+    private static Path pendingOpsFilePath = null;
     
     public static void main(String[] args) {
         System.out.println("[CleanupHelper] Starting ModUpdater Cleanup Helper");
@@ -41,16 +46,22 @@ public class CleanupHelper {
         
         // Parse arguments
         String gamePid = null;
-        String pendingOpsPath = null;
         
         if (args.length >= 1 && args[0] != null && !args[0].isEmpty()) {
             gamePid = args[0];
         }
         if (args.length >= 2 && args[1] != null && !args[1].isEmpty()) {
-            pendingOpsPath = args[1];
+            pendingOpsFilePath = Paths.get(args[1]);
+            System.out.println("[CleanupHelper] Using custom pending ops path: " + pendingOpsFilePath);
         }
         if (args.length >= 3 && args[2] != null && !args[2].isEmpty()) {
-            gameDir = args[2];
+            gameDirFile = new File(args[2]);
+            System.out.println("[CleanupHelper] Using game directory: " + gameDirFile.getAbsolutePath());
+        }
+        
+        // If no custom pending ops path provided, use default relative to game dir
+        if (pendingOpsFilePath == null) {
+            pendingOpsFilePath = new File(gameDirFile, "config/ModUpdater/pending-update-ops.json").toPath();
         }
         
         try {
@@ -70,16 +81,9 @@ public class CleanupHelper {
                 Thread.sleep(2000);
             }
             
-            // Set working directory for relative paths
-            System.setProperty("user.dir", gameDir);
-            
-            // Load pending operations
-            if (pendingOpsPath != null) {
-                // Use custom path
-                System.out.println("[CleanupHelper] Loading pending ops from: " + pendingOpsPath);
-            }
-            
-            PendingUpdateOpsManager pendingOps = PendingUpdateOpsManager.load();
+            // Load pending operations using explicit path
+            System.out.println("[CleanupHelper] Loading pending ops from: " + pendingOpsFilePath.toAbsolutePath());
+            PendingUpdateOpsManager pendingOps = PendingUpdateOpsManager.load(pendingOpsFilePath);
             
             if (pendingOps == null || !pendingOps.hasOperations()) {
                 gui.addLog("No pending operations found");
@@ -112,8 +116,8 @@ public class CleanupHelper {
                 gui.setProgress(progress);
             }
             
-            // Clear pending operations file
-            if (PendingUpdateOpsManager.clearPendingOperations()) {
+            // Clear pending operations file using explicit path
+            if (PendingUpdateOpsManager.clearPendingOperations(pendingOpsFilePath)) {
                 gui.addLog("Cleared pending operations file");
             }
             
@@ -311,7 +315,8 @@ public class CleanupHelper {
             installLocation = "mods";
         }
         
-        File targetDir = new File(gameDir, installLocation);
+        // Use explicit gameDirFile for target directory
+        File targetDir = new File(gameDirFile, installLocation);
         if (!targetDir.exists()) {
             targetDir.mkdirs();
         }
@@ -343,8 +348,8 @@ public class CleanupHelper {
             }
             
             if (!tmpFile.renameTo(targetFile)) {
-                // Fallback: copy and delete
-                FileUtils.atomicMoveWithRetries(tmpFile, targetFile, 5, 200);
+                // Fallback: copy and delete using named constants
+                FileUtils.atomicMoveWithRetries(tmpFile, targetFile, ATOMIC_MOVE_RETRIES, ATOMIC_MOVE_DELAY_MS);
             }
             
             gui.addLog("Installed: " + newFileName);
