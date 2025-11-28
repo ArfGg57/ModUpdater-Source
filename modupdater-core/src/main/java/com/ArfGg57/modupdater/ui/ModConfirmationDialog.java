@@ -6,6 +6,7 @@ import com.ArfGg57.modupdater.hash.HashUtils;
 import com.ArfGg57.modupdater.hash.RenamedFileResolver;
 import com.ArfGg57.modupdater.metadata.ModMetadata;
 import com.ArfGg57.modupdater.resolver.FilenameResolver;
+import com.ArfGg57.modupdater.selfupdate.SelfUpdateCoordinator;
 import com.ArfGg57.modupdater.util.FileUtils;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -85,6 +86,9 @@ public class ModConfirmationDialog {
     // Metadata and resolver for hash-based rename detection
     private ModMetadata modMetadata;
     private RenamedFileResolver renamedFileResolver;
+    
+    // Self-update info (stored for use by UpdaterCore)
+    private SelfUpdateCoordinator.SelfUpdateInfo selfUpdateInfo;
 
     // Mapping to hold URL/source data for file entries (keyed by "FILE: <path>")
     // This allows showing a URL/source for file items when we learned it from files.json
@@ -179,6 +183,17 @@ public class ModConfirmationDialog {
             } catch (Exception e) {
                 System.out.println("[ModConfirmationDialog] Warning: Could not load metadata: " + e.getMessage());
                 // Continue without metadata - will work in degraded mode
+            }
+            
+            // ---------------------
+            // SELF-UPDATE CHECK: Check for ModUpdater updates first
+            // ---------------------
+            checkingDialog.updateStatus("Checking for ModUpdater updates...");
+            try {
+                checkForSelfUpdate();
+            } catch (Exception e) {
+                System.out.println("[ModConfirmationDialog] Self-update check failed (non-critical): " + e.getMessage());
+                // Continue - self-update is not critical
             }
             
             // Read local config to find remote_config_url
@@ -655,6 +670,87 @@ public class ModConfirmationDialog {
         }
     }
 
+
+    // -----------------------------
+    // Self-update check
+    // -----------------------------
+    private void checkForSelfUpdate() {
+        SelfUpdateCoordinator coordinator = new SelfUpdateCoordinator(
+            new SelfUpdateCoordinator.Logger() {
+                public void log(String message) {
+                    System.out.println("[ModConfirmationDialog/SelfUpdate] " + message);
+                }
+            }
+        );
+        
+        selfUpdateInfo = coordinator.checkForUpdate();
+        
+        if (selfUpdateInfo != null) {
+            System.out.println("[ModConfirmationDialog] ModUpdater self-update available!");
+            
+            // Add the launchwrapper JAR to the "Files to Add" list
+            ModEntry launchwrapperMod = new ModEntry(
+                "ModUpdater Launchwrapper (Self-Update)",
+                selfUpdateInfo.getLatestDownloadUrl(),
+                selfUpdateInfo.getLatestFileName(),
+                "https://github.com/ArfGg57/ModUpdater-Source",
+                "MODUPDATER_SELF_LAUNCHWRAPPER",
+                "mods"
+            );
+            modsToDownload.add(launchwrapperMod);
+            
+            // Add the mod JAR if available
+            if (selfUpdateInfo.hasModJar()) {
+                ModEntry modJar = new ModEntry(
+                    "ModUpdater Post-Restart Handler (Self-Update)",
+                    selfUpdateInfo.getLatestModDownloadUrl(),
+                    selfUpdateInfo.getLatestModFileName(),
+                    "https://github.com/ArfGg57/ModUpdater-Source",
+                    "MODUPDATER_SELF_MOD",
+                    "mods"
+                );
+                modsToDownload.add(modJar);
+            }
+            
+            // Add the cleanup JAR if available (will be installed after restart)
+            if (selfUpdateInfo.hasCleanupJar()) {
+                ModEntry cleanupJar = new ModEntry(
+                    "ModUpdater Cleanup Helper (Self-Update, post-restart)",
+                    selfUpdateInfo.getLatestCleanupDownloadUrl(),
+                    selfUpdateInfo.getLatestCleanupFileName(),
+                    "https://github.com/ArfGg57/ModUpdater-Source",
+                    "MODUPDATER_SELF_CLEANUP",
+                    "mods"
+                );
+                modsToDownload.add(cleanupJar);
+            }
+            
+            // Add old versions to the "Files to Delete" list
+            if (selfUpdateInfo.hasCurrentJar()) {
+                String deleteEntry = DELETE_KEY_MOD + selfUpdateInfo.getCurrentJarPath() + " (old ModUpdater launchwrapper)";
+                filesToDelete.add(deleteEntry);
+                System.out.println("[ModConfirmationDialog] Added old launchwrapper to delete list: " + selfUpdateInfo.getCurrentFileName());
+            }
+            
+            if (selfUpdateInfo.hasCurrentModJar()) {
+                String deleteEntry = DELETE_KEY_MOD + selfUpdateInfo.getCurrentModJarPath() + " (old ModUpdater mod)";
+                filesToDelete.add(deleteEntry);
+            }
+            
+            if (selfUpdateInfo.hasCurrentCleanupJar()) {
+                String deleteEntry = DELETE_KEY_MOD + selfUpdateInfo.getCurrentCleanupJarPath() + " (old ModUpdater cleanup)";
+                filesToDelete.add(deleteEntry);
+            }
+        }
+    }
+    
+    /**
+     * Get the self-update info for use by UpdaterCore.
+     * @return SelfUpdateInfo if an update is available, null otherwise
+     */
+    public SelfUpdateCoordinator.SelfUpdateInfo getSelfUpdateInfo() {
+        return selfUpdateInfo;
+    }
 
     // -----------------------------
     // Common dialog setup

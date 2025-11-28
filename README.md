@@ -1,320 +1,469 @@
 # ModUpdater
 
-A Forge 1.7.10 mod that automatically updates mods, configs, and files from a remote server.
+**A Forge 1.7.10 mod that automatically updates mods, configs, and files from a remote server.**
+
+ModUpdater is designed for modpack creators who want to provide automatic updates to their users. When players launch the game, ModUpdater checks for updates, shows what will change, and handles all the downloading and file management automatically. It also keeps itself up to date with automatic self-updates.
+
+---
+
+## Table of Contents
+
+- [Features](#features)
+- [Quick Start for Modpack Creators](#quick-start-for-modpack-creators)
+  - [1. Set Up Your Remote Config](#1-set-up-your-remote-config)
+  - [2. Configure mods.json](#2-configure-modsjson)
+  - [3. Configure files.json](#3-configure-filesjson)
+  - [4. Configure deletes.json](#4-configure-deletesjson)
+  - [5. Distribute ModUpdater](#5-distribute-modupdater)
+- [Configuration Reference](#configuration-reference)
+  - [Remote Config (config.json)](#remote-config-configjson)
+  - [Mods Configuration (mods.json)](#mods-configuration-modsjson)
+  - [Files Configuration (files.json)](#files-configuration-filesjson)
+  - [Deletes Configuration (deletes.json)](#deletes-configuration-deletesjson)
+- [Self-Update System](#self-update-system)
+- [How Updates Work](#how-updates-work)
+- [Building from Source](#building-from-source)
+- [Troubleshooting](#troubleshooting)
+- [Project Structure](#project-structure)
+
+---
 
 ## Features
 
-- 🔄 Automatic mod updates from CurseForge, Modrinth, or direct URLs
-- 📦 Config file synchronization with intelligent tracking
-- 🔍 Smart rename detection using SHA-256 hashes
-- 🔒 Robust file lock handling for Windows compatibility
-- 💥 **Automatic restart enforcement via Forge crash when locked files prevent update**
-- ✨ Clean, modern UI for update confirmations
-- 📊 Comprehensive logging and error handling
-- 🎯 **NEW:** Intelligent filename extension inference
-- ⚡ **NEW:** Early-load coremod for locked file handling
-- 🛡️ **NEW:** Enhanced pending operations system (MOVE/DELETE/REPLACE)
-- 📋 **NEW:** Unified manifest tracking for mods AND auxiliary files
-- 🗑️ **NEW:** Version-specific deletion system with safety mode
-- 🔁 **NEW:** Self-update system for ModUpdater itself
-- ✅ **FIXED:** Idempotent updates - no repeated downloads of unchanged files
-- 🗑️ **FIXED:** Delete tracking - operations only execute once
-- 🔄 **FIXED:** Smart overwrite - only replaces on actual content change
-- 🔧 **FIXED:** Rename failures no longer trigger unnecessary re-downloads
+- 🔄 **Automatic mod updates** from CurseForge, Modrinth, or direct URLs
+- 📦 **Config file synchronization** with intelligent tracking
+- 🔍 **Smart rename detection** using SHA-256 hashes
+- 🔒 **Robust file lock handling** for Windows compatibility
+- 💥 **Automatic restart enforcement** when locked files prevent updates
+- ✨ **Clean, modern UI** for update confirmations
+- 🔁 **Automatic self-updates** - ModUpdater keeps itself up to date
+- 📊 **Comprehensive logging** and error handling
+- ⚡ **Early-load coremod** for handling locked files before mods load
+- 🗑️ **Version-specific deletion system** for precise cleanup control
 
-## Quick Start
+---
 
-See [docs/QUICK_START.md](docs/QUICK_START.md) for setup instructions.
+## Quick Start for Modpack Creators
 
-## Building from Source
+### 1. Set Up Your Remote Config
 
-See [BUILD_GUIDE.md](BUILD_GUIDE.md) for detailed build instructions, including:
-- Required Java version and tools
-- Gradle build commands
-- Which JAR to distribute (launchwrapper module)
-- Testing the crash/restart feature
-- Troubleshooting common build issues
+Host your configuration files on a web server (GitHub raw files work great). You'll need:
 
-## Two-JAR System
+- A main config file that points to your mods/files/deletes configs
+- A `mods.json` file listing all mods to install
+- A `files.json` file for auxiliary files (configs, resources, etc.)
+- A `deletes.json` file for files that should be removed in specific versions
 
-ModUpdater now uses a two-JAR architecture for handling updates that fail due to locked files:
+**Example folder structure on GitHub:**
+```
+your-modpack-config/
+├── config.json        # Main config with modpack version
+├── mods.json          # List of mods
+├── files.json         # Additional files
+└── deletes.json       # Files to delete
+```
 
-### JAR Files
-1. **!!!!!modupdater.jar** - The main tweaker JAR that handles most update logic
-2. **!!!!!modupdater-mod.jar** - The post-restart handler mod that completes deferred operations
-
-### How It Works
-
-When a file cannot be deleted during an update (because it's locked by Forge):
-1. The tweaker saves a "pending update operation" to `config/ModUpdater/pending-update-ops.json`
-2. For UPDATE operations, the new mod is NOT installed yet - only the deletion is scheduled
-3. The game crashes with a Forge crash report explaining the restart requirement
-4. On next launch, the post-restart handler mod:
-   - Checks for pending operations
-   - Deletes the old files (now unlocked)
-   - Downloads and installs new files (for updates)
-   - Shows a completion dialog
-   - Exits the game so new mods can be loaded
-
-This ensures:
-- Old locked mods are properly removed
-- New mods are only installed after old versions are deleted
-- Users get a clear explanation of what happened
-
-## Restart Enforcement (Legacy)
-
-When updates cannot complete due to locked files (common on Windows), ModUpdater automatically enforces a restart:
-
-1. **Detection**: UpdaterCore sets `modupdater.restartRequired=true` when files are locked
-2. **Deferred Crash**: After the main menu appears, ModUpdater triggers a Forge crash after a 3-tick delay
-3. **Crash Report**: Includes detailed information about locked files and restart reason
-4. **User Experience**: Clean Forge crash report explaining restart is needed
-
-This ensures users can't continue playing with outdated mods when updates fail. The crash uses only Forge 1.7.10 compatible APIs (tick events, CrashReport) - no reliance on newer Minecraft scheduling methods.
-
-See [BUILD_GUIDE.md](BUILD_GUIDE.md) for testing instructions and configuration options.
-
-## New Features
-
-### Filename Extension Resolution
-
-The updater now automatically infers file extensions when missing from configuration:
-
+**config.json (hosted on your server):**
 ```json
 {
-  "file_name": "betterleaves",
-  "source": { "url": "https://example.com/betterleaves.jar" }
+  "modpackVersion": "1.0.0",
+  "configsBaseUrl": "https://raw.githubusercontent.com/YourUser/your-modpack-config/main/",
+  "modsJson": "mods.json",
+  "filesJson": "files.json",
+  "deletesJson": "deletes.json",
+  "checkCurrentVersion": true,
+  "maxRetries": 3,
+  "backupKeep": 5
 }
 ```
 
-Saves as `betterleaves.jar` automatically! See [docs/FILENAME_RESOLUTION.md](docs/FILENAME_RESOLUTION.md) for details.
+### 2. Configure mods.json
 
-### Coremod for Early Operations
+Create a JSON array listing all mods in your modpack:
 
-Optional coremod support for processing pending file operations before mods load:
-- Handles locked files more reliably on Windows
-- Processes deferred operations from previous runs (MOVE/DELETE/REPLACE)
-- Runs before FML scans mods directory
-- Automatically configured via manifest attributes
+```json
+[
+  {
+    "since": "1.0.0",
+    "numberId": "1",
+    "installLocation": "mods",
+    "display_name": "JourneyMap",
+    "file_name": "",
+    "hash": "abc123def456...",
+    "source": {
+      "type": "curseforge",
+      "projectId": 32274,
+      "fileId": 3867367
+    }
+  },
+  {
+    "since": "1.0.0",
+    "numberId": "2",
+    "installLocation": "mods",
+    "display_name": "OptiFine",
+    "source": {
+      "type": "url",
+      "url": "https://example.com/optifine.jar"
+    }
+  },
+  {
+    "since": "1.0.0",
+    "numberId": "3",
+    "installLocation": "mods",
+    "display_name": "Sodium",
+    "source": {
+      "type": "modrinth",
+      "versionId": "rAfhHfow"
+    }
+  }
+]
+```
 
-See [docs/COREMOD_SETUP.md](docs/COREMOD_SETUP.md) for setup instructions.
+**Field Reference:**
 
-## Early Loading System
+| Field | Required | Description |
+|-------|----------|-------------|
+| `since` | Yes | Version when this mod was added to the modpack |
+| `numberId` | Yes | Unique identifier for this mod (must be unique across all mods) |
+| `installLocation` | Yes | Directory to install the mod (usually "mods") |
+| `display_name` | No | Human-readable name for the UI |
+| `file_name` | No | Custom filename (if empty, uses source filename) |
+| `hash` | No | SHA-256 hash for verification (recommended) |
+| `source` | Yes | Download source (see source types below) |
 
-ModUpdater includes a sophisticated early-loading system that ensures reliable file operations **before mods are loaded**:
+**Source Types:**
 
-### How It Works
+1. **CurseForge:**
+```json
+"source": {
+  "type": "curseforge",
+  "projectId": 32274,
+  "fileId": 3867367
+}
+```
 
-1. **Coremod Phase** (Earliest - Before mod scanning)
-   - `ModUpdaterCoremod` loads as an FML coremod plugin (SortingIndex=1)
-   - Processes any pending file operations from `config/ModUpdater/pending-ops.json`
-   - **NEW:** Fetches remote config headlessly (no GUI)
-   - **NEW:** Scans for outdated mods and deletes them immediately
-   - **NEW:** All cleanup happens BEFORE Forge scans/loads mods
-   - Marks early phase as completed
+2. **Modrinth:**
+```json
+"source": {
+  "type": "modrinth",
+  "versionId": "rAfhHfow"
+}
+```
 
-2. **Tweaker Phase** (Early - Before Minecraft launches)
-   - `UpdaterTweaker` runs as a Launchwrapper tweaker
-   - Shows confirmation dialog for updates
-   - Checks if coremod already performed cleanup
-   - Performs main update logic (downloads new mods) if user agrees
+3. **Direct URL:**
+```json
+"source": {
+  "type": "url",
+  "url": "https://example.com/mod.jar"
+}
+```
 
-3. **PreInit Phase** (Normal - After mods load)
-   - `ModUpdater` @Mod preInit handler
-   - Checks if early phases already completed
-   - Only runs if coremod/tweaker didn't execute (backward compatibility)
+### 3. Configure files.json
 
-### Benefits
+For auxiliary files (configs, resources, etc.):
 
-- **Prevents Loading Old Mods**: Outdated mods are deleted BEFORE Forge can scan and initialize them
-- **No Conflicts**: Duplicate mod versions never loaded simultaneously
-- **First-Run Deletion**: Files deleted/renamed on first launch, no restart needed
-- **Prevents File Locks**: Operations execute before Forge locks JAR files
-- **Immediate Deletion**: Outdated mods can be deleted immediately instead of requiring restart
-- **Atomic Replacements**: New versions replace old ones cleanly without conflicts
-- **Windows Compatibility**: Significantly improves reliability on Windows systems
-- **Graceful Fallback**: If immediate operations fail, they're deferred to next startup
+```json
+{
+  "files": [
+    {
+      "since": "1.0.0",
+      "url": "https://example.com/config/myconfig.cfg",
+      "downloadPath": "config/",
+      "file_name": "myconfig.cfg",
+      "display_name": "My Config File",
+      "overwrite": true,
+      "hash": "abc123..."
+    }
+  ]
+}
+```
 
-### Early Cleanup Process
+**Field Reference:**
 
-The coremod performs these steps before any mods load:
+| Field | Required | Description |
+|-------|----------|-------------|
+| `since` | Yes | Version when this file was added |
+| `url` | Yes | Download URL |
+| `downloadPath` | Yes | Directory to install to |
+| `file_name` | No | Custom filename |
+| `display_name` | No | Human-readable name |
+| `overwrite` | No | Whether to replace existing files (default: true) |
+| `hash` | No | SHA-256 hash for verification |
 
-1. **Fetch Remote Config**: Downloads latest mods.json (headless operation)
-2. **Build Valid Mod List**: Determines which mods should be present
-3. **Load Metadata**: Reads tracking info for installed mods
-4. **Scan Mod Folders**: Checks each installed mod against valid list
-5. **Identify Outdated**: Finds mods that are no longer in config
-6. **Delete Immediately**: Removes outdated mods with 5 retry attempts
-7. **Update Metadata**: Removes deleted mods from tracking database
+### 4. Configure deletes.json
 
-### Pending Operations
+For files that should be removed in specific versions:
 
-When a file cannot be deleted/moved immediately (e.g., still locked), the operation is:
-1. Scheduled using `File.deleteOnExit()` for JVM exit cleanup
-2. Written to `config/ModUpdater/pending-ops.json` for next startup
-3. Processed by the coremod on next launch before files are locked again
+```json
+{
+  "deletes": [
+    {
+      "since": "1.1.0",
+      "type": "file",
+      "path": "config/oldconfig.cfg",
+      "reason": "Replaced with new config system"
+    },
+    {
+      "since": "1.2.0",
+      "type": "folder",
+      "path": "mods/deprecated/",
+      "reason": "Removed deprecated mods folder"
+    }
+  ]
+}
+```
 
-Each pending operation includes:
-- **Type**: DELETE, MOVE, or REPLACE
-- **Paths**: Source, target, and staged paths as needed
-- **Reason**: Human-readable explanation for debugging
-- **Timestamps**: When scheduled and when executed
-- **Idempotency**: Operations check if already completed before attempting
+**Field Reference:**
 
-### Unified Manifest for Files and Mods
+| Field | Required | Description |
+|-------|----------|-------------|
+| `since` | Yes | Version when this deletion applies |
+| `type` | Yes | "file" or "folder" |
+| `path` | Yes | Path to delete |
+| `reason` | No | Human-readable explanation |
 
-The updater now tracks both mods and auxiliary files (configs, resources) in a unified manifest:
-- Prevents repeated downloads of already-present files
-- Tracks checksums for integrity verification
-- Supports migration from previous metadata format
-- No configuration changes needed - works automatically!
+### 5. Distribute ModUpdater
 
-### Version-Specific Deletion System
+1. Build ModUpdater (see [Building from Source](#building-from-source))
+2. Include these files in your modpack:
+   - `mods/!!!!!modupdater-X.XX.jar` - Main updater
+   - `mods/!!!!!modupdater-mod-X.XX.jar` - Post-restart handler
+   - `config/ModUpdater/config.json` - Local config pointing to your remote
 
-The new deletion system provides precise control over file and folder cleanup:
-- **Version range logic**: Deletions only apply when transitioning through specific versions
-- **Safety mode**: Optional restriction to only delete from config/ directory
-- **File vs folder distinction**: Properly handles both types with recursive folder deletion
-- **Legacy format detection**: Automatically detects old format and provides migration guidance
+**Local config.json (`config/ModUpdater/config.json`):**
+```json
+{
+  "remote_config_url": "https://raw.githubusercontent.com/YourUser/your-modpack-config/main/config.json"
+}
+```
 
-See [docs/CONFIG.md](docs/CONFIG.md) for complete documentation and examples.
+---
 
-### Recent Comprehensive Fixes
+## Configuration Reference
 
-Recent updates have fixed several critical issues:
-- **Idempotent Updates**: Files with unchanged checksums are no longer re-downloaded on every run
-- **Smart Overwrite Logic**: `overwrite=true` now only replaces files when content actually changes
-- **Delete Tracking**: Delete operations are marked as completed and never re-proposed
-- **Version Tracking**: Auxiliary files now support optional version tracking in manifest
-- **Rename Handling**: Failed renames no longer trigger unnecessary re-downloads
+### Remote Config (config.json)
 
-See [docs/FIXES_COMPREHENSIVE_v3.md](docs/FIXES_COMPREHENSIVE_v3.md) for complete details.
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `modpackVersion` | string | Yes | Current modpack version (semver format) |
+| `configsBaseUrl` | string | Yes | Base URL for mods.json, files.json, deletes.json |
+| `modsJson` | string | No | Filename of mods list (default: "mods.json") |
+| `filesJson` | string | No | Filename of files list (default: "files.json") |
+| `deletesJson` | string | No | Filename of deletes list (default: "deletes.json") |
+| `checkCurrentVersion` | boolean | No | Verify files even when version matches (default: true) |
+| `maxRetries` | number | No | Download retry count (default: 3) |
+| `backupKeep` | number | No | Number of backups to keep (default: 5) |
+| `debugMode` | boolean | No | Enable verbose logging (default: false) |
+
+### Mods Configuration (mods.json)
+
+See [Configure mods.json](#2-configure-modsjson) above.
+
+### Files Configuration (files.json)
+
+See [Configure files.json](#3-configure-filesjson) above.
+
+### Deletes Configuration (deletes.json)
+
+See [Configure deletes.json](#4-configure-deletesjson) above.
+
+---
 
 ## Self-Update System
 
-ModUpdater can now automatically update itself! The self-update system:
+ModUpdater automatically keeps itself up to date. The system works as follows:
 
-- **Automatic Detection**: Checks GitHub Releases for new versions
-- **Secure Downloads**: SHA-256 hash verification
-- **Safe Installation**: Atomic JAR replacement using bootstrap launcher
-- **Rollback Support**: Automatic backup and recovery on failure
-- **User Control**: Configurable update intervals and prompts
+1. **Version Check**: On every launch, ModUpdater checks the GitHub releases API for the latest version
+2. **Comparison**: It compares the release filename with the filename in `current_release.json`
+3. **Update Detection**: If the filenames differ, an update is available
+4. **User Confirmation**: The update appears in the confirmation dialog alongside mod updates
+5. **Installation**: The new version is downloaded and the old version is scheduled for deletion
+6. **Restart Handling**: If the old JAR is locked, it uses the pending operations system
 
-### How It Works
+**The self-update URL is hard-coded:**
+- API: `https://api.github.com/repos/ArfGg57/ModUpdater-Source/releases/latest`
+- Source: `https://github.com/ArfGg57/ModUpdater-Source`
 
-1. ModUpdater checks for updates at startup (default: every 24 hours)
-2. If a newer version is found, it downloads and verifies the JAR
-3. Update is staged for installation on next Minecraft launch
-4. Bootstrap script replaces the old JAR with the new one
-5. Minecraft continues launching with the updated ModUpdater
+**For modpack creators**: Self-update happens automatically. Your users will always have the latest ModUpdater version.
 
-### Configuration
+---
 
-Self-update is **enabled by default**. To customize:
+## How Updates Work
 
-```json
-// config/ModUpdater/self_update.json
-{
-  "enabled": true,
-  "source_type": "github_releases",
-  "github_repo": "ArfGg57/ModUpdater-Source",
-  "check_interval_hours": 24,
-  "auto_install": false
-}
+### Update Flow
+
+1. **Launch**: User launches Minecraft with ModUpdater installed
+2. **Check**: ModUpdater checks for self-updates and mod updates
+3. **Dialog**: If updates are available, shows confirmation dialog with:
+   - Files to Add (new mods/files and new ModUpdater version)
+   - Files to Delete (old versions, outdated mods)
+4. **User Choice**: User clicks "Agree" or "Quit"
+5. **Download**: If agreed, downloads all new files
+6. **Install**: Installs new files, removes old ones
+7. **Locked Files**: If any files are locked (common on Windows):
+   - Schedules them for deletion after restart
+   - Triggers a game crash to force restart
+8. **Restart**: On next launch, pending operations complete
+
+### File Locking
+
+On Windows, JAR files loaded by Forge cannot be deleted until the JVM exits. ModUpdater handles this with:
+
+1. **Pending Operations**: Locked deletions are saved to `pending-update-ops.json`
+2. **Crash Enforcement**: Game crashes with clear explanation
+3. **Post-Restart Handler**: On next launch, completes pending operations
+
+### Backup System
+
+Before any file is deleted or replaced:
+1. Backed up to `modupdater/backup/[timestamp]/`
+2. Old backups are pruned (keeps 5 by default)
+
+---
+
+## Building from Source
+
+### Prerequisites
+
+- **Java 8** (JDK 1.8.x) - Required for Forge 1.7.10 compatibility
+- **Git** for cloning the repository
+
+### Build Steps
+
+```bash
+# Clone the repository
+git clone https://github.com/ArfGg57/ModUpdater-Source.git
+cd ModUpdater-Source
+
+# Build using Gradle wrapper
+./gradlew clean build     # Linux/macOS
+gradlew.bat clean build   # Windows
 ```
 
-See [SELF_UPDATE.md](SELF_UPDATE.md) for complete documentation including:
-- Setup instructions
-- Release process
-- Signing procedure
-- Troubleshooting guide
-- Security considerations
+### Output Files
 
-## Documentation
+After building, find the JARs in:
+- `modupdater-launchwrapper/build/libs/!!!!!modupdater-X.XX.jar` - Main tweaker
+- `modupdater-mod/build/libs/!!!!!modupdater-mod-X.XX.jar` - Post-restart handler
 
-- **User Guides**
-  - [Quick Start Guide](docs/QUICK_START.md) - Get started quickly
-  - [Self-Update Guide](SELF_UPDATE.md) - Automatic ModUpdater updates
-  - [Mods JSON Schema](docs/MODS_JSON_SCHEMA.md) - Configuration format reference
-  - [Deletion Configuration](docs/CONFIG.md) - Version-specific deletion system
-  - [Filename Resolution](docs/FILENAME_RESOLUTION.md) - Extension inference guide
-  - [Coremod Setup](docs/COREMOD_SETUP.md) - Early-load configuration
+**Note**: The "!!!!!" prefix ensures early loading in Forge's mod sorting.
 
-- **Testing & Validation**
-  - [Testing Guide](docs/TESTING_GUIDE.md) - General testing procedures
-  - [Manual Testing](docs/TESTING_MANUAL.md) - Step-by-step manual tests
-  - [Refactoring Tests](docs/TESTING_REFACTORING.md) - Tests for recent refactoring
-  - [Validation Guide](docs/VALIDATION.md) - Validation procedures
+### Installation
 
-- **Technical Documentation**
-  - [Refactoring Guide](docs/REFACTORING_GUIDE.md) - Architecture and design
-  - [Security Summary](docs/SECURITY_SUMMARY.md) - Security analysis
-  - [Implementation Summary](docs/IMPLEMENTATION_SUMMARY.md) - Implementation details
-  - [Comprehensive Fixes v3](docs/FIXES_COMPREHENSIVE_v3.md) - Recent bug fixes and enhancements
-  - [PR Summaries](docs/PR_SUMMARY_REFACTORING.md) - Pull request details
-  - [Fix Summaries](docs/FIX_SUMMARY_v2.md) - Bug fix details
+Copy both JAR files to your `.minecraft/mods/` folder.
+
+---
+
+## Troubleshooting
+
+### Mod keeps re-downloading
+
+**Cause**: Hash mismatch or incorrect source IDs
+
+**Solution**:
+1. Verify the `hash` field matches the actual file
+2. Check `projectId`/`fileId` or `versionId` are correct
+3. Delete `config/ModUpdater/mod_metadata.json` to rebuild cache
+
+### Old mod version not removed
+
+**Cause**: Mod not tracked in metadata
+
+**Solution**:
+1. Ensure the mod has a unique `numberId`
+2. Delete it manually - ModUpdater won't reinstall if it's not in mods.json
+
+### Update dialog never appears
+
+**Cause**: `remote_config_url` is empty or unreachable
+
+**Solution**:
+1. Check `config/ModUpdater/config.json` exists and has correct URL
+2. Verify the URL is accessible in a browser
+3. Check firewall/proxy settings
+
+### Game crashes on update
+
+**Cause**: Normal behavior when files are locked
+
+**Solution**: This is expected! Restart the game and updates will complete.
+
+### Files not being deleted
+
+**Cause**: Delete entries may have wrong `since` version
+
+**Solution**: Ensure `since` version is greater than user's current version
+
+---
 
 ## Project Structure
 
 ```
 ModUpdater-Source/
-├── modupdater-core/          # Core update logic
+├── modupdater-core/           # Core update logic
 │   └── src/main/java/com/ArfGg57/modupdater/
-│       ├── hash/             # Hash utilities and rename detection
-│       ├── metadata/         # Metadata management
-│       ├── pending/          # Pending update operations
-│       └── util/             # General utilities
-├── modupdater-launchwrapper/ # LaunchWrapper tweaker integration
-├── modupdater-mod/           # Post-restart handler mod
-├── modupdater-standalone/    # Standalone launcher
-└── docs/                     # Documentation
+│       ├── core/              # Main UpdaterCore
+│       ├── deletion/          # Deletion processing
+│       ├── hash/              # Hash utilities
+│       ├── metadata/          # Mod tracking
+│       ├── pending/           # Pending operations
+│       ├── selfupdate/        # Self-update system
+│       └── ui/                # User interface dialogs
+├── modupdater-launchwrapper/  # Tweaker for early loading
+├── modupdater-mod/            # Post-restart handler
+├── modupdater-cleanup/        # Cleanup helper JAR
+├── modupdater-standalone/     # Standalone launcher
+├── current_release.json       # Current release info for self-update
+└── README.md                  # This file
 ```
 
-## Building
+---
 
-```bash
-./gradlew build
-```
+## Updating Your Modpack
 
-This produces three JARs:
-- `modupdater-launchwrapper/build/libs/!!!!!modupdater-X.XX.jar` - The tweaker
-- `modupdater-mod/build/libs/!!!!!modupdater-mod-X.XX.jar` - The post-restart handler
-- `modupdater-cleanup/build/libs/modupdater-cleanup-X.XX.jar` - The cleanup helper (separate JAR)
+### Adding a Mod
 
-Both the tweaker and post-restart handler JARs should be placed in the `mods` folder.
-The cleanup helper JAR is **optional** but recommended for improved reliability on Windows.
-If present, it will be automatically launched before game crashes to handle pending operations.
+1. Add entry to `mods.json` with new `numberId`
+2. Set `since` to current modpack version
+3. Increment `modpackVersion` in config.json
 
-Requires Java 8 for compatibility with Forge 1.7.10.
+### Removing a Mod
 
-## Cleanup Helper System
+1. Delete the mod entry from `mods.json`
+2. The file will be removed from user's mods folder on next update
 
-When ModUpdater encounters locked files during updates (common on Windows), it now uses a **separate JAR cleanup helper** that runs in its own JVM:
+### Updating a Mod
 
-### How It Works
+1. Change the `fileId` (CurseForge), `versionId` (Modrinth), or `url`
+2. Update the `hash` if you have one
+3. Increment `modpackVersion`
 
-1. **Detection**: When files can't be deleted during update, ModUpdater schedules pending operations
-2. **Helper Launch**: Before the game crashes/halts, ModUpdater launches `modupdater-cleanup.jar` in a separate process
-3. **Process Monitoring**: The cleanup helper waits for the game process to fully exit
-4. **Operation Processing**: Once the game is terminated (and file locks are released), the helper processes pending operations:
-   - Deletes outdated mod files
-   - Downloads and installs new mod versions
-5. **GUI Feedback**: Shows a progress window during the cleanup process
-6. **Completion**: Displays a completion message and prompts the user to relaunch the game
+### Updating a Config File
 
-### Benefits
+1. Update the file at the hosted URL
+2. Update the `hash` in `files.json`
+3. Set `overwrite: true` if you want to replace user changes
 
-- **Reliable File Operations**: Runs after game process is completely terminated
-- **No File Locks**: Files are no longer locked by the JVM, so operations succeed
-- **Independent Process**: Doesn't crash along with the main game
-- **User Feedback**: Clear progress indication and completion notification
+---
 
-### Installation
+## Best Practices
 
-Place `modupdater-cleanup.jar` in your `mods` folder alongside the other ModUpdater JARs.
-The cleanup helper will be automatically detected and used when needed.
+1. **Always include hashes** for security and integrity
+2. **Use unique `numberId`** values across all mods
+3. **Test changes** in a development environment first
+4. **Increment `modpackVersion`** with every update
+5. **Keep backups** of your config files
+6. **Document changes** in version notes for users
+
+---
 
 ## Disclaimer
 
 This mod is largely AI-generated. The entire plan and layout was created by the repository owner, with significant effort put into refining the code and ensuring quality.
 
+---
+
+## Support
+
+- **Issues**: [GitHub Issues](https://github.com/ArfGg57/ModUpdater-Source/issues)
+- **Source**: [GitHub Repository](https://github.com/ArfGg57/ModUpdater-Source)

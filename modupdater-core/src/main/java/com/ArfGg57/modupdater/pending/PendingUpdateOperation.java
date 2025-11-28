@@ -13,11 +13,12 @@ public class PendingUpdateOperation {
      */
     public enum OperationType {
         DELETE,      // Just delete the file (from deletes.json or mod removal)
-        UPDATE       // Delete old file and download new file (mod update)
+        UPDATE,      // Delete old file and download new file (mod update)
+        DOWNLOAD     // Download new file (no old file to delete)
     }
     
     private final OperationType type;
-    private final String oldFilePath;      // Path to the file that needs to be deleted
+    private final String oldFilePath;      // Path to the file that needs to be deleted (null for DOWNLOAD)
     private final String newFileUrl;       // URL to download the new file (null for DELETE operations)
     private final String newFileName;      // Name of the new file (null for DELETE operations)
     private final String installLocation;  // Where to install the new file (null for DELETE operations)
@@ -37,6 +38,15 @@ public class PendingUpdateOperation {
     public static PendingUpdateOperation createUpdate(String oldFilePath, String newFileUrl, 
             String newFileName, String installLocation, String expectedHash, String reason) {
         return new PendingUpdateOperation(OperationType.UPDATE, oldFilePath, newFileUrl, 
+            newFileName, installLocation, expectedHash, reason);
+    }
+    
+    /**
+     * Create a DOWNLOAD operation (download new file, no old file to delete).
+     */
+    public static PendingUpdateOperation createDownload(String newFileUrl, String newFileName,
+            String installLocation, String expectedHash, String reason) {
+        return new PendingUpdateOperation(OperationType.DOWNLOAD, null, newFileUrl, 
             newFileName, installLocation, expectedHash, reason);
     }
     
