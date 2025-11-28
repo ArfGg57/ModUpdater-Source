@@ -1,0 +1,38 @@
+apply plugin: 'java'
+
+group = 'com.ArfGg57.modupdater'
+version = '2.20'
+archivesBaseName = 'modupdater-cleanup'
+
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation project(':modupdater-core')
+}
+
+// Fat jar that includes core classes and dependencies
+jar {
+    manifest {
+        attributes(
+            'Implementation-Title': archivesBaseName,
+            'Implementation-Version': version,
+            'Main-Class': 'com.ArfGg57.modupdater.cleanup.CleanupHelper'
+        )
+    }
+    // Embed all required classes directly (fat jar)
+    from { sourceSets.main.output }
+    from { project(':modupdater-core').sourceSets.main.output }
+    // Unpack third-party dependency jars (e.g., json)
+    from {
+        configurations.runtimeClasspath
+            .filter { !(it.name =~ /forgeSrc-.*\.jar/) }
+            .collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    exclude 'META-INF/*.SF','META-INF/*.DSA','META-INF/*.RSA'
+}

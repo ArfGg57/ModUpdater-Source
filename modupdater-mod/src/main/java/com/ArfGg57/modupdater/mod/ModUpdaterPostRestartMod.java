@@ -4,6 +4,7 @@ import com.ArfGg57.modupdater.hash.HashUtils;
 import com.ArfGg57.modupdater.pending.PendingUpdateOperation;
 import com.ArfGg57.modupdater.pending.PendingUpdateOpsManager;
 import com.ArfGg57.modupdater.restart.CrashCoordinator;
+import com.ArfGg57.modupdater.restart.CleanupHelperLauncher;
 import com.ArfGg57.modupdater.util.FileUtils;
 import cpw.mods.fml.common.Mod;
 import cpw.mods.fml.common.event.FMLPreInitializationEvent;
@@ -153,22 +154,31 @@ public class ModUpdaterPostRestartMod {
             actionTaken.set(true);
         }
 
-        // --- Launch cleanup helper if configured (optional) ---
-        String helperCmd = System.getProperty("modupdater.cleanupHelperCmd", "").trim();
-        if (!helperCmd.isEmpty()) {
-            try {
-                String[] cmd = helperCmd.split(" ");
-                ProcessBuilder pb = new ProcessBuilder(cmd);
-                pb.directory(new File(Minecraft.getMinecraft().mcDataDir, "config/ModUpdater"));
-                pb.start();
-                System.out.println("[ModUpdater-Mod] Launched cleanup helper via modupdater.cleanupHelperCmd");
-            } catch (IOException ioe) {
-                System.err.println("[ModUpdater-Mod] Failed to launch cleanup helper: " + ioe.getMessage());
-            } catch (SecurityException se) {
-                System.err.println("[ModUpdater-Mod] SecurityException launching cleanup helper: " + se.getMessage());
+        // --- Launch the cleanup helper before the game is killed ---
+        File mcDir = Minecraft.getMinecraft().mcDataDir;
+        boolean helperLaunched = CleanupHelperLauncher.launchCleanupHelper(mcDir);
+        
+        // Fallback: try legacy modupdater.cleanupHelperCmd property
+        if (!helperLaunched) {
+            String helperCmd = System.getProperty("modupdater.cleanupHelperCmd", "").trim();
+            if (!helperCmd.isEmpty()) {
+                try {
+                    String[] cmd = helperCmd.split(" ");
+                    ProcessBuilder pb = new ProcessBuilder(cmd);
+                    pb.directory(new File(mcDir, "config/ModUpdater"));
+                    pb.start();
+                    System.out.println("[ModUpdater-Mod] Launched cleanup helper via modupdater.cleanupHelperCmd");
+                    helperLaunched = true;
+                } catch (IOException ioe) {
+                    System.err.println("[ModUpdater-Mod] Failed to launch cleanup helper: " + ioe.getMessage());
+                } catch (SecurityException se) {
+                    System.err.println("[ModUpdater-Mod] SecurityException launching cleanup helper: " + se.getMessage());
+                }
             }
-        } else {
-            System.out.println("[ModUpdater-Mod] No cleanup helper command property; relying on previously-launched helper.");
+        }
+        
+        if (!helperLaunched) {
+            System.out.println("[ModUpdater-Mod] Cleanup helper not available; pending operations will be processed on next game launch.");
         }
 
         // --- Spawn external process to forcibly kill the JVM (works around FML security manager) ---

@@ -85,8 +85,16 @@ public class PendingUpdateOpsManager {
      * Returns null if file doesn't exist or is empty.
      */
     public static PendingUpdateOpsManager load() {
-        Path filePath = Paths.get(PENDING_OPS_FILE);
-        
+        return load(Paths.get(PENDING_OPS_FILE));
+    }
+    
+    /**
+     * Load pending operations from a custom path.
+     * Returns null if file doesn't exist or is empty.
+     * 
+     * @param filePath Path to the pending operations file
+     */
+    public static PendingUpdateOpsManager load(Path filePath) {
         if (!Files.exists(filePath)) {
             return null;
         }
@@ -133,10 +141,18 @@ public class PendingUpdateOpsManager {
      * @return true if the file was deleted or didn't exist, false if deletion failed
      */
     public static boolean clearPendingOperations() {
-        Path filePath = Paths.get(PENDING_OPS_FILE);
+        return clearPendingOperations(Paths.get(PENDING_OPS_FILE));
+    }
+    
+    /**
+     * Delete the pending operations file at a custom path.
+     * @param filePath Path to the pending operations file
+     * @return true if the file was deleted or didn't exist, false if deletion failed
+     */
+    public static boolean clearPendingOperations(Path filePath) {
         try {
             boolean deleted = Files.deleteIfExists(filePath);
-            System.out.println("[ModUpdater] Cleared pending operations file");
+            System.out.println("[ModUpdater] Cleared pending operations file: " + filePath);
             return true;
         } catch (IOException e) {
             System.err.println("[ModUpdater] Failed to clear pending operations file: " + e.getMessage());
