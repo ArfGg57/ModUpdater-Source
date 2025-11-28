@@ -53,7 +53,7 @@ public class ModUpdaterPostRestartMod {
     // Crash enforcement constants
     private static final int CRASH_DELAY_TICKS = 3;         // Delay before crash for GUI stability
     private static final int TIMEOUT_TICKS = 600;           // 30 seconds at 20 TPS - fallback timeout
-    private static final int CLEANUP_HELPER_START_DELAY_MS = 500;  // Delay before killing JVM to let cleanup helper start
+    private static final int CLEANUP_HELPER_START_DELAY_MS = 2000;  // Delay before killing JVM to let cleanup helper start and show GUI (increased from 500ms)
     
     // Flag to track if restart is required (crash enforcement mode)
     private volatile boolean restartRequiredFlag = false;

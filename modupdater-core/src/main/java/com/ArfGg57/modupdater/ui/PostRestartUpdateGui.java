@@ -202,7 +202,12 @@ public class PostRestartUpdateGui {
      * Show the GUI
      */
     public void show() {
-        SwingUtilities.invokeLater(() -> frame.setVisible(true));
+        SwingUtilities.invokeLater(() -> {
+            frame.setVisible(true);
+            // Ensure the window is brought to the front and focused
+            frame.toFront();
+            frame.requestFocus();
+        });
     }
 
     /**

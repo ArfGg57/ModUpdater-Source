@@ -18,13 +18,23 @@ public class CleanupHelperLauncher {
     private static final String CLEANUP_HELPER_JAR = "modupdater-cleanup.jar";
     private static final String PENDING_OPS_FILE = "config/ModUpdater/pending-update-ops.json";
     
+    // Flag to prevent launching cleanup helper multiple times in the same JVM session
+    private static volatile boolean helperAlreadyLaunched = false;
+    
     /**
      * Launch the cleanup helper process in the background.
+     * This method is idempotent - calling it multiple times will only launch the helper once.
      * 
      * @param gameDir The game directory (usually Minecraft's data directory)
      * @return true if the helper was launched successfully, false otherwise
      */
     public static boolean launchCleanupHelper(File gameDir) {
+        // Prevent multiple launches in the same JVM session
+        if (helperAlreadyLaunched) {
+            System.out.println("[ModUpdater] Cleanup helper already launched in this session, skipping");
+            return true; // Return true to indicate it's already been handled
+        }
+        
         System.out.println("[ModUpdater] Attempting to launch cleanup helper...");
         
         // Find the cleanup helper JAR
@@ -97,7 +107,12 @@ public class CleanupHelperLauncher {
                 Thread.currentThread().interrupt();
             }
             
-            return process.isAlive();
+            boolean isAlive = process.isAlive();
+            if (isAlive) {
+                // Mark as launched to prevent multiple launches
+                helperAlreadyLaunched = true;
+            }
+            return isAlive;
             
         } catch (IOException e) {
             System.err.println("[ModUpdater] Failed to launch cleanup helper: " + e.getMessage());
