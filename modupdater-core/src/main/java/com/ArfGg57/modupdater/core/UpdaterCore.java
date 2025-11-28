@@ -1007,7 +1007,8 @@ public class UpdaterCore {
     }
     
     /**
-     * Check for ModUpdater self-updates and stage them if available
+     * Check for ModUpdater self-updates and handle them using pending operations.
+     * Uses the simplified self-update system that compares file names from GitHub releases.
      */
     private void checkSelfUpdate() {
         try {
@@ -1018,20 +1019,112 @@ public class UpdaterCore {
                     public void log(String message) {
                         gui.show("[Self-Update] " + message);
                     }
-                },
-                gui
+                }
             );
             
-            boolean updateStaged = coordinator.checkAndUpdate();
+            SelfUpdateCoordinator.SelfUpdateInfo updateInfo = coordinator.checkForUpdate();
             
-            if (updateStaged) {
-                gui.show("ModUpdater update staged successfully!");
-                gui.show("Update will be applied on next Minecraft launch");
-            } else {
-                gui.show("No ModUpdater updates available");
+            if (updateInfo == null) {
+                gui.show("ModUpdater is up to date");
+                return;
             }
+            
+            gui.show("ModUpdater update available!");
+            gui.show("  Current: " + updateInfo.getCurrentFileName());
+            gui.show("  Latest:  " + updateInfo.getLatestFileName());
+            
+            // Handle the self-update
+            File modsDir = new File("mods");
+            File newJarTarget = new File(modsDir, updateInfo.getLatestFileName());
+            
+            // Download the new version
+            gui.show("Downloading new ModUpdater version...");
+            File tmpRoot = new File("modupdater/tmp/");
+            if (!tmpRoot.exists()) tmpRoot.mkdirs();
+            File tmpFile = new File(tmpRoot, updateInfo.getLatestFileName() + "-" + UUID.randomUUID().toString() + ".tmp");
+            
+            boolean downloadOk = FileUtils.downloadWithVerification(
+                updateInfo.getLatestDownloadUrl(),
+                tmpFile,
+                updateInfo.getLatestSha256Hash(),
+                gui,
+                3  // maxRetries
+            );
+            
+            if (!downloadOk) {
+                gui.show("ERROR: Failed to download ModUpdater update");
+                if (tmpFile.exists()) tmpFile.delete();
+                return;
+            }
+            
+            gui.show("Download completed successfully");
+            
+            // If there's an old JAR, schedule it for deletion
+            boolean deletionFailed = false;
+            if (updateInfo.hasCurrentJar()) {
+                File oldJar = new File(updateInfo.getCurrentJarPath());
+                gui.show("Removing old ModUpdater: " + oldJar.getName());
+                
+                // Backup the old JAR
+                File backupRoot = new File("modupdater/backup/selfupdate/");
+                if (!backupRoot.exists()) backupRoot.mkdirs();
+                FileUtils.backupPathTo(oldJar, backupRoot);
+                
+                // Try to delete the old JAR
+                if (!oldJar.delete()) {
+                    gui.show("Old ModUpdater JAR is locked - scheduling for deletion after restart");
+                    pendingDeletes.add(oldJar);
+                    deletionFailed = true;
+                    
+                    // Create DELETE operation for the old JAR
+                    PendingUpdateOperation deleteOp = PendingUpdateOperation.createDelete(
+                        oldJar.getAbsolutePath(),
+                        "ModUpdater self-update: remove old version " + updateInfo.getCurrentFileName()
+                    );
+                    pendingUpdateOps.addOperation(deleteOp);
+                }
+            }
+            
+            // If deletion failed, we can't install the new version yet
+            // Schedule it as an UPDATE operation for after restart
+            if (deletionFailed) {
+                gui.show("Cannot install new ModUpdater while old version is locked");
+                gui.show("Scheduling update for after restart...");
+                
+                // Delete the temp file since we can't install now
+                if (tmpFile.exists()) tmpFile.delete();
+                
+                // Create UPDATE operation (the DELETE operation was already added above)
+                // The new version will be downloaded again after restart
+                PendingUpdateOperation updateOp = PendingUpdateOperation.createUpdate(
+                    updateInfo.getCurrentJarPath(),
+                    updateInfo.getLatestDownloadUrl(),
+                    updateInfo.getLatestFileName(),
+                    "mods",
+                    updateInfo.getLatestSha256Hash(),
+                    "ModUpdater self-update: " + updateInfo.getCurrentFileName() + " -> " + updateInfo.getLatestFileName()
+                );
+                pendingUpdateOps.addOperation(updateOp);
+                
+                gui.show("ModUpdater update scheduled for next restart");
+                return;
+            }
+            
+            // Install the new version
+            gui.show("Installing new ModUpdater: " + updateInfo.getLatestFileName());
+            try {
+                FileUtils.atomicMoveWithRetries(tmpFile, newJarTarget, 5, 200);
+                gui.show("ModUpdater updated successfully!");
+                gui.show("Please restart the game to use the new version.");
+            } catch (IOException e) {
+                gui.show("ERROR: Failed to install new ModUpdater: " + e.getMessage());
+                // Clean up
+                if (tmpFile.exists()) tmpFile.delete();
+            }
+            
         } catch (Exception e) {
             gui.show("Self-update check failed (non-critical): " + e.getMessage());
+            e.printStackTrace();
             // Don't throw - self-update failures shouldn't block mod updates
         }
     }

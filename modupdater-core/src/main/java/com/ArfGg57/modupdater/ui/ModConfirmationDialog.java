@@ -6,6 +6,7 @@ import com.ArfGg57.modupdater.hash.HashUtils;
 import com.ArfGg57.modupdater.hash.RenamedFileResolver;
 import com.ArfGg57.modupdater.metadata.ModMetadata;
 import com.ArfGg57.modupdater.resolver.FilenameResolver;
+import com.ArfGg57.modupdater.selfupdate.SelfUpdateCoordinator;
 import com.ArfGg57.modupdater.util.FileUtils;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -85,6 +86,9 @@ public class ModConfirmationDialog {
     // Metadata and resolver for hash-based rename detection
     private ModMetadata modMetadata;
     private RenamedFileResolver renamedFileResolver;
+    
+    // Self-update info (stored for use by UpdaterCore)
+    private SelfUpdateCoordinator.SelfUpdateInfo selfUpdateInfo;
 
     // Mapping to hold URL/source data for file entries (keyed by "FILE: <path>")
     // This allows showing a URL/source for file items when we learned it from files.json
@@ -179,6 +183,17 @@ public class ModConfirmationDialog {
             } catch (Exception e) {
                 System.out.println("[ModConfirmationDialog] Warning: Could not load metadata: " + e.getMessage());
                 // Continue without metadata - will work in degraded mode
+            }
+            
+            // ---------------------
+            // SELF-UPDATE CHECK: Check for ModUpdater updates first
+            // ---------------------
+            checkingDialog.updateStatus("Checking for ModUpdater updates...");
+            try {
+                checkForSelfUpdate();
+            } catch (Exception e) {
+                System.out.println("[ModConfirmationDialog] Self-update check failed (non-critical): " + e.getMessage());
+                // Continue - self-update is not critical
             }
             
             // Read local config to find remote_config_url
@@ -655,6 +670,51 @@ public class ModConfirmationDialog {
         }
     }
 
+
+    // -----------------------------
+    // Self-update check
+    // -----------------------------
+    private void checkForSelfUpdate() {
+        SelfUpdateCoordinator coordinator = new SelfUpdateCoordinator(
+            new SelfUpdateCoordinator.Logger() {
+                public void log(String message) {
+                    System.out.println("[ModConfirmationDialog/SelfUpdate] " + message);
+                }
+            }
+        );
+        
+        selfUpdateInfo = coordinator.checkForUpdate();
+        
+        if (selfUpdateInfo != null) {
+            System.out.println("[ModConfirmationDialog] ModUpdater self-update available!");
+            
+            // Add the new version to the "Files to Add" list
+            ModEntry selfUpdateMod = new ModEntry(
+                "ModUpdater (Self-Update)",          // displayName
+                selfUpdateInfo.getLatestDownloadUrl(), // downloadUrl
+                selfUpdateInfo.getLatestFileName(),   // fileName
+                "https://github.com/ArfGg57/ModUpdater-Source", // displaySource
+                "MODUPDATER_SELF",                    // numberId (special ID for self-update)
+                "mods"                                // installLocation
+            );
+            modsToDownload.add(selfUpdateMod);
+            
+            // Add the old version to the "Files to Delete" list
+            if (selfUpdateInfo.hasCurrentJar()) {
+                String deleteEntry = DELETE_KEY_MOD + selfUpdateInfo.getCurrentJarPath() + " (old ModUpdater version)";
+                filesToDelete.add(deleteEntry);
+                System.out.println("[ModConfirmationDialog] Added old ModUpdater to delete list: " + selfUpdateInfo.getCurrentFileName());
+            }
+        }
+    }
+    
+    /**
+     * Get the self-update info for use by UpdaterCore.
+     * @return SelfUpdateInfo if an update is available, null otherwise
+     */
+    public SelfUpdateCoordinator.SelfUpdateInfo getSelfUpdateInfo() {
+        return selfUpdateInfo;
+    }
 
     // -----------------------------
     // Common dialog setup
