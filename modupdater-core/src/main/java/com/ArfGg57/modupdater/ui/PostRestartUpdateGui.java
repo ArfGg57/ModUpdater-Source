@@ -205,8 +205,9 @@ public class PostRestartUpdateGui {
         SwingUtilities.invokeLater(() -> {
             frame.setVisible(true);
             // Ensure the window is brought to the front and focused
+            // Note: setAlwaysOnTop(true) is already set in constructor
             frame.toFront();
-            frame.requestFocus();
+            frame.requestFocusInWindow();
         });
     }
 
