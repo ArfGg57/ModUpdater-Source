@@ -17,8 +17,6 @@ import net.minecraftforge.common.MinecraftForge;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiMainMenu;
 import net.minecraft.client.gui.GuiScreen;
-import net.minecraft.crash.CrashReport;
-import net.minecraft.util.ReportedException;
 import java.lang.management.ManagementFactory;
 import java.util.Arrays;
 
@@ -128,6 +126,10 @@ public class ModUpdaterPostRestartMod {
     /**
      * GuiOpenEvent handler - more reliable way to detect main menu opening.
      * Uses LOWEST priority to ensure all other handlers run first (similar to ding mod pattern).
+     * 
+     * IMPORTANT: This handler only performs crash enforcement (launching cleanup helper and killing JVM)
+     * when restartRequiredFlag is true. In pending ops mode (second restart), this handler does nothing
+     * and lets onClientTick handle the pending operations processing.
      */
     @SubscribeEvent(priority = EventPriority.LOWEST)
     public void onGuiOpen(GuiOpenEvent event) {
@@ -149,13 +151,29 @@ public class ModUpdaterPostRestartMod {
         System.out.println("[ModUpdater-Mod] Main menu opened (via GuiOpenEvent): " +
                 (event.gui != null ? event.gui.getClass().getName() : "null"));
 
-        // If this is crash enforcement mode, mark we've taken action so we don't double-run
-        if (restartRequiredFlag) {
-            actionTaken.set(true);
+        // ONLY perform crash enforcement if restartRequiredFlag is true
+        // In pending ops mode (second restart after crash), do NOT launch cleanup helper or kill JVM
+        // Let onClientTick handle pending operations processing instead
+        if (!restartRequiredFlag) {
+            System.out.println("[ModUpdater-Mod] Not in crash enforcement mode, skipping JVM kill (pending ops will be handled by tick handler)");
+            return;
         }
+
+        // Try to claim crash execution (thread-safe, prevents duplicate crashes from tick handler)
+        if (!CrashCoordinator.tryClaim()) {
+            System.out.println("[ModUpdater-Mod] Another handler already claimed crash execution, skipping");
+            actionTaken.set(true);
+            return;
+        }
+
+        // Mark we've taken action so we don't double-run
+        actionTaken.set(true);
+        System.out.println("[ModUpdater-Mod] Crash enforcement mode active - preparing to launch cleanup helper and terminate JVM");
 
         // --- Launch the cleanup helper before the game is killed ---
         File mcDir = Minecraft.getMinecraft().mcDataDir;
+        System.out.println("[ModUpdater-Mod] Game directory: " + mcDir.getAbsolutePath());
+        
         boolean helperLaunched = CleanupHelperLauncher.launchCleanupHelper(mcDir);
         
         // Fallback: try legacy modupdater.cleanupHelperCmd property
@@ -178,12 +196,19 @@ public class ModUpdaterPostRestartMod {
         }
         
         if (!helperLaunched) {
-            System.out.println("[ModUpdater-Mod] Cleanup helper not available; pending operations will be processed on next game launch.");
+            System.out.println("[ModUpdater-Mod] WARNING: Cleanup helper not available; pending operations will be processed on next game launch.");
+        } else {
+            System.out.println("[ModUpdater-Mod] Cleanup helper launched successfully, will process operations after JVM exit");
         }
 
+        // Flush output streams to ensure logs are written before JVM is killed
+        System.out.flush();
+        System.err.flush();
+
         // --- Spawn external process to forcibly kill the JVM (works around FML security manager) ---
+        // Increased delay to 500ms to ensure cleanup helper has time to start properly
         new Thread(() -> {
-            try { Thread.sleep(150L); } catch (InterruptedException ignored) {}
+            try { Thread.sleep(500L); } catch (InterruptedException ignored) {}
 
             System.out.println("[ModUpdater-Mod] Preparing external kill of JVM to release locked files");
 
@@ -207,6 +232,8 @@ public class ModUpdaterPostRestartMod {
             }
 
             System.out.println("[ModUpdater-Mod] Executing external kill command: " + Arrays.toString(killCmd));
+            System.out.flush();
+            
             try {
                 ProcessBuilder pb = new ProcessBuilder(killCmd);
                 pb.inheritIO(); // optional: makes command output appear in logs
@@ -314,7 +341,8 @@ public class ModUpdaterPostRestartMod {
     }
     
     /**
-     * Perform the actual crash by creating a Forge CrashReport and throwing ReportedException.
+     * Perform the crash by launching the cleanup helper and externally killing the JVM.
+     * This is a fallback path if onGuiOpen didn't handle the crash (e.g., main menu detection timing issues).
      */
     private void performCrash(GuiScreen currentScreen) {
         // Try to claim the crash execution (thread-safe, prevents duplicate crashes)
@@ -332,61 +360,84 @@ public class ModUpdaterPostRestartMod {
         } catch (Exception ignored) {}
         
         System.out.println("[ModUpdater-Mod] ========================================");
-        System.out.println("[ModUpdater-Mod] EXECUTING DEFERRED CRASH");
+        System.out.println("[ModUpdater-Mod] EXECUTING DEFERRED CRASH (via tick handler fallback)");
         System.out.println("[ModUpdater-Mod] ========================================");
         
-        // Create crash report with enriched details
-        RuntimeException cause = new RuntimeException(crashMessage);
-        CrashReport report = CrashReport.makeCrashReport(cause, "ModUpdater forced Forge crash");
+        // Launch the cleanup helper before killing the JVM
+        File mcDir = Minecraft.getMinecraft().mcDataDir;
+        System.out.println("[ModUpdater-Mod] Game directory: " + mcDir.getAbsolutePath());
         
-        try {
-            // Add custom crash report sections with debugging information
-            report.getCategory().addCrashSection("ModUpdater Deferred Crash Details", "");
-            
-            String restartProp = System.getProperty("modupdater.restartRequired", "null");
-            report.getCategory().addCrashSection("RestartRequiredProperty", restartProp);
-            
-            String menuClass = (currentScreen != null) ? currentScreen.getClass().getName() : "null";
-            report.getCategory().addCrashSection("MenuClass", menuClass);
-            
-            report.getCategory().addCrashSection("TicksSinceInit", String.valueOf(ticksSinceInit));
-            
-            report.getCategory().addCrashSection("CrashTimestamp", new java.util.Date().toString());
-            
-            // Try to read locked files list if available
-            // Security: Only read the file if it's in a temp directory or config directory
-            String listPath = System.getProperty("modupdater.lockedFilesListFile", "");
-            boolean lockedFilesPresent = false;
-            if (!listPath.isEmpty()) {
-                java.nio.file.Path p = java.nio.file.Paths.get(listPath);
-                // Security validation: Only read files from temp directory or config directory
-                String absolutePath = p.toAbsolutePath().toString().toLowerCase();
-                boolean isSafeLocation = absolutePath.contains("temp") || 
-                                          absolutePath.contains("tmp") || 
-                                          absolutePath.contains("config") ||
-                                          absolutePath.contains("modupdater");
-                if (isSafeLocation && java.nio.file.Files.exists(p)) {
-                    // Security: Limit file size to 100KB to prevent memory issues
-                    long fileSize = java.nio.file.Files.size(p);
-                    if (fileSize <= 100 * 1024) {
-                        lockedFilesPresent = true;
-                        java.util.List<String> lines = java.nio.file.Files.readAllLines(p, java.nio.charset.StandardCharsets.UTF_8);
-                        // Limit to first 100 lines
-                        if (lines.size() > 100) {
-                            lines = lines.subList(0, 100);
-                            lines.add("... (truncated, " + (lines.size() - 100) + " more lines)");
-                        }
-                        report.getCategory().addCrashSection("ModUpdater Locked Files", String.join("\n", lines));
-                    }
+        boolean helperLaunched = CleanupHelperLauncher.launchCleanupHelper(mcDir);
+        
+        // Fallback: try legacy modupdater.cleanupHelperCmd property
+        if (!helperLaunched) {
+            String helperCmd = System.getProperty("modupdater.cleanupHelperCmd", "").trim();
+            if (!helperCmd.isEmpty()) {
+                try {
+                    String[] cmd = helperCmd.split(" ");
+                    ProcessBuilder pb = new ProcessBuilder(cmd);
+                    pb.directory(new File(mcDir, "config/ModUpdater"));
+                    pb.start();
+                    System.out.println("[ModUpdater-Mod] Launched cleanup helper via modupdater.cleanupHelperCmd");
+                    helperLaunched = true;
+                } catch (IOException ioe) {
+                    System.err.println("[ModUpdater-Mod] Failed to launch cleanup helper: " + ioe.getMessage());
+                } catch (SecurityException se) {
+                    System.err.println("[ModUpdater-Mod] SecurityException launching cleanup helper: " + se.getMessage());
                 }
             }
-            report.getCategory().addCrashSection("LockedFilesPresent", String.valueOf(lockedFilesPresent));
-        } catch (Throwable t) {
-            System.err.println("[ModUpdater-Mod] Warning: Failed to enrich crash report: " + t.getMessage());
         }
         
-        System.out.println("[ModUpdater-Mod] Throwing ReportedException now");
-        throw new ReportedException(report);
+        if (!helperLaunched) {
+            System.out.println("[ModUpdater-Mod] WARNING: Cleanup helper not available; pending operations will be processed on next game launch.");
+        } else {
+            System.out.println("[ModUpdater-Mod] Cleanup helper launched successfully, will process operations after JVM exit");
+        }
+
+        // Flush output streams to ensure logs are written before JVM is killed
+        System.out.flush();
+        System.err.flush();
+
+        // Spawn external process to forcibly kill the JVM (works around FML security manager)
+        // Increased delay to 500ms to ensure cleanup helper has time to start properly
+        new Thread(() -> {
+            try { Thread.sleep(500L); } catch (InterruptedException ignored) {}
+
+            System.out.println("[ModUpdater-Mod] Preparing external kill of JVM to release locked files");
+
+            // Get current JVM PID (RuntimeMXBean name format "pid@host")
+            String jvmName = ManagementFactory.getRuntimeMXBean().getName();
+            String pid = jvmName;
+            if (jvmName != null && jvmName.contains("@")) {
+                pid = jvmName.split("@")[0];
+            }
+            System.out.println("[ModUpdater-Mod] Current JVM PID: " + pid);
+
+            // Build OS-specific kill command
+            String os = System.getProperty("os.name").toLowerCase();
+            String[] killCmd;
+            if (os.contains("win")) {
+                // Use taskkill to force-terminate the JVM process
+                killCmd = new String[] { "cmd", "/c", "taskkill", "/PID", pid, "/F" };
+            } else {
+                // Unix-like: use kill -9
+                killCmd = new String[] { "/bin/sh", "-c", "kill -9 " + pid };
+            }
+
+            System.out.println("[ModUpdater-Mod] Executing external kill command: " + Arrays.toString(killCmd));
+            System.out.flush();
+            
+            try {
+                ProcessBuilder pb = new ProcessBuilder(killCmd);
+                pb.inheritIO();
+                pb.start();
+                System.out.println("[ModUpdater-Mod] External kill command started successfully");
+            } catch (IOException ioe) {
+                System.err.println("[ModUpdater-Mod] Failed to start external kill command: " + ioe.getMessage());
+            } catch (SecurityException se) {
+                System.err.println("[ModUpdater-Mod] SecurityException starting kill process: " + se.getMessage());
+            }
+        }, "ModUpdater-ForceKill-Fallback").start();
     }
     
     /**
