@@ -134,7 +134,6 @@ public class CleanupHelperLauncher {
         // This handles version-specific names like modupdater-cleanup-2.20.jar
         File modsDir = new File(gameDir, "mods");
         if (modsDir.exists() && modsDir.isDirectory()) {
-        if (modsDir.exists() && modsDir.isDirectory()) {
             File[] files = modsDir.listFiles((dir, name) -> 
                 name.toLowerCase().contains("modupdater-cleanup") && name.endsWith(".jar"));
             if (files != null && files.length > 0) {
