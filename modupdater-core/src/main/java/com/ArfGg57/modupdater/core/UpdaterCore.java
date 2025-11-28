@@ -1009,6 +1009,10 @@ public class UpdaterCore {
     /**
      * Check for ModUpdater self-updates and handle them using pending operations.
      * Uses the simplified self-update system that compares file names from GitHub releases.
+     * 
+     * Multi-JAR update process:
+     * - Phase 1 (during update): Download and install launchwrapper and mod JARs
+     * - Phase 2 (after restart): Remove old JARs, download and install cleanup JAR
      */
     private void checkSelfUpdate() {
         try {
@@ -1030,96 +1034,171 @@ public class UpdaterCore {
             }
             
             gui.show("ModUpdater update available!");
-            gui.show("  Current: " + updateInfo.getCurrentFileName());
-            gui.show("  Latest:  " + updateInfo.getLatestFileName());
+            gui.show("  Launchwrapper: " + updateInfo.getCurrentFileName() + " -> " + updateInfo.getLatestFileName());
+            if (updateInfo.hasModJar()) {
+                gui.show("  Mod JAR: " + (updateInfo.hasCurrentModJar() ? "update available" : "new"));
+            }
+            if (updateInfo.hasCleanupJar()) {
+                gui.show("  Cleanup JAR: " + (updateInfo.hasCurrentCleanupJar() ? "update available" : "new"));
+            }
             
-            // Handle the self-update
             File modsDir = new File("mods");
-            File newJarTarget = new File(modsDir, updateInfo.getLatestFileName());
-            
-            // Download the new version
-            gui.show("Downloading new ModUpdater version...");
             File tmpRoot = new File("modupdater/tmp/");
             if (!tmpRoot.exists()) tmpRoot.mkdirs();
-            File tmpFile = new File(tmpRoot, updateInfo.getLatestFileName() + "-" + UUID.randomUUID().toString() + ".tmp");
+            File backupRoot = new File("modupdater/backup/selfupdate/");
+            if (!backupRoot.exists()) backupRoot.mkdirs();
             
-            boolean downloadOk = FileUtils.downloadWithVerification(
+            boolean anyDeletionFailed = false;
+            
+            // ===== PHASE 1: Install Launchwrapper and Mod JARs =====
+            
+            // --- Launchwrapper JAR ---
+            gui.show("=== Updating Launchwrapper JAR ===");
+            File newLaunchwrapperTarget = new File(modsDir, updateInfo.getLatestFileName());
+            File tmpLaunchwrapper = new File(tmpRoot, updateInfo.getLatestFileName() + "-" + UUID.randomUUID().toString() + ".tmp");
+            
+            boolean launchwrapperOk = FileUtils.downloadWithVerification(
                 updateInfo.getLatestDownloadUrl(),
-                tmpFile,
+                tmpLaunchwrapper,
                 updateInfo.getLatestSha256Hash(),
                 gui,
-                3  // maxRetries
+                3
             );
             
-            if (!downloadOk) {
-                gui.show("ERROR: Failed to download ModUpdater update");
-                if (tmpFile.exists()) tmpFile.delete();
+            if (!launchwrapperOk) {
+                gui.show("ERROR: Failed to download launchwrapper JAR");
+                if (tmpLaunchwrapper.exists()) tmpLaunchwrapper.delete();
                 return;
             }
             
-            gui.show("Download completed successfully");
-            
-            // If there's an old JAR, schedule it for deletion
-            boolean deletionFailed = false;
+            // Handle old launchwrapper
             if (updateInfo.hasCurrentJar()) {
                 File oldJar = new File(updateInfo.getCurrentJarPath());
-                gui.show("Removing old ModUpdater: " + oldJar.getName());
-                
-                // Backup the old JAR
-                File backupRoot = new File("modupdater/backup/selfupdate/");
-                if (!backupRoot.exists()) backupRoot.mkdirs();
+                gui.show("Removing old launchwrapper: " + oldJar.getName());
                 FileUtils.backupPathTo(oldJar, backupRoot);
                 
-                // Try to delete the old JAR
                 if (!oldJar.delete()) {
-                    gui.show("Old ModUpdater JAR is locked - scheduling for deletion after restart");
+                    gui.show("Old launchwrapper JAR is locked - scheduling for deletion after restart");
                     pendingDeletes.add(oldJar);
-                    deletionFailed = true;
+                    anyDeletionFailed = true;
                     
-                    // Create DELETE operation for the old JAR
-                    PendingUpdateOperation deleteOp = PendingUpdateOperation.createDelete(
+                    PendingUpdateOperation updateOp = PendingUpdateOperation.createUpdate(
                         oldJar.getAbsolutePath(),
-                        "ModUpdater self-update: remove old version " + updateInfo.getCurrentFileName()
+                        updateInfo.getLatestDownloadUrl(),
+                        updateInfo.getLatestFileName(),
+                        "mods",
+                        updateInfo.getLatestSha256Hash(),
+                        "ModUpdater self-update (launchwrapper): " + updateInfo.getCurrentFileName() + " -> " + updateInfo.getLatestFileName()
                     );
-                    pendingUpdateOps.addOperation(deleteOp);
+                    pendingUpdateOps.addOperation(updateOp);
+                    if (tmpLaunchwrapper.exists()) tmpLaunchwrapper.delete();
                 }
             }
             
-            // If deletion failed, we can't install the new version yet
-            // Schedule it as an UPDATE operation for after restart
-            if (deletionFailed) {
-                gui.show("Cannot install new ModUpdater while old version is locked");
-                gui.show("Scheduling update for after restart...");
-                
-                // Delete the temp file since we can't install now
-                if (tmpFile.exists()) tmpFile.delete();
-                
-                // Create UPDATE operation (the DELETE operation was already added above)
-                // The new version will be downloaded again after restart
-                PendingUpdateOperation updateOp = PendingUpdateOperation.createUpdate(
-                    updateInfo.getCurrentJarPath(),
-                    updateInfo.getLatestDownloadUrl(),
-                    updateInfo.getLatestFileName(),
-                    "mods",
-                    updateInfo.getLatestSha256Hash(),
-                    "ModUpdater self-update: " + updateInfo.getCurrentFileName() + " -> " + updateInfo.getLatestFileName()
-                );
-                pendingUpdateOps.addOperation(updateOp);
-                
-                gui.show("ModUpdater update scheduled for next restart");
-                return;
+            // Install if not locked
+            if (!anyDeletionFailed || !updateInfo.hasCurrentJar()) {
+                try {
+                    FileUtils.atomicMoveWithRetries(tmpLaunchwrapper, newLaunchwrapperTarget, 5, 200);
+                    gui.show("Launchwrapper JAR installed successfully");
+                } catch (IOException e) {
+                    gui.show("ERROR: Failed to install launchwrapper: " + e.getMessage());
+                    if (tmpLaunchwrapper.exists()) tmpLaunchwrapper.delete();
+                }
             }
             
-            // Install the new version
-            gui.show("Installing new ModUpdater: " + updateInfo.getLatestFileName());
-            try {
-                FileUtils.atomicMoveWithRetries(tmpFile, newJarTarget, 5, 200);
+            // --- Mod JAR ---
+            if (updateInfo.hasModJar()) {
+                gui.show("=== Updating Mod JAR ===");
+                File newModTarget = new File(modsDir, updateInfo.getLatestModFileName());
+                File tmpMod = new File(tmpRoot, updateInfo.getLatestModFileName() + "-" + UUID.randomUUID().toString() + ".tmp");
+                
+                boolean modOk = FileUtils.downloadWithVerification(
+                    updateInfo.getLatestModDownloadUrl(),
+                    tmpMod,
+                    updateInfo.getLatestModSha256Hash(),
+                    gui,
+                    3
+                );
+                
+                if (modOk) {
+                    // Handle old mod JAR
+                    if (updateInfo.hasCurrentModJar()) {
+                        File oldMod = new File(updateInfo.getCurrentModJarPath());
+                        gui.show("Removing old mod JAR: " + oldMod.getName());
+                        FileUtils.backupPathTo(oldMod, backupRoot);
+                        
+                        if (!oldMod.delete()) {
+                            gui.show("Old mod JAR is locked - scheduling for deletion after restart");
+                            pendingDeletes.add(oldMod);
+                            anyDeletionFailed = true;
+                            
+                            PendingUpdateOperation updateOp = PendingUpdateOperation.createUpdate(
+                                oldMod.getAbsolutePath(),
+                                updateInfo.getLatestModDownloadUrl(),
+                                updateInfo.getLatestModFileName(),
+                                "mods",
+                                updateInfo.getLatestModSha256Hash(),
+                                "ModUpdater self-update (mod): " + oldMod.getName() + " -> " + updateInfo.getLatestModFileName()
+                            );
+                            pendingUpdateOps.addOperation(updateOp);
+                            if (tmpMod.exists()) tmpMod.delete();
+                        }
+                    }
+                    
+                    // Install if not locked
+                    if (!anyDeletionFailed || !updateInfo.hasCurrentModJar()) {
+                        try {
+                            FileUtils.atomicMoveWithRetries(tmpMod, newModTarget, 5, 200);
+                            gui.show("Mod JAR installed successfully");
+                        } catch (IOException e) {
+                            gui.show("ERROR: Failed to install mod JAR: " + e.getMessage());
+                            if (tmpMod.exists()) tmpMod.delete();
+                        }
+                    }
+                } else {
+                    gui.show("WARNING: Failed to download mod JAR (non-critical)");
+                    if (tmpMod.exists()) tmpMod.delete();
+                }
+            }
+            
+            // ===== PHASE 2: Schedule Cleanup JAR for After Restart =====
+            // The cleanup JAR is scheduled as a pending operation so it gets updated
+            // after the game restarts and the launchwrapper/mod are installed
+            if (updateInfo.hasCleanupJar()) {
+                gui.show("=== Scheduling Cleanup JAR Update ===");
+                gui.show("Cleanup JAR will be updated after restart");
+                
+                // Create pending operation for cleanup JAR
+                if (updateInfo.hasCurrentCleanupJar()) {
+                    // Update existing cleanup JAR
+                    PendingUpdateOperation cleanupOp = PendingUpdateOperation.createUpdate(
+                        updateInfo.getCurrentCleanupJarPath(),
+                        updateInfo.getLatestCleanupDownloadUrl(),
+                        updateInfo.getLatestCleanupFileName(),
+                        "mods",
+                        updateInfo.getLatestCleanupSha256Hash(),
+                        "ModUpdater self-update (cleanup): scheduled for post-restart"
+                    );
+                    pendingUpdateOps.addOperation(cleanupOp);
+                } else {
+                    // New cleanup JAR - create a DOWNLOAD operation (no old file to delete)
+                    PendingUpdateOperation cleanupOp = PendingUpdateOperation.createDownload(
+                        updateInfo.getLatestCleanupDownloadUrl(),
+                        updateInfo.getLatestCleanupFileName(),
+                        "mods",
+                        updateInfo.getLatestCleanupSha256Hash(),
+                        "ModUpdater self-update (cleanup): new install post-restart"
+                    );
+                    pendingUpdateOps.addOperation(cleanupOp);
+                }
+            }
+            
+            // Summary
+            if (anyDeletionFailed) {
+                gui.show("ModUpdater update partially complete - restart required to finish");
+            } else {
                 gui.show("ModUpdater updated successfully!");
                 gui.show("Please restart the game to use the new version.");
-            } catch (IOException e) {
-                gui.show("ERROR: Failed to install new ModUpdater: " + e.getMessage());
-                // Clean up
-                if (tmpFile.exists()) tmpFile.delete();
             }
             
         } catch (Exception e) {

@@ -11,6 +11,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Simplified self-update coordinator for ModUpdater.
@@ -22,6 +24,10 @@ import java.nio.charset.StandardCharsets;
  * 4. The update is shown in the confirmation dialog (new version to download, old version to delete)
  * 5. Uses the existing pending operations system for locked file handling
  * 6. If the old JAR was renamed, uses hash comparison to find and delete it
+ * 
+ * Multi-JAR update process:
+ * - Phase 1 (during update): Download and install launchwrapper and mod JARs
+ * - Phase 2 (after restart): Remove old launchwrapper/mod, then download and install cleanup JAR
  */
 public class SelfUpdateCoordinator {
     
@@ -32,6 +38,11 @@ public class SelfUpdateCoordinator {
     
     // Path to current_release.json in the source repository
     private static final String CURRENT_RELEASE_JSON_URL = "https://raw.githubusercontent.com/" + GITHUB_REPO + "/main/current_release.json";
+    
+    // JAR file patterns for identification
+    private static final String LAUNCHWRAPPER_PATTERN = "modupdater";  // Main JAR (not -mod or -cleanup)
+    private static final String MOD_PATTERN = "modupdater-mod";
+    private static final String CLEANUP_PATTERN = "modupdater-cleanup";
     
     /**
      * Logger interface for output messages
@@ -79,32 +90,74 @@ public class SelfUpdateCoordinator {
                 return null;
             }
             
-            // Find the ModUpdater JAR asset in the release
-            String latestFileName = null;
-            String latestDownloadUrl = null;
-            String latestSha256Hash = null;
+            // Find all ModUpdater JAR assets in the release
+            JarAsset launchwrapperAsset = null;
+            JarAsset modAsset = null;
+            JarAsset cleanupAsset = null;
+            String launchwrapperSha256 = null;
+            String modSha256 = null;
+            String cleanupSha256 = null;
             
             JSONArray assets = latestRelease.optJSONArray("assets");
             if (assets != null) {
+                // First pass: find all JAR files
+                // Order matters: check cleanup and mod patterns before launchwrapper
+                // since "modupdater" pattern would match all of them
+                for (int i = 0; i < assets.length(); i++) {
+                    JSONObject asset = assets.getJSONObject(i);
+                    String assetName = asset.getString("name");
+                    String downloadUrl = asset.getString("browser_download_url");
+                    
+                    if (assetName.endsWith(".jar")) {
+                        String nameLower = assetName.toLowerCase();
+                        
+                        // Check specific patterns first (cleanup, mod), then generic (launchwrapper)
+                        if (nameLower.contains(CLEANUP_PATTERN)) {
+                            cleanupAsset = new JarAsset(assetName, downloadUrl);
+                            logger.log("Found cleanup JAR: " + assetName);
+                        } else if (nameLower.contains(MOD_PATTERN)) {
+                            modAsset = new JarAsset(assetName, downloadUrl);
+                            logger.log("Found mod JAR: " + assetName);
+                        } else if (nameLower.contains(LAUNCHWRAPPER_PATTERN) 
+                                   && !nameLower.contains("-mod") 
+                                   && !nameLower.contains("-cleanup")) {
+                            // Main launchwrapper JAR - explicitly exclude mod and cleanup patterns
+                            launchwrapperAsset = new JarAsset(assetName, downloadUrl);
+                            logger.log("Found launchwrapper JAR: " + assetName);
+                        }
+                    }
+                }
+                
+                // Second pass: find SHA256 hash files
                 for (int i = 0; i < assets.length(); i++) {
                     JSONObject asset = assets.getJSONObject(i);
                     String assetName = asset.getString("name");
                     
-                    // Look for the ModUpdater JAR
-                    if (assetName.endsWith(".jar") && assetName.toLowerCase().contains("modupdater")) {
-                        latestFileName = assetName;
-                        latestDownloadUrl = asset.getString("browser_download_url");
-                        logger.log("Found JAR asset: " + assetName);
-                    }
-                    
-                    // Look for SHA256 hash file
                     if (assetName.endsWith(".sha256")) {
                         try {
                             String hashUrl = asset.getString("browser_download_url");
                             String hashContent = FileUtils.readUrlToString(hashUrl, null);
                             if (hashContent != null) {
-                                latestSha256Hash = hashContent.trim().split("\\s+")[0];
-                                logger.log("Found SHA256 hash: " + latestSha256Hash);
+                                String hash = hashContent.trim().split("\\s+")[0];
+                                
+                                // Validate SHA-256 format (64 hex characters)
+                                if (!isValidSha256(hash)) {
+                                    logger.log("Invalid SHA256 format in file: " + assetName);
+                                    continue;
+                                }
+                                
+                                String baseName = assetName.substring(0, assetName.length() - 7); // Remove .sha256
+                                
+                                if (launchwrapperAsset != null && baseName.equals(launchwrapperAsset.fileName)) {
+                                    launchwrapperSha256 = hash;
+                                    logger.log("Found launchwrapper SHA256: " + hash.substring(0, 8) + "...");
+                                } else if (modAsset != null && baseName.equals(modAsset.fileName)) {
+                                    modSha256 = hash;
+                                    logger.log("Found mod SHA256: " + hash.substring(0, 8) + "...");
+                                } else if (cleanupAsset != null && baseName.equals(cleanupAsset.fileName)) {
+                                    cleanupSha256 = hash;
+                                    logger.log("Found cleanup SHA256: " + hash.substring(0, 8) + "...");
+                                }
                             }
                         } catch (Exception e) {
                             logger.log("Could not read SHA256 hash file: " + e.getMessage());
@@ -113,34 +166,43 @@ public class SelfUpdateCoordinator {
                 }
             }
             
-            if (latestFileName == null || latestDownloadUrl == null) {
-                logger.log("No ModUpdater JAR found in latest release");
+            if (launchwrapperAsset == null) {
+                logger.log("No ModUpdater launchwrapper JAR found in latest release");
                 return null;
             }
             
             // Step 3: Compare file names to determine if update is needed
-            if (currentFileName.equals(latestFileName)) {
+            if (currentFileName.equals(launchwrapperAsset.fileName)) {
                 logger.log("ModUpdater is up to date (file name matches: " + currentFileName + ")");
                 return null;
             }
             
             logger.log("ModUpdater update available!");
             logger.log("  Current: " + currentFileName);
-            logger.log("  Latest:  " + latestFileName);
+            logger.log("  Latest:  " + launchwrapperAsset.fileName);
             
-            // Step 4: Find the current installed JAR
-            File currentJar = findCurrentJar(currentFileName, previousReleaseHash);
-            String currentJarPath = currentJar != null ? currentJar.getAbsolutePath() : null;
-            String currentJarName = currentJar != null ? currentJar.getName() : currentFileName;
+            // Step 4: Find current installed JARs
+            File currentLaunchwrapper = findCurrentJar(currentFileName, previousReleaseHash);
+            File currentMod = findJarByPattern(MOD_PATTERN);
+            File currentCleanup = findJarByPattern(CLEANUP_PATTERN);
             
-            // Create and return the update info
+            // Create and return the update info with all JAR details
             return new SelfUpdateInfo(
-                currentJarName,
-                currentJarPath,
-                latestFileName,
-                latestDownloadUrl,
-                latestSha256Hash,
-                previousReleaseHash
+                currentLaunchwrapper != null ? currentLaunchwrapper.getName() : currentFileName,
+                currentLaunchwrapper != null ? currentLaunchwrapper.getAbsolutePath() : null,
+                launchwrapperAsset.fileName,
+                launchwrapperAsset.downloadUrl,
+                launchwrapperSha256,
+                previousReleaseHash,
+                // Additional JARs
+                modAsset != null ? modAsset.fileName : null,
+                modAsset != null ? modAsset.downloadUrl : null,
+                modSha256,
+                currentMod != null ? currentMod.getAbsolutePath() : null,
+                cleanupAsset != null ? cleanupAsset.fileName : null,
+                cleanupAsset != null ? cleanupAsset.downloadUrl : null,
+                cleanupSha256,
+                currentCleanup != null ? currentCleanup.getAbsolutePath() : null
             );
             
         } catch (Exception e) {
@@ -148,6 +210,34 @@ public class SelfUpdateCoordinator {
             e.printStackTrace();
             return null;
         }
+    }
+    
+    /**
+     * Simple container for JAR asset info
+     */
+    private static class JarAsset {
+        final String fileName;
+        final String downloadUrl;
+        
+        JarAsset(String fileName, String downloadUrl) {
+            this.fileName = fileName;
+            this.downloadUrl = downloadUrl;
+        }
+    }
+    
+    /**
+     * Validate SHA-256 hash format (64 hexadecimal characters)
+     */
+    private boolean isValidSha256(String hash) {
+        if (hash == null || hash.length() != 64) {
+            return false;
+        }
+        for (char c : hash.toLowerCase().toCharArray()) {
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
+                return false;
+            }
+        }
+        return true;
     }
     
     /**
@@ -172,6 +262,27 @@ public class SelfUpdateCoordinator {
             logger.log("Failed to fetch latest release: " + e.getMessage());
             return null;
         }
+    }
+    
+    /**
+     * Find a JAR file in the mods directory by pattern
+     */
+    private File findJarByPattern(String pattern) {
+        File modsDir = new File("mods");
+        if (!modsDir.exists() || !modsDir.isDirectory()) {
+            return null;
+        }
+        
+        File[] files = modsDir.listFiles();
+        if (files == null) return null;
+        
+        for (File file : files) {
+            String name = file.getName().toLowerCase();
+            if (name.contains(pattern) && name.endsWith(".jar")) {
+                return file;
+            }
+        }
+        return null;
     }
     
     /**
@@ -202,10 +313,11 @@ public class SelfUpdateCoordinator {
             }
         }
         
-        // Second, try to find any file containing "modupdater" in the name
+        // Second, try to find main modupdater JAR (not mod or cleanup)
         for (File file : files) {
             String name = file.getName().toLowerCase();
-            if (name.contains("modupdater") && name.endsWith(".jar")) {
+            if (name.contains("modupdater") && name.endsWith(".jar") 
+                && !name.contains("-mod") && !name.contains("-cleanup")) {
                 logger.log("Found current JAR by name pattern: " + file.getName());
                 return file;
             }
@@ -261,9 +373,10 @@ public class SelfUpdateCoordinator {
     }
     
     /**
-     * Container class for self-update information
+     * Container class for self-update information including all JAR files
      */
     public static class SelfUpdateInfo {
+        // Launchwrapper JAR (main ModUpdater)
         private final String currentFileName;
         private final String currentJarPath;
         private final String latestFileName;
@@ -271,24 +384,62 @@ public class SelfUpdateCoordinator {
         private final String latestSha256Hash;
         private final String previousReleaseHash;
         
+        // Mod JAR (post-restart handler)
+        private final String latestModFileName;
+        private final String latestModDownloadUrl;
+        private final String latestModSha256Hash;
+        private final String currentModJarPath;
+        
+        // Cleanup JAR (cleanup helper)
+        private final String latestCleanupFileName;
+        private final String latestCleanupDownloadUrl;
+        private final String latestCleanupSha256Hash;
+        private final String currentCleanupJarPath;
+        
         public SelfUpdateInfo(String currentFileName, String currentJarPath, 
                              String latestFileName, String latestDownloadUrl,
-                             String latestSha256Hash, String previousReleaseHash) {
+                             String latestSha256Hash, String previousReleaseHash,
+                             String latestModFileName, String latestModDownloadUrl, String latestModSha256Hash, String currentModJarPath,
+                             String latestCleanupFileName, String latestCleanupDownloadUrl, String latestCleanupSha256Hash, String currentCleanupJarPath) {
             this.currentFileName = currentFileName;
             this.currentJarPath = currentJarPath;
             this.latestFileName = latestFileName;
             this.latestDownloadUrl = latestDownloadUrl;
             this.latestSha256Hash = latestSha256Hash;
             this.previousReleaseHash = previousReleaseHash;
+            this.latestModFileName = latestModFileName;
+            this.latestModDownloadUrl = latestModDownloadUrl;
+            this.latestModSha256Hash = latestModSha256Hash;
+            this.currentModJarPath = currentModJarPath;
+            this.latestCleanupFileName = latestCleanupFileName;
+            this.latestCleanupDownloadUrl = latestCleanupDownloadUrl;
+            this.latestCleanupSha256Hash = latestCleanupSha256Hash;
+            this.currentCleanupJarPath = currentCleanupJarPath;
         }
         
+        // Launchwrapper getters
         public String getCurrentFileName() { return currentFileName; }
         public String getCurrentJarPath() { return currentJarPath; }
         public String getLatestFileName() { return latestFileName; }
         public String getLatestDownloadUrl() { return latestDownloadUrl; }
         public String getLatestSha256Hash() { return latestSha256Hash; }
         public String getPreviousReleaseHash() { return previousReleaseHash; }
-        
         public boolean hasCurrentJar() { return currentJarPath != null; }
+        
+        // Mod JAR getters
+        public String getLatestModFileName() { return latestModFileName; }
+        public String getLatestModDownloadUrl() { return latestModDownloadUrl; }
+        public String getLatestModSha256Hash() { return latestModSha256Hash; }
+        public String getCurrentModJarPath() { return currentModJarPath; }
+        public boolean hasModJar() { return latestModFileName != null && latestModDownloadUrl != null; }
+        public boolean hasCurrentModJar() { return currentModJarPath != null; }
+        
+        // Cleanup JAR getters
+        public String getLatestCleanupFileName() { return latestCleanupFileName; }
+        public String getLatestCleanupDownloadUrl() { return latestCleanupDownloadUrl; }
+        public String getLatestCleanupSha256Hash() { return latestCleanupSha256Hash; }
+        public String getCurrentCleanupJarPath() { return currentCleanupJarPath; }
+        public boolean hasCleanupJar() { return latestCleanupFileName != null && latestCleanupDownloadUrl != null; }
+        public boolean hasCurrentCleanupJar() { return currentCleanupJarPath != null; }
     }
 }

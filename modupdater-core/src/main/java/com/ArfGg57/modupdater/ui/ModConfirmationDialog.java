@@ -688,22 +688,58 @@ public class ModConfirmationDialog {
         if (selfUpdateInfo != null) {
             System.out.println("[ModConfirmationDialog] ModUpdater self-update available!");
             
-            // Add the new version to the "Files to Add" list
-            ModEntry selfUpdateMod = new ModEntry(
-                "ModUpdater (Self-Update)",          // displayName
-                selfUpdateInfo.getLatestDownloadUrl(), // downloadUrl
-                selfUpdateInfo.getLatestFileName(),   // fileName
-                "https://github.com/ArfGg57/ModUpdater-Source", // displaySource
-                "MODUPDATER_SELF",                    // numberId (special ID for self-update)
-                "mods"                                // installLocation
+            // Add the launchwrapper JAR to the "Files to Add" list
+            ModEntry launchwrapperMod = new ModEntry(
+                "ModUpdater Launchwrapper (Self-Update)",
+                selfUpdateInfo.getLatestDownloadUrl(),
+                selfUpdateInfo.getLatestFileName(),
+                "https://github.com/ArfGg57/ModUpdater-Source",
+                "MODUPDATER_SELF_LAUNCHWRAPPER",
+                "mods"
             );
-            modsToDownload.add(selfUpdateMod);
+            modsToDownload.add(launchwrapperMod);
             
-            // Add the old version to the "Files to Delete" list
+            // Add the mod JAR if available
+            if (selfUpdateInfo.hasModJar()) {
+                ModEntry modJar = new ModEntry(
+                    "ModUpdater Post-Restart Handler (Self-Update)",
+                    selfUpdateInfo.getLatestModDownloadUrl(),
+                    selfUpdateInfo.getLatestModFileName(),
+                    "https://github.com/ArfGg57/ModUpdater-Source",
+                    "MODUPDATER_SELF_MOD",
+                    "mods"
+                );
+                modsToDownload.add(modJar);
+            }
+            
+            // Add the cleanup JAR if available (will be installed after restart)
+            if (selfUpdateInfo.hasCleanupJar()) {
+                ModEntry cleanupJar = new ModEntry(
+                    "ModUpdater Cleanup Helper (Self-Update, post-restart)",
+                    selfUpdateInfo.getLatestCleanupDownloadUrl(),
+                    selfUpdateInfo.getLatestCleanupFileName(),
+                    "https://github.com/ArfGg57/ModUpdater-Source",
+                    "MODUPDATER_SELF_CLEANUP",
+                    "mods"
+                );
+                modsToDownload.add(cleanupJar);
+            }
+            
+            // Add old versions to the "Files to Delete" list
             if (selfUpdateInfo.hasCurrentJar()) {
-                String deleteEntry = DELETE_KEY_MOD + selfUpdateInfo.getCurrentJarPath() + " (old ModUpdater version)";
+                String deleteEntry = DELETE_KEY_MOD + selfUpdateInfo.getCurrentJarPath() + " (old ModUpdater launchwrapper)";
                 filesToDelete.add(deleteEntry);
-                System.out.println("[ModConfirmationDialog] Added old ModUpdater to delete list: " + selfUpdateInfo.getCurrentFileName());
+                System.out.println("[ModConfirmationDialog] Added old launchwrapper to delete list: " + selfUpdateInfo.getCurrentFileName());
+            }
+            
+            if (selfUpdateInfo.hasCurrentModJar()) {
+                String deleteEntry = DELETE_KEY_MOD + selfUpdateInfo.getCurrentModJarPath() + " (old ModUpdater mod)";
+                filesToDelete.add(deleteEntry);
+            }
+            
+            if (selfUpdateInfo.hasCurrentCleanupJar()) {
+                String deleteEntry = DELETE_KEY_MOD + selfUpdateInfo.getCurrentCleanupJarPath() + " (old ModUpdater cleanup)";
+                filesToDelete.add(deleteEntry);
             }
         }
     }
