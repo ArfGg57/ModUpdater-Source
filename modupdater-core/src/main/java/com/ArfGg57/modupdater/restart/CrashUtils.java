@@ -20,21 +20,51 @@ public final class CrashUtils {
     private static final String RESTART_FLAG_FILE = "config/ModUpdater/restart_required.flag";
     private static final String RESTART_MESSAGE_FILE = "config/ModUpdater/restart_message.txt";
 
+    /**
+     * Launches the restart cleanup helper process.
+     * This method delegates to CleanupHelperLauncher for the actual launch,
+     * using the cleanup JAR instead of classpath-based execution.
+     * 
+     * @param pendingDeletes List of files that need to be deleted (for legacy compatibility, may be ignored)
+     * @param message Message to display (for legacy compatibility, may be ignored)
+     */
     public static void launchRestartCleanupHelper(List<File> pendingDeletes, String message) {
-        try {
-            Path listFile = writeDeleteList(pendingDeletes);
-            List<String> command = buildCommand(listFile, message);
-            new ProcessBuilder(command)
-                    .directory(new File(System.getProperty("user.dir")))
-                    .start();
-        } catch (IOException ex) {
-            System.err.println("[ModUpdater] Failed to launch restart helper: " + ex.getMessage());
-            ex.printStackTrace();
+        // Use the CleanupHelperLauncher which properly launches the cleanup JAR
+        File gameDir = new File(System.getProperty("user.dir"));
+        boolean launched = CleanupHelperLauncher.launchCleanupHelper(gameDir);
+        
+        if (!launched) {
+            // Fallback: try the legacy classpath-based approach
+            System.out.println("[ModUpdater] CleanupHelperLauncher failed, trying legacy classpath approach...");
+            try {
+                Path listFile = writeDeleteList(pendingDeletes);
+                List<String> command = buildCommand(listFile, message);
+                ProcessBuilder pb = new ProcessBuilder(command);
+                pb.directory(gameDir);
+                // Redirect output to log files for debugging
+                File logDir = new File(gameDir, "config/ModUpdater/logs");
+                if (!logDir.exists()) {
+                    logDir.mkdirs();
+                }
+                File stdout = new File(logDir, "restart-cleanup-stdout.log");
+                File stderr = new File(logDir, "restart-cleanup-stderr.log");
+                pb.redirectOutput(ProcessBuilder.Redirect.appendTo(stdout));
+                pb.redirectError(ProcessBuilder.Redirect.appendTo(stderr));
+                pb.start();
+                System.out.println("[ModUpdater] Legacy restart helper started");
+            } catch (IOException ex) {
+                System.err.println("[ModUpdater] Failed to launch restart helper (legacy): " + ex.getMessage());
+                ex.printStackTrace();
+            }
+        } else {
+            System.out.println("[ModUpdater] Cleanup helper launched via CleanupHelperLauncher");
         }
     }
 
     private static Path writeDeleteList(List<File> files) throws IOException {
-        Path listFile = Files.createTempFile("modupdater-restart", ".lst");
+        // Write to a persistent location instead of temp file
+        Path listFile = Paths.get("config/ModUpdater/restart-deletes.lst");
+        Files.createDirectories(listFile.getParent());
         try (BufferedWriter writer = Files.newBufferedWriter(listFile, StandardCharsets.UTF_8)) {
             if (files != null) {
                 for (File f : files) {
@@ -43,7 +73,7 @@ public final class CrashUtils {
                 }
             }
         }
-        listFile.toFile().deleteOnExit();
+        // Don't mark for deleteOnExit since the parent JVM will be killed
         return listFile;
     }
 
@@ -75,7 +105,9 @@ public final class CrashUtils {
 
     public static String writeLockedFileList(List<File> files) {
         try {
-            Path p = Files.createTempFile("modupdater-locked", ".lst");
+            // Write to a persistent location instead of temp file
+            Path p = Paths.get("config/ModUpdater/locked-files-temp.lst");
+            Files.createDirectories(p.getParent());
             try (BufferedWriter w = Files.newBufferedWriter(p, StandardCharsets.UTF_8)) {
                 if (files != null) {
                     for (File f : files) {
@@ -84,7 +116,7 @@ public final class CrashUtils {
                     }
                 }
             }
-            p.toFile().deleteOnExit();
+            // Don't mark for deleteOnExit since the parent JVM will be killed
             return p.toAbsolutePath().toString();
         } catch (IOException e) {
             System.err.println("[ModUpdater] Failed to persist locked file list: " + e.getMessage());

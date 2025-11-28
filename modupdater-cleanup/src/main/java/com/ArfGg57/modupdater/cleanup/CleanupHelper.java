@@ -43,6 +43,7 @@ public class CleanupHelper {
     public static void main(String[] args) {
         System.out.println("[CleanupHelper] Starting ModUpdater Cleanup Helper");
         System.out.println("[CleanupHelper] Arguments: " + java.util.Arrays.toString(args));
+        System.out.println("[CleanupHelper] Working directory: " + System.getProperty("user.dir"));
         
         // Parse arguments
         String gamePid = null;
@@ -65,12 +66,14 @@ public class CleanupHelper {
         }
         
         try {
+            System.out.println("[CleanupHelper] Initializing GUI...");
             // Initialize GUI on EDT
             SwingUtilities.invokeAndWait(() -> {
                 gui = new PostRestartUpdateGui();
                 gui.setOnCloseCallback(() -> System.exit(0));
                 gui.show();
             });
+            System.out.println("[CleanupHelper] GUI initialized and shown");
             
             // Wait for game process to exit if PID provided
             if (gamePid != null) {
@@ -136,7 +139,15 @@ public class CleanupHelper {
                 gui.addLog("Error: " + e.getMessage());
                 gui.showComplete();
             } else {
-                // If GUI failed to initialize, just exit
+                // If GUI failed to initialize, show a simple Swing error dialog
+                try {
+                    javax.swing.JOptionPane.showMessageDialog(null,
+                        "ModUpdater Cleanup Helper encountered an error:\n" + e.getMessage(),
+                        "ModUpdater Error",
+                        javax.swing.JOptionPane.ERROR_MESSAGE);
+                } catch (Exception dialogError) {
+                    // Ignore dialog errors
+                }
                 System.exit(1);
             }
         }
