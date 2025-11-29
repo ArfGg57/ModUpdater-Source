@@ -389,14 +389,30 @@ public class SelfUpdateCoordinator {
     private String extractVersionFromFilename(String filename) {
         // Remove prefix (all leading non-alphanumeric chars)
         String name = filename.replaceAll("^[^a-zA-Z0-9]+", "");
-        // Extract version (pattern: name-X.XX.jar)
+        
+        // Remove .jar extension if present
+        if (name.toLowerCase().endsWith(".jar")) {
+            name = name.substring(0, name.length() - 4);
+        }
+        
+        // Try to extract version using regex pattern (digits and dots at the end)
+        // This handles: modupdater-2.21, modupdater-mod-2.21, modupdater-cleanup-2.21
+        java.util.regex.Pattern versionPattern = java.util.regex.Pattern.compile("-(\\d+\\.\\d+(?:\\.\\d+)?)$");
+        java.util.regex.Matcher matcher = versionPattern.matcher(name);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+        
+        // Fallback: try lastIndexOf approach
         int dashIdx = name.lastIndexOf('-');
         if (dashIdx > 0) {
             String versionPart = name.substring(dashIdx + 1);
-            if (versionPart.endsWith(".jar")) {
-                return versionPart.substring(0, versionPart.length() - 4);
+            // Check if it looks like a version number
+            if (versionPart.matches("\\d+(\\.\\d+)*")) {
+                return versionPart;
             }
         }
+        
         return "0.0.0";
     }
     

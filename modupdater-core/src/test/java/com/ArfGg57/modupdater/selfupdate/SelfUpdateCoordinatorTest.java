@@ -94,9 +94,19 @@ public class SelfUpdateCoordinatorTest {
         Method method = SelfUpdateCoordinator.class.getDeclaredMethod("extractVersionFromFilename", String.class);
         method.setAccessible(true);
         
+        // Standard cases
         assertEquals("2.21", method.invoke(coordinator, "!!!!!modupdater-2.21.jar"));
         assertEquals("1.0.0", method.invoke(coordinator, "modupdater-1.0.0.jar"));
         assertEquals("3.5", method.invoke(coordinator, "modupdater-mod-3.5.jar"));
+        
+        // Additional test cases for robustness
+        assertEquals("2.21", method.invoke(coordinator, "modupdater-cleanup-2.21.jar"));
+        assertEquals("10.5.3", method.invoke(coordinator, "!!!!!modupdater-mod-10.5.3.jar"));
+        assertEquals("1.0", method.invoke(coordinator, "modupdater-1.0.jar"));
+        
+        // Edge cases - should return 0.0.0 for invalid patterns
+        assertEquals("0.0.0", method.invoke(coordinator, "modupdater.jar"));
+        assertEquals("0.0.0", method.invoke(coordinator, "somefile.txt"));
     }
     
     @Test
