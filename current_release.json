@@ -1,4 +1,21 @@
 {
-  "current_file_name": "!!!!!modupdater-2.21.jar",
-  "previous_release_hash": "96633892eb3556c543a010f3224110d6e8f8fd68c30d661be265747c400557ed"
+  "version": "2.21",
+  "filename_prefix": "!!!!!",
+  "files": {
+    "launchwrapper": {
+      "github_name": "modupdater-2.21.jar",
+      "local_name": "!!!!!modupdater-2.21.jar",
+      "hash": ""
+    },
+    "mod": {
+      "github_name": "modupdater-mod-2.21.jar",
+      "local_name": "!!!!!modupdater-mod-2.21.jar",
+      "hash": ""
+    },
+    "cleanup": {
+      "github_name": "modupdater-cleanup-2.21.jar",
+      "local_name": "modupdater-cleanup-2.21.jar",
+      "hash": ""
+    }
+  }
 }

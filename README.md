@@ -271,17 +271,119 @@ See [Configure deletes.json](#4-configure-deletesjson) above.
 
 ## Self-Update System
 
-ModUpdater automatically keeps itself up to date. The system works as follows:
+ModUpdater automatically keeps itself up to date. The system handles updating all three ModUpdater components:
 
-1. **Version Check**: On every launch, ModUpdater checks the GitHub releases API for the latest version
-2. **Comparison**: It compares the release filename with the filename in `current_release.json`
-3. **Update Detection**: If the filenames differ, an update is available
-4. **User Confirmation**: The update appears in the confirmation dialog alongside mod updates
-5. **Installation**: The new version is downloaded and the old version is scheduled for deletion
-6. **Restart Handling**: If the old JAR is locked, it uses the pending operations system
+1. **Launchwrapper JAR** (`!!!!!modupdater-X.XX.jar`) - The main tweaker that runs before Forge loads
+2. **Mod JAR** (`!!!!!modupdater-mod-X.XX.jar`) - The post-restart handler that completes pending operations
+3. **Cleanup JAR** (`modupdater-cleanup-X.XX.jar`) - Helper for cleanup operations
+
+### How Self-Update Works
+
+1. **Configuration Check**: On launch, ModUpdater fetches `current_release.json` from the source repository
+2. **GitHub API Check**: It queries the GitHub releases API for the latest release assets
+3. **Version Comparison**: Compares installed files against the expected files in the configuration
+4. **Filename Prefix Handling**: GitHub doesn't allow `!` characters in filenames, so the config maps GitHub names to local names:
+   - GitHub: `modupdater-2.21.jar` → Local: `!!!!!modupdater-2.21.jar`
+5. **User Confirmation**: Updates appear in the confirmation dialog alongside mod updates
+6. **Installation**: New versions are downloaded and old versions are scheduled for deletion
+7. **Restart Handling**: If files are locked (common on Windows), uses the pending operations system
+
+### Configuration File Format (current_release.json)
+
+The `current_release.json` file in the repository root configures the self-update system:
+
+```json
+{
+  "version": "2.21",
+  "filename_prefix": "!!!!!",
+  "files": {
+    "launchwrapper": {
+      "github_name": "modupdater-2.21.jar",
+      "local_name": "!!!!!modupdater-2.21.jar",
+      "hash": "abc123..."
+    },
+    "mod": {
+      "github_name": "modupdater-mod-2.21.jar",
+      "local_name": "!!!!!modupdater-mod-2.21.jar",
+      "hash": "def456..."
+    },
+    "cleanup": {
+      "github_name": "modupdater-cleanup-2.21.jar",
+      "local_name": "modupdater-cleanup-2.21.jar",
+      "hash": "789xyz..."
+    }
+  }
+}
+```
+
+**Field Reference:**
+
+| Field | Description |
+|-------|-------------|
+| `version` | Current release version (e.g., "2.21") |
+| `filename_prefix` | Prefix added to filenames locally (e.g., "!!!!!") to ensure early loading |
+| `files` | Object containing configuration for each JAR file |
+| `files.*.github_name` | Filename as uploaded to GitHub releases (without special characters) |
+| `files.*.local_name` | Filename when installed in the mods folder (with prefix if needed) |
+| `files.*.hash` | Optional SHA-256 hash for integrity verification |
+
+### Updating current_release.json (For Contributors)
+
+When releasing a new version:
+
+1. Update the `version` field to the new version number
+2. Update `github_name` and `local_name` for each file with the new version
+3. Optionally update the `hash` fields with SHA-256 hashes of the new JARs
+4. Commit and push to the main branch before creating the GitHub release
+
+**Example update from 2.21 to 2.22:**
+```json
+{
+  "version": "2.22",
+  "filename_prefix": "!!!!!",
+  "files": {
+    "launchwrapper": {
+      "github_name": "modupdater-2.22.jar",
+      "local_name": "!!!!!modupdater-2.22.jar",
+      "hash": ""
+    },
+    "mod": {
+      "github_name": "modupdater-mod-2.22.jar",
+      "local_name": "!!!!!modupdater-mod-2.22.jar",
+      "hash": ""
+    },
+    "cleanup": {
+      "github_name": "modupdater-cleanup-2.22.jar",
+      "local_name": "modupdater-cleanup-2.22.jar",
+      "hash": ""
+    }
+  }
+}
+```
+
+### Partial Updates
+
+The self-update system handles partial updates gracefully:
+- If only 1 or 2 files need updating, only those files are downloaded
+- If a file is already up to date, it's skipped
+- If a file entry is missing from the config, ModUpdater falls back to pattern matching
+
+### Legacy Configuration Support
+
+For backward compatibility, the old configuration format is still supported:
+
+```json
+{
+  "current_file_name": "!!!!!modupdater-2.21.jar",
+  "previous_release_hash": "abc123..."
+}
+```
+
+This format is automatically converted to the new format internally.
 
 **The self-update URL is hard-coded:**
 - API: `https://api.github.com/repos/ArfGg57/ModUpdater-Source/releases/latest`
+- Config: `https://raw.githubusercontent.com/ArfGg57/ModUpdater-Source/main/current_release.json`
 - Source: `https://github.com/ArfGg57/ModUpdater-Source`
 
 **For modpack creators**: Self-update happens automatically. Your users will always have the latest ModUpdater version.

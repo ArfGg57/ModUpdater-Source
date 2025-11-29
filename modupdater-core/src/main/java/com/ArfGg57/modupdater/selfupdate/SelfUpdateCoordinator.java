@@ -18,12 +18,23 @@ import java.util.List;
  * Simplified self-update coordinator for ModUpdater.
  * 
  * The system works as follows:
- * 1. Check GitHub API (https://api.github.com/repos/ArfGg57/ModUpdater-Source/releases/latest) for the latest release
- * 2. Compare the release file name with the file name in current_release.json
- * 3. If different, an update is available
- * 4. The update is shown in the confirmation dialog (new version to download, old version to delete)
- * 5. Uses the existing pending operations system for locked file handling
- * 6. If the old JAR was renamed, uses hash comparison to find and delete it
+ * 1. Fetch current_release.json from the source repository to get the expected version and file info
+ * 2. Check GitHub API for the latest release and find matching JAR assets
+ * 3. Compare versions to determine if an update is available
+ * 4. Apply filename_prefix from config to map GitHub filenames to local filenames
+ * 5. The update is shown in the confirmation dialog (new version to download, old version to delete)
+ * 6. Uses the existing pending operations system for locked file handling
+ * 
+ * current_release.json format:
+ * {
+ *   "version": "2.21",
+ *   "filename_prefix": "!!!!!",
+ *   "files": {
+ *     "launchwrapper": { "github_name": "modupdater-2.21.jar", "local_name": "!!!!!modupdater-2.21.jar", "hash": "..." },
+ *     "mod": { "github_name": "modupdater-mod-2.21.jar", "local_name": "!!!!!modupdater-mod-2.21.jar", "hash": "..." },
+ *     "cleanup": { "github_name": "modupdater-cleanup-2.21.jar", "local_name": "modupdater-cleanup-2.21.jar", "hash": "..." }
+ *   }
+ * }
  * 
  * Multi-JAR update process:
  * - Phase 1 (during update): Download and install launchwrapper and mod JARs
@@ -73,15 +84,15 @@ public class SelfUpdateCoordinator {
                 return null;
             }
             
-            String currentFileName = currentReleaseJson.optString("current_file_name", "");
-            String previousReleaseHash = currentReleaseJson.optString("previous_release_hash", "");
-            
-            if (currentFileName.isEmpty()) {
-                logger.log("current_release.json is missing current_file_name");
+            // Parse new config format with backward compatibility for old format
+            ReleaseConfig releaseConfig = parseReleaseConfig(currentReleaseJson);
+            if (releaseConfig == null) {
+                logger.log("Failed to parse current_release.json");
                 return null;
             }
             
-            logger.log("Current release file name from source: " + currentFileName);
+            logger.log("Current release version from source: " + releaseConfig.version);
+            logger.log("Filename prefix: " + releaseConfig.filenamePrefix);
             
             // Step 2: Check GitHub API for the latest release
             JSONObject latestRelease = fetchLatestRelease();
@@ -171,35 +182,83 @@ public class SelfUpdateCoordinator {
                 return null;
             }
             
-            // Step 3: Compare file names to determine if update is needed
-            if (currentFileName.equals(launchwrapperAsset.fileName)) {
-                logger.log("ModUpdater is up to date (file name matches: " + currentFileName + ")");
+            // Step 3: Determine local filenames using prefix from config
+            // GitHub can't have ! symbols in filenames, so we need to map:
+            // GitHub name: "modupdater-2.21.jar" -> Local name: "!!!!!modupdater-2.21.jar"
+            String launchwrapperLocalName = applyFilenamePrefix(launchwrapperAsset.fileName, releaseConfig.filenamePrefix);
+            String modLocalName = modAsset != null ? applyFilenamePrefix(modAsset.fileName, releaseConfig.filenamePrefix) : null;
+            // Cleanup JAR doesn't need prefix (it's not loaded by Forge)
+            String cleanupLocalName = cleanupAsset != null ? cleanupAsset.fileName : null;
+            
+            // Use hashes from config if available, otherwise use hashes from GitHub release
+            if (releaseConfig.launchwrapperHash != null && !releaseConfig.launchwrapperHash.isEmpty()) {
+                launchwrapperSha256 = releaseConfig.launchwrapperHash;
+            }
+            if (releaseConfig.modHash != null && !releaseConfig.modHash.isEmpty()) {
+                modSha256 = releaseConfig.modHash;
+            }
+            if (releaseConfig.cleanupHash != null && !releaseConfig.cleanupHash.isEmpty()) {
+                cleanupSha256 = releaseConfig.cleanupHash;
+            }
+            
+            // Step 4: Find current installed JARs using the local names from config
+            File currentLaunchwrapper = findCurrentJar(releaseConfig.launchwrapperLocalName, launchwrapperSha256);
+            File currentMod = findCurrentJarByLocalName(releaseConfig.modLocalName, MOD_PATTERN);
+            File currentCleanup = findCurrentJarByLocalName(releaseConfig.cleanupLocalName, CLEANUP_PATTERN);
+            
+            // Step 5: Determine if update is needed by comparing installed files with latest
+            boolean needsUpdate = false;
+            
+            // Check if launchwrapper needs update (compare with expected local name)
+            if (currentLaunchwrapper == null || !currentLaunchwrapper.getName().equals(launchwrapperLocalName)) {
+                needsUpdate = true;
+                logger.log("Launchwrapper update needed:");
+                logger.log("  Current: " + (currentLaunchwrapper != null ? currentLaunchwrapper.getName() : "not found"));
+                logger.log("  Expected: " + launchwrapperLocalName);
+            }
+            
+            // Check if mod JAR needs update
+            if (modAsset != null && modLocalName != null) {
+                if (currentMod == null || !currentMod.getName().equals(modLocalName)) {
+                    needsUpdate = true;
+                    logger.log("Mod JAR update needed:");
+                    logger.log("  Current: " + (currentMod != null ? currentMod.getName() : "not found"));
+                    logger.log("  Expected: " + modLocalName);
+                }
+            }
+            
+            // Check if cleanup JAR needs update
+            if (cleanupAsset != null && cleanupLocalName != null) {
+                if (currentCleanup == null || !currentCleanup.getName().equals(cleanupLocalName)) {
+                    needsUpdate = true;
+                    logger.log("Cleanup JAR update needed:");
+                    logger.log("  Current: " + (currentCleanup != null ? currentCleanup.getName() : "not found"));
+                    logger.log("  Expected: " + cleanupLocalName);
+                }
+            }
+            
+            if (!needsUpdate) {
+                logger.log("ModUpdater is up to date (all files match expected versions)");
                 return null;
             }
             
-            logger.log("ModUpdater update available!");
-            logger.log("  Current: " + currentFileName);
-            logger.log("  Latest:  " + launchwrapperAsset.fileName);
-            
-            // Step 4: Find current installed JARs
-            File currentLaunchwrapper = findCurrentJar(currentFileName, previousReleaseHash);
-            File currentMod = findJarByPattern(MOD_PATTERN);
-            File currentCleanup = findJarByPattern(CLEANUP_PATTERN);
+            logger.log("ModUpdater update available! (version " + releaseConfig.version + ")");
             
             // Create and return the update info with all JAR details
+            // Use local names for the target filenames (what files should be named in mods folder)
             return new SelfUpdateInfo(
-                currentLaunchwrapper != null ? currentLaunchwrapper.getName() : currentFileName,
+                currentLaunchwrapper != null ? currentLaunchwrapper.getName() : releaseConfig.launchwrapperLocalName,
                 currentLaunchwrapper != null ? currentLaunchwrapper.getAbsolutePath() : null,
-                launchwrapperAsset.fileName,
+                launchwrapperLocalName,
                 launchwrapperAsset.downloadUrl,
                 launchwrapperSha256,
-                previousReleaseHash,
-                // Additional JARs
-                modAsset != null ? modAsset.fileName : null,
+                releaseConfig.launchwrapperHash,
+                // Additional JARs - use local names for target filenames
+                modLocalName,
                 modAsset != null ? modAsset.downloadUrl : null,
                 modSha256,
                 currentMod != null ? currentMod.getAbsolutePath() : null,
-                cleanupAsset != null ? cleanupAsset.fileName : null,
+                cleanupLocalName,
                 cleanupAsset != null ? cleanupAsset.downloadUrl : null,
                 cleanupSha256,
                 currentCleanup != null ? currentCleanup.getAbsolutePath() : null
@@ -238,6 +297,210 @@ public class SelfUpdateCoordinator {
             }
         }
         return true;
+    }
+    
+    /**
+     * Parse the release configuration from current_release.json.
+     * Supports both the new format and legacy format for backward compatibility.
+     * 
+     * New format:
+     * {
+     *   "version": "2.21",
+     *   "filename_prefix": "!!!!!",
+     *   "files": {
+     *     "launchwrapper": { "github_name": "...", "local_name": "...", "hash": "..." },
+     *     "mod": { "github_name": "...", "local_name": "...", "hash": "..." },
+     *     "cleanup": { "github_name": "...", "local_name": "...", "hash": "..." }
+     *   }
+     * }
+     * 
+     * Legacy format:
+     * {
+     *   "current_file_name": "!!!!!modupdater-2.21.jar",
+     *   "previous_release_hash": "..."
+     * }
+     */
+    private ReleaseConfig parseReleaseConfig(JSONObject json) {
+        ReleaseConfig config = new ReleaseConfig();
+        
+        // Check for new format first
+        if (json.has("version") && json.has("files")) {
+            config.version = json.optString("version", "");
+            config.filenamePrefix = json.optString("filename_prefix", "");
+            
+            JSONObject files = json.optJSONObject("files");
+            if (files != null) {
+                // Parse launchwrapper config
+                JSONObject launcher = files.optJSONObject("launchwrapper");
+                if (launcher != null) {
+                    config.launchwrapperGithubName = launcher.optString("github_name", "");
+                    config.launchwrapperLocalName = launcher.optString("local_name", "");
+                    config.launchwrapperHash = launcher.optString("hash", "");
+                }
+                
+                // Parse mod config
+                JSONObject mod = files.optJSONObject("mod");
+                if (mod != null) {
+                    config.modGithubName = mod.optString("github_name", "");
+                    config.modLocalName = mod.optString("local_name", "");
+                    config.modHash = mod.optString("hash", "");
+                }
+                
+                // Parse cleanup config
+                JSONObject cleanup = files.optJSONObject("cleanup");
+                if (cleanup != null) {
+                    config.cleanupGithubName = cleanup.optString("github_name", "");
+                    config.cleanupLocalName = cleanup.optString("local_name", "");
+                    config.cleanupHash = cleanup.optString("hash", "");
+                }
+            }
+            
+            logger.log("Parsed new config format: version=" + config.version + ", prefix=" + config.filenamePrefix);
+            return config;
+        }
+        
+        // Fall back to legacy format
+        String currentFileName = json.optString("current_file_name", "");
+        String previousReleaseHash = json.optString("previous_release_hash", "");
+        
+        if (currentFileName.isEmpty()) {
+            logger.log("current_release.json has invalid format");
+            return null;
+        }
+        
+        // Extract version from filename (e.g., "!!!!!modupdater-2.21.jar" -> "2.21")
+        config.version = extractVersionFromFilename(currentFileName);
+        config.filenamePrefix = extractPrefixFromFilename(currentFileName);
+        config.launchwrapperLocalName = currentFileName;
+        config.launchwrapperHash = previousReleaseHash;
+        
+        // Generate expected names for mod and cleanup based on pattern
+        String baseName = currentFileName.replace(config.filenamePrefix, "");
+        config.modLocalName = config.filenamePrefix + baseName.replace("modupdater-", "modupdater-mod-");
+        config.cleanupLocalName = baseName.replace("modupdater-", "modupdater-cleanup-");
+        
+        logger.log("Parsed legacy config format: version=" + config.version + ", prefix=" + config.filenamePrefix);
+        return config;
+    }
+    
+    /**
+     * Extract version number from a filename like "!!!!!modupdater-2.21.jar"
+     */
+    private String extractVersionFromFilename(String filename) {
+        // Remove prefix (all leading non-alphanumeric chars)
+        String name = filename.replaceAll("^[^a-zA-Z0-9]+", "");
+        
+        // Remove .jar extension if present
+        if (name.toLowerCase().endsWith(".jar")) {
+            name = name.substring(0, name.length() - 4);
+        }
+        
+        // Try to extract version using regex pattern (digits and dots at the end)
+        // This handles: modupdater-2.21, modupdater-mod-2.21, modupdater-cleanup-2.21
+        java.util.regex.Pattern versionPattern = java.util.regex.Pattern.compile("-(\\d+\\.\\d+(?:\\.\\d+)?)$");
+        java.util.regex.Matcher matcher = versionPattern.matcher(name);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+        
+        // Fallback: try lastIndexOf approach
+        int dashIdx = name.lastIndexOf('-');
+        if (dashIdx > 0) {
+            String versionPart = name.substring(dashIdx + 1);
+            // Check if it looks like a version number
+            if (versionPart.matches("\\d+(\\.\\d+)*")) {
+                return versionPart;
+            }
+        }
+        
+        return "0.0.0";
+    }
+    
+    /**
+     * Extract prefix (like "!!!!!") from a filename
+     */
+    private String extractPrefixFromFilename(String filename) {
+        StringBuilder prefix = new StringBuilder();
+        for (char c : filename.toCharArray()) {
+            if (!Character.isLetterOrDigit(c)) {
+                prefix.append(c);
+            } else {
+                break;
+            }
+        }
+        return prefix.toString();
+    }
+    
+    /**
+     * Apply filename prefix to a GitHub filename to get the local filename.
+     * For example: "modupdater-2.21.jar" with prefix "!!!!!" -> "!!!!!modupdater-2.21.jar"
+     * 
+     * Note: The cleanup JAR doesn't need a prefix.
+     */
+    private String applyFilenamePrefix(String githubName, String prefix) {
+        if (githubName == null || githubName.isEmpty()) {
+            return githubName;
+        }
+        if (prefix == null || prefix.isEmpty()) {
+            return githubName;
+        }
+        // Don't apply prefix to cleanup JAR (doesn't need early loading)
+        if (githubName.toLowerCase().contains("-cleanup")) {
+            return githubName;
+        }
+        return prefix + githubName;
+    }
+    
+    /**
+     * Find a JAR file by local name, with fallback to pattern matching
+     */
+    private File findCurrentJarByLocalName(String localName, String fallbackPattern) {
+        File modsDir = new File("mods");
+        if (!modsDir.exists() || !modsDir.isDirectory()) {
+            return null;
+        }
+        
+        File[] files = modsDir.listFiles();
+        if (files == null) return null;
+        
+        // First try exact match with local name
+        if (localName != null && !localName.isEmpty()) {
+            for (File file : files) {
+                if (file.getName().equals(localName)) {
+                    return file;
+                }
+            }
+        }
+        
+        // Fall back to pattern matching
+        if (fallbackPattern != null) {
+            return findJarByPattern(fallbackPattern);
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Configuration parsed from current_release.json
+     */
+    private static class ReleaseConfig {
+        String version = "";
+        String filenamePrefix = "";
+        
+        // Launchwrapper JAR
+        String launchwrapperGithubName = "";
+        String launchwrapperLocalName = "";
+        String launchwrapperHash = "";
+        
+        // Mod JAR
+        String modGithubName = "";
+        String modLocalName = "";
+        String modHash = "";
+        
+        // Cleanup JAR
+        String cleanupGithubName = "";
+        String cleanupLocalName = "";
+        String cleanupHash = "";
     }
     
     /**
