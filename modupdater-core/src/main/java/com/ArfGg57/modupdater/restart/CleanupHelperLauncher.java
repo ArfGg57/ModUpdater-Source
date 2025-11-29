@@ -129,13 +129,17 @@ public class CleanupHelperLauncher {
      * 3. game directory root
      */
     private static File findCleanupHelperJar(File gameDir) {
+        System.out.println("[ModUpdater] Searching for cleanup helper JAR...");
+        
         // First priority: Look in config/ModUpdater/ with versioned names
         // This is the preferred location to avoid FML trying to inject it into classpath
         File configDir = new File(gameDir, "config/ModUpdater");
+        System.out.println("[ModUpdater] Checking config/ModUpdater: " + configDir.getAbsolutePath());
         if (configDir.exists() && configDir.isDirectory()) {
             // Try exact name first
             File exactFile = new File(configDir, CLEANUP_HELPER_JAR);
             if (exactFile.exists() && exactFile.isFile()) {
+                System.out.println("[ModUpdater] Found exact match: " + exactFile.getAbsolutePath());
                 return exactFile;
             }
             
@@ -143,16 +147,22 @@ public class CleanupHelperLauncher {
             File[] files = configDir.listFiles((dir, name) -> 
                 name.toLowerCase().contains("modupdater-cleanup") && name.endsWith(".jar"));
             if (files != null && files.length > 0) {
+                System.out.println("[ModUpdater] Found versioned cleanup JAR: " + files[0].getAbsolutePath());
                 return files[0];
             }
+            System.out.println("[ModUpdater] No cleanup JAR found in config/ModUpdater");
+        } else {
+            System.out.println("[ModUpdater] config/ModUpdater directory does not exist");
         }
         
         // Second priority: Look in mods/ folder (legacy location)
         File modsDir = new File(gameDir, "mods");
+        System.out.println("[ModUpdater] Checking mods folder: " + modsDir.getAbsolutePath());
         if (modsDir.exists() && modsDir.isDirectory()) {
             // Try exact name
             File exactFile = new File(modsDir, CLEANUP_HELPER_JAR);
             if (exactFile.exists() && exactFile.isFile()) {
+                System.out.println("[ModUpdater] Found exact match in mods: " + exactFile.getAbsolutePath());
                 return exactFile;
             }
             
@@ -160,16 +170,23 @@ public class CleanupHelperLauncher {
             File[] files = modsDir.listFiles((dir, name) -> 
                 name.toLowerCase().contains("modupdater-cleanup") && name.endsWith(".jar"));
             if (files != null && files.length > 0) {
+                System.out.println("[ModUpdater] Found versioned cleanup JAR in mods: " + files[0].getAbsolutePath());
                 return files[0];
             }
+            System.out.println("[ModUpdater] No cleanup JAR found in mods folder");
+        } else {
+            System.out.println("[ModUpdater] mods directory does not exist");
         }
         
         // Third priority: game directory root
         File rootFile = new File(gameDir, CLEANUP_HELPER_JAR);
+        System.out.println("[ModUpdater] Checking game root: " + rootFile.getAbsolutePath());
         if (rootFile.exists() && rootFile.isFile()) {
+            System.out.println("[ModUpdater] Found cleanup JAR in game root: " + rootFile.getAbsolutePath());
             return rootFile;
         }
         
+        System.out.println("[ModUpdater] Cleanup helper JAR not found in any location!");
         return null;
     }
     

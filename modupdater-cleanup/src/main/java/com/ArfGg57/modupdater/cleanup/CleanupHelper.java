@@ -2,6 +2,7 @@ package com.ArfGg57.modupdater.cleanup;
 
 import com.ArfGg57.modupdater.pending.PendingUpdateOperation;
 import com.ArfGg57.modupdater.pending.PendingUpdateOpsManager;
+import com.ArfGg57.modupdater.restart.CrashUtils;
 import com.ArfGg57.modupdater.ui.PostRestartUpdateGui;
 import com.ArfGg57.modupdater.util.FileUtils;
 import com.ArfGg57.modupdater.hash.HashUtils;
@@ -122,6 +123,15 @@ public class CleanupHelper {
             // Clear pending operations file using explicit path
             if (PendingUpdateOpsManager.clearPendingOperations(pendingOpsFilePath)) {
                 gui.addLog("Cleared pending operations file");
+            }
+            
+            // Clear restart artifacts (flag file, message file, locked files list)
+            try {
+                CrashUtils.clearRestartArtifacts();
+                gui.addLog("Cleared restart artifacts");
+            } catch (Exception e) {
+                System.err.println("[CleanupHelper] Warning: Failed to clear restart artifacts: " + e.getMessage());
+                // Non-fatal, continue
             }
             
             // Show completion

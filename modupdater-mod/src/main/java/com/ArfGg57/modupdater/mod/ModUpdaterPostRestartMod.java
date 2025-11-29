@@ -4,6 +4,7 @@ import com.ArfGg57.modupdater.hash.HashUtils;
 import com.ArfGg57.modupdater.pending.PendingUpdateOperation;
 import com.ArfGg57.modupdater.pending.PendingUpdateOpsManager;
 import com.ArfGg57.modupdater.restart.CrashCoordinator;
+import com.ArfGg57.modupdater.restart.CrashUtils;
 import com.ArfGg57.modupdater.restart.CleanupHelperLauncher;
 import com.ArfGg57.modupdater.util.FileUtils;
 import cpw.mods.fml.common.Mod;
@@ -86,6 +87,7 @@ public class ModUpdaterPostRestartMod {
         System.out.println("[ModUpdater-Mod] Pre-initializing post-restart handler...");
         
         // Check if restart is required (crash enforcement mode)
+        // First check system property (set in same JVM session by UpdaterCore)
         String restartRequired = System.getProperty("modupdater.restartRequired");
         System.out.println("[ModUpdater-Mod] modupdater.restartRequired = " + restartRequired);
         
@@ -101,20 +103,36 @@ public class ModUpdaterPostRestartMod {
         }
         
         // Check if there are pending operations (post-restart mode)
-        if (PendingUpdateOpsManager.hasPendingOperations()) {
-            pendingOps = PendingUpdateOpsManager.load();
-            if (pendingOps != null && pendingOps.hasOperations()) {
-                hasPendingOps = true;
-                System.out.println("[ModUpdater-Mod] Found " + pendingOps.getOperations().size() + " pending operation(s)");
-                System.out.println("[ModUpdater-Mod] Will process when main menu is reached");
-                
+        // This handles the case where cleanup helper didn't run or failed
+        boolean hasOps = PendingUpdateOpsManager.hasPendingOperations();
+        boolean hasRestartFlag = CrashUtils.isRestartRequired();
+        
+        System.out.println("[ModUpdater-Mod] Pending operations file exists: " + hasOps);
+        System.out.println("[ModUpdater-Mod] Restart flag file exists: " + hasRestartFlag);
+        
+        if (hasOps || hasRestartFlag) {
+            if (hasOps) {
+                pendingOps = PendingUpdateOpsManager.load();
+                if (pendingOps != null && pendingOps.hasOperations()) {
+                    hasPendingOps = true;
+                    System.out.println("[ModUpdater-Mod] Found " + pendingOps.getOperations().size() + " pending operation(s)");
+                } else {
+                    System.out.println("[ModUpdater-Mod] Pending operations file was empty or invalid");
+                }
+            }
+            
+            if (hasPendingOps) {
+                System.out.println("[ModUpdater-Mod] Will process pending operations when main menu is reached");
                 // Register event handler to detect main menu
                 MinecraftForge.EVENT_BUS.register(this);
-            } else {
-                System.out.println("[ModUpdater-Mod] No pending operations found");
+            } else if (hasRestartFlag) {
+                // Restart flag exists but no pending ops - cleanup helper may have partially run
+                // Clear the flag and continue normally
+                System.out.println("[ModUpdater-Mod] Restart flag exists but no pending ops - clearing stale flag");
+                CrashUtils.clearRestartArtifacts();
             }
         } else {
-            System.out.println("[ModUpdater-Mod] No pending operations file exists");
+            System.out.println("[ModUpdater-Mod] No pending operations and no restart flag - starting normally");
         }
     }
     
@@ -342,6 +360,15 @@ public class ModUpdaterPostRestartMod {
         
         // Clear the pending operations file
         PendingUpdateOpsManager.clearPendingOperations();
+        
+        // Clear restart artifacts (flag file, message file, locked files list)
+        try {
+            CrashUtils.clearRestartArtifacts();
+            System.out.println("[ModUpdater-Mod] Cleared restart artifacts");
+        } catch (Exception e) {
+            System.err.println("[ModUpdater-Mod] Warning: Failed to clear restart artifacts: " + e.getMessage());
+            // Non-fatal, continue
+        }
         
         System.out.println("[ModUpdater-Mod] ========================================");
         System.out.println("[ModUpdater-Mod] Processing complete!");
