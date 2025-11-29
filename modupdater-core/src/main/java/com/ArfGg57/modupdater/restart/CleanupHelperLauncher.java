@@ -123,37 +123,51 @@ public class CleanupHelperLauncher {
     
     /**
      * Find the cleanup helper JAR file.
-     * Searches in common locations:
-     * 1. mods/ directory (alongside the main mod JAR)
-     * 2. config/ModUpdater/ directory
+     * Searches in common locations (prioritizing config/ModUpdater/ to avoid FML warnings):
+     * 1. config/ModUpdater/ directory (preferred - avoids FML trying to load it as a mod)
+     * 2. mods/ directory (legacy location)
      * 3. game directory root
      */
     private static File findCleanupHelperJar(File gameDir) {
-        // Look for the cleanup helper JAR in various locations
-        // Note: The "!!!!!" prefix is part of the mod naming convention used by this project
-        // to ensure specific load order in Forge.
-        String[] searchPaths = {
-            "mods/" + CLEANUP_HELPER_JAR,
-            "config/ModUpdater/" + CLEANUP_HELPER_JAR,
-            CLEANUP_HELPER_JAR
-        };
-        
-        for (String path : searchPaths) {
-            File file = new File(gameDir, path);
-            if (file.exists() && file.isFile()) {
-                return file;
+        // First priority: Look in config/ModUpdater/ with versioned names
+        // This is the preferred location to avoid FML trying to inject it into classpath
+        File configDir = new File(gameDir, "config/ModUpdater");
+        if (configDir.exists() && configDir.isDirectory()) {
+            // Try exact name first
+            File exactFile = new File(configDir, CLEANUP_HELPER_JAR);
+            if (exactFile.exists() && exactFile.isFile()) {
+                return exactFile;
+            }
+            
+            // Try versioned names like modupdater-cleanup-2.22.jar
+            File[] files = configDir.listFiles((dir, name) -> 
+                name.toLowerCase().contains("modupdater-cleanup") && name.endsWith(".jar"));
+            if (files != null && files.length > 0) {
+                return files[0];
             }
         }
         
-        // Also try to find any JAR containing "modupdater-cleanup" in the mods folder
-        // This handles version-specific names like modupdater-cleanup-2.20.jar
+        // Second priority: Look in mods/ folder (legacy location)
         File modsDir = new File(gameDir, "mods");
         if (modsDir.exists() && modsDir.isDirectory()) {
+            // Try exact name
+            File exactFile = new File(modsDir, CLEANUP_HELPER_JAR);
+            if (exactFile.exists() && exactFile.isFile()) {
+                return exactFile;
+            }
+            
+            // Try versioned names
             File[] files = modsDir.listFiles((dir, name) -> 
                 name.toLowerCase().contains("modupdater-cleanup") && name.endsWith(".jar"));
             if (files != null && files.length > 0) {
                 return files[0];
             }
+        }
+        
+        // Third priority: game directory root
+        File rootFile = new File(gameDir, CLEANUP_HELPER_JAR);
+        if (rootFile.exists() && rootFile.isFile()) {
+            return rootFile;
         }
         
         return null;

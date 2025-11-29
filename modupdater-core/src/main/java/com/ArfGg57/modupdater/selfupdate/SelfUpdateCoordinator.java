@@ -207,11 +207,14 @@ public class SelfUpdateCoordinator {
             File currentCleanup = findCurrentJarByLocalName(releaseConfig.cleanupLocalName, CLEANUP_PATTERN);
             
             // Step 5: Determine if update is needed by comparing installed files with latest
-            boolean needsUpdate = false;
+            // Track each file individually so we only show files that actually need updates
+            boolean launchwrapperNeedsUpdate = false;
+            boolean modNeedsUpdate = false;
+            boolean cleanupNeedsUpdate = false;
             
             // Check if launchwrapper needs update (compare with expected local name)
             if (currentLaunchwrapper == null || !currentLaunchwrapper.getName().equals(launchwrapperLocalName)) {
-                needsUpdate = true;
+                launchwrapperNeedsUpdate = true;
                 logger.log("Launchwrapper update needed:");
                 logger.log("  Current: " + (currentLaunchwrapper != null ? currentLaunchwrapper.getName() : "not found"));
                 logger.log("  Expected: " + launchwrapperLocalName);
@@ -220,7 +223,7 @@ public class SelfUpdateCoordinator {
             // Check if mod JAR needs update
             if (modAsset != null && modLocalName != null) {
                 if (currentMod == null || !currentMod.getName().equals(modLocalName)) {
-                    needsUpdate = true;
+                    modNeedsUpdate = true;
                     logger.log("Mod JAR update needed:");
                     logger.log("  Current: " + (currentMod != null ? currentMod.getName() : "not found"));
                     logger.log("  Expected: " + modLocalName);
@@ -230,12 +233,15 @@ public class SelfUpdateCoordinator {
             // Check if cleanup JAR needs update
             if (cleanupAsset != null && cleanupLocalName != null) {
                 if (currentCleanup == null || !currentCleanup.getName().equals(cleanupLocalName)) {
-                    needsUpdate = true;
+                    cleanupNeedsUpdate = true;
                     logger.log("Cleanup JAR update needed:");
                     logger.log("  Current: " + (currentCleanup != null ? currentCleanup.getName() : "not found"));
                     logger.log("  Expected: " + cleanupLocalName);
                 }
             }
+            
+            // Only return update info if at least one file needs update
+            boolean needsUpdate = launchwrapperNeedsUpdate || modNeedsUpdate || cleanupNeedsUpdate;
             
             if (!needsUpdate) {
                 logger.log("ModUpdater is up to date (all files match expected versions)");
@@ -261,7 +267,11 @@ public class SelfUpdateCoordinator {
                 cleanupLocalName,
                 cleanupAsset != null ? cleanupAsset.downloadUrl : null,
                 cleanupSha256,
-                currentCleanup != null ? currentCleanup.getAbsolutePath() : null
+                currentCleanup != null ? currentCleanup.getAbsolutePath() : null,
+                // Include flags for which files actually need updates
+                launchwrapperNeedsUpdate,
+                modNeedsUpdate,
+                cleanupNeedsUpdate
             );
             
         } catch (Exception e) {
@@ -670,11 +680,17 @@ public class SelfUpdateCoordinator {
         private final String latestCleanupSha256Hash;
         private final String currentCleanupJarPath;
         
+        // Flags to indicate which files actually need updates
+        private final boolean launchwrapperNeedsUpdate;
+        private final boolean modNeedsUpdate;
+        private final boolean cleanupNeedsUpdate;
+        
         public SelfUpdateInfo(String currentFileName, String currentJarPath, 
                              String latestFileName, String latestDownloadUrl,
                              String latestSha256Hash, String previousReleaseHash,
                              String latestModFileName, String latestModDownloadUrl, String latestModSha256Hash, String currentModJarPath,
-                             String latestCleanupFileName, String latestCleanupDownloadUrl, String latestCleanupSha256Hash, String currentCleanupJarPath) {
+                             String latestCleanupFileName, String latestCleanupDownloadUrl, String latestCleanupSha256Hash, String currentCleanupJarPath,
+                             boolean launchwrapperNeedsUpdate, boolean modNeedsUpdate, boolean cleanupNeedsUpdate) {
             this.currentFileName = currentFileName;
             this.currentJarPath = currentJarPath;
             this.latestFileName = latestFileName;
@@ -689,6 +705,9 @@ public class SelfUpdateCoordinator {
             this.latestCleanupDownloadUrl = latestCleanupDownloadUrl;
             this.latestCleanupSha256Hash = latestCleanupSha256Hash;
             this.currentCleanupJarPath = currentCleanupJarPath;
+            this.launchwrapperNeedsUpdate = launchwrapperNeedsUpdate;
+            this.modNeedsUpdate = modNeedsUpdate;
+            this.cleanupNeedsUpdate = cleanupNeedsUpdate;
         }
         
         // Launchwrapper getters
@@ -699,6 +718,7 @@ public class SelfUpdateCoordinator {
         public String getLatestSha256Hash() { return latestSha256Hash; }
         public String getPreviousReleaseHash() { return previousReleaseHash; }
         public boolean hasCurrentJar() { return currentJarPath != null; }
+        public boolean launchwrapperNeedsUpdate() { return launchwrapperNeedsUpdate; }
         
         // Mod JAR getters
         public String getLatestModFileName() { return latestModFileName; }
@@ -707,6 +727,7 @@ public class SelfUpdateCoordinator {
         public String getCurrentModJarPath() { return currentModJarPath; }
         public boolean hasModJar() { return latestModFileName != null && latestModDownloadUrl != null; }
         public boolean hasCurrentModJar() { return currentModJarPath != null; }
+        public boolean modNeedsUpdate() { return modNeedsUpdate; }
         
         // Cleanup JAR getters
         public String getLatestCleanupFileName() { return latestCleanupFileName; }
@@ -715,5 +736,6 @@ public class SelfUpdateCoordinator {
         public String getCurrentCleanupJarPath() { return currentCleanupJarPath; }
         public boolean hasCleanupJar() { return latestCleanupFileName != null && latestCleanupDownloadUrl != null; }
         public boolean hasCurrentCleanupJar() { return currentCleanupJarPath != null; }
+        public boolean cleanupNeedsUpdate() { return cleanupNeedsUpdate; }
     }
 }

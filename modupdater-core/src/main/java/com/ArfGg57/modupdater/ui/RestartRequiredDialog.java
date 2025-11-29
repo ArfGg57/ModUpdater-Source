@@ -108,8 +108,8 @@ public class RestartRequiredDialog {
         centerPanel.setLayout(new BoxLayout(centerPanel, BoxLayout.Y_AXIS));
         centerPanel.setOpaque(false);
         
-        // Message
-        JLabel messageLabel = new JLabel("<html><center>" + RESTART_MESSAGE + "</center></html>");
+        // Message - use HTML with width constraint for proper text wrapping
+        JLabel messageLabel = new JLabel("<html><div style='width: 350px; text-align: center;'>" + RESTART_MESSAGE + "</div></html>");
         messageLabel.setFont(FONT_BODY);
         messageLabel.setForeground(COLOR_TEXT_PRIMARY);
         messageLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
@@ -123,28 +123,30 @@ public class RestartRequiredDialog {
             fileListLabel.setForeground(COLOR_TEXT_SECONDARY);
             fileListLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
             centerPanel.add(fileListLabel);
-            centerPanel.add(Box.createVerticalStrut(5));
+            centerPanel.add(Box.createVerticalStrut(8));
             
-            // Scrollable file list
+            // Scrollable file list with better styling
             JTextArea fileListArea = new JTextArea();
             fileListArea.setEditable(false);
             fileListArea.setFont(new Font("Consolas", Font.PLAIN, 11));
             fileListArea.setBackground(COLOR_LIST_BG);
             fileListArea.setForeground(COLOR_TEXT_SECONDARY);
             fileListArea.setCaretColor(COLOR_TEXT_SECONDARY);
+            fileListArea.setMargin(new java.awt.Insets(8, 8, 8, 8));
             
             StringBuilder fileListText = new StringBuilder();
             for (File file : lockedFiles) {
                 fileListText.append("  • ").append(file.getName()).append("\n");
             }
-            fileListArea.setText(fileListText.toString());
+            fileListArea.setText(fileListText.toString().trim()); // trim trailing newline
             
             JScrollPane scrollPane = new JScrollPane(fileListArea);
-            scrollPane.setPreferredSize(new Dimension(380, 120));
-            scrollPane.setMaximumSize(new Dimension(400, 120));
+            scrollPane.setPreferredSize(new Dimension(380, 100));
+            scrollPane.setMaximumSize(new Dimension(400, 100));
             scrollPane.setBorder(BorderFactory.createLineBorder(new Color(60, 63, 75), 1));
             scrollPane.setAlignmentX(Component.CENTER_ALIGNMENT);
             centerPanel.add(scrollPane);
+            centerPanel.add(Box.createVerticalStrut(10));
         } else {
             // No files to show - just add some space
             centerPanel.add(Box.createVerticalStrut(20));
@@ -168,6 +170,8 @@ public class RestartRequiredDialog {
         
         dialog.add(mainPanel);
         dialog.pack();
+        // Set minimum size to ensure proper layout
+        dialog.setMinimumSize(new Dimension(450, 300));
         dialog.setLocationRelativeTo(null);
     }
     

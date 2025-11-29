@@ -1011,8 +1011,12 @@ public class UpdaterCore {
      * Uses the simplified self-update system that compares file names from GitHub releases.
      * 
      * Multi-JAR update process:
-     * - Phase 1 (during update): Download and install launchwrapper and mod JARs
-     * - Phase 2 (after restart): Remove old JARs, download and install cleanup JAR
+     * - Phase 1 (during update): Download and install mod and cleanup JARs immediately
+     * - Phase 2 (after restart/crash): Remove old launchwrapper, download and install new one
+     * 
+     * This ordering ensures:
+     * 1. mod and cleanup can be updated while the game is running
+     * 2. launchwrapper (which is loaded by Forge) is updated after restart when file locks are released
      */
     private void checkSelfUpdate() {
         try {
@@ -1034,11 +1038,13 @@ public class UpdaterCore {
             }
             
             gui.show("ModUpdater update available!");
-            gui.show("  Launchwrapper: " + updateInfo.getCurrentFileName() + " -> " + updateInfo.getLatestFileName());
-            if (updateInfo.hasModJar()) {
+            if (updateInfo.launchwrapperNeedsUpdate()) {
+                gui.show("  Launchwrapper: " + updateInfo.getCurrentFileName() + " -> " + updateInfo.getLatestFileName() + " (after restart)");
+            }
+            if (updateInfo.hasModJar() && updateInfo.modNeedsUpdate()) {
                 gui.show("  Mod JAR: " + (updateInfo.hasCurrentModJar() ? "update available" : "new"));
             }
-            if (updateInfo.hasCleanupJar()) {
+            if (updateInfo.hasCleanupJar() && updateInfo.cleanupNeedsUpdate()) {
                 gui.show("  Cleanup JAR: " + (updateInfo.hasCurrentCleanupJar() ? "update available" : "new"));
             }
             
@@ -1048,66 +1054,13 @@ public class UpdaterCore {
             File backupRoot = new File("modupdater/backup/selfupdate/");
             if (!backupRoot.exists()) backupRoot.mkdirs();
             
-            boolean anyDeletionFailed = false;
+            boolean anyUpdateNeeded = false;
             
-            // ===== PHASE 1: Install Launchwrapper and Mod JARs =====
-            
-            // --- Launchwrapper JAR ---
-            gui.show("=== Updating Launchwrapper JAR ===");
-            File newLaunchwrapperTarget = new File(modsDir, updateInfo.getLatestFileName());
-            File tmpLaunchwrapper = new File(tmpRoot, updateInfo.getLatestFileName() + "-" + UUID.randomUUID().toString() + ".tmp");
-            
-            boolean launchwrapperOk = FileUtils.downloadWithVerification(
-                updateInfo.getLatestDownloadUrl(),
-                tmpLaunchwrapper,
-                updateInfo.getLatestSha256Hash(),
-                gui,
-                3
-            );
-            
-            if (!launchwrapperOk) {
-                gui.show("ERROR: Failed to download launchwrapper JAR");
-                if (tmpLaunchwrapper.exists()) tmpLaunchwrapper.delete();
-                return;
-            }
-            
-            // Handle old launchwrapper
-            if (updateInfo.hasCurrentJar()) {
-                File oldJar = new File(updateInfo.getCurrentJarPath());
-                gui.show("Removing old launchwrapper: " + oldJar.getName());
-                FileUtils.backupPathTo(oldJar, backupRoot);
-                
-                if (!oldJar.delete()) {
-                    gui.show("Old launchwrapper JAR is locked - scheduling for deletion after restart");
-                    pendingDeletes.add(oldJar);
-                    anyDeletionFailed = true;
-                    
-                    PendingUpdateOperation updateOp = PendingUpdateOperation.createUpdate(
-                        oldJar.getAbsolutePath(),
-                        updateInfo.getLatestDownloadUrl(),
-                        updateInfo.getLatestFileName(),
-                        "mods",
-                        updateInfo.getLatestSha256Hash(),
-                        "ModUpdater self-update (launchwrapper): " + updateInfo.getCurrentFileName() + " -> " + updateInfo.getLatestFileName()
-                    );
-                    pendingUpdateOps.addOperation(updateOp);
-                    if (tmpLaunchwrapper.exists()) tmpLaunchwrapper.delete();
-                }
-            }
-            
-            // Install if not locked
-            if (!anyDeletionFailed || !updateInfo.hasCurrentJar()) {
-                try {
-                    FileUtils.atomicMoveWithRetries(tmpLaunchwrapper, newLaunchwrapperTarget, 5, 200);
-                    gui.show("Launchwrapper JAR installed successfully");
-                } catch (IOException e) {
-                    gui.show("ERROR: Failed to install launchwrapper: " + e.getMessage());
-                    if (tmpLaunchwrapper.exists()) tmpLaunchwrapper.delete();
-                }
-            }
+            // ===== PHASE 1: Install Mod and Cleanup JARs immediately =====
+            // These can be updated now since they don't have the same file lock issues as launchwrapper
             
             // --- Mod JAR ---
-            if (updateInfo.hasModJar()) {
+            if (updateInfo.hasModJar() && updateInfo.modNeedsUpdate()) {
                 gui.show("=== Updating Mod JAR ===");
                 File newModTarget = new File(modsDir, updateInfo.getLatestModFileName());
                 File tmpMod = new File(tmpRoot, updateInfo.getLatestModFileName() + "-" + UUID.randomUUID().toString() + ".tmp");
@@ -1130,7 +1083,7 @@ public class UpdaterCore {
                         if (!oldMod.delete()) {
                             gui.show("Old mod JAR is locked - scheduling for deletion after restart");
                             pendingDeletes.add(oldMod);
-                            anyDeletionFailed = true;
+                            anyUpdateNeeded = true;
                             
                             PendingUpdateOperation updateOp = PendingUpdateOperation.createUpdate(
                                 oldMod.getAbsolutePath(),
@@ -1142,11 +1095,18 @@ public class UpdaterCore {
                             );
                             pendingUpdateOps.addOperation(updateOp);
                             if (tmpMod.exists()) tmpMod.delete();
+                        } else {
+                            // Old file deleted, install new one
+                            try {
+                                FileUtils.atomicMoveWithRetries(tmpMod, newModTarget, 5, 200);
+                                gui.show("Mod JAR installed successfully");
+                            } catch (IOException e) {
+                                gui.show("ERROR: Failed to install mod JAR: " + e.getMessage());
+                                if (tmpMod.exists()) tmpMod.delete();
+                            }
                         }
-                    }
-                    
-                    // Install if not locked
-                    if (!anyDeletionFailed || !updateInfo.hasCurrentModJar()) {
+                    } else {
+                        // No old mod - install directly
                         try {
                             FileUtils.atomicMoveWithRetries(tmpMod, newModTarget, 5, 200);
                             gui.show("Mod JAR installed successfully");
@@ -1161,49 +1121,115 @@ public class UpdaterCore {
                 }
             }
             
-            // ===== PHASE 2: Schedule Cleanup JAR for After Restart =====
-            // The cleanup JAR is scheduled as a pending operation so it gets updated
-            // after the game restarts and the launchwrapper/mod are installed
+            // --- Cleanup JAR ---
             // NOTE: The cleanup JAR is installed to config/ModUpdater/ NOT mods/
-            // This prevents Forge from trying to load it as a mod
-            if (updateInfo.hasCleanupJar()) {
-                gui.show("=== Scheduling Cleanup JAR Update ===");
-                gui.show("Cleanup JAR will be updated after restart");
+            // This prevents Forge from trying to load it as a mod (FML warning)
+            if (updateInfo.hasCleanupJar() && updateInfo.cleanupNeedsUpdate()) {
+                gui.show("=== Updating Cleanup JAR ===");
                 
-                // Create pending operation for cleanup JAR
-                // Install to config/ModUpdater/ to avoid Forge trying to load it as a mod
                 String cleanupInstallLocation = "config/ModUpdater";
+                File cleanupDir = new File(cleanupInstallLocation);
+                if (!cleanupDir.exists()) cleanupDir.mkdirs();
                 
-                if (updateInfo.hasCurrentCleanupJar()) {
-                    // Update existing cleanup JAR
-                    PendingUpdateOperation cleanupOp = PendingUpdateOperation.createUpdate(
-                        updateInfo.getCurrentCleanupJarPath(),
-                        updateInfo.getLatestCleanupDownloadUrl(),
-                        updateInfo.getLatestCleanupFileName(),
-                        cleanupInstallLocation,
-                        updateInfo.getLatestCleanupSha256Hash(),
-                        "ModUpdater self-update (cleanup): scheduled for post-restart"
-                    );
-                    pendingUpdateOps.addOperation(cleanupOp);
+                File newCleanupTarget = new File(cleanupDir, updateInfo.getLatestCleanupFileName());
+                File tmpCleanup = new File(tmpRoot, updateInfo.getLatestCleanupFileName() + "-" + UUID.randomUUID().toString() + ".tmp");
+                
+                boolean cleanupOk = FileUtils.downloadWithVerification(
+                    updateInfo.getLatestCleanupDownloadUrl(),
+                    tmpCleanup,
+                    updateInfo.getLatestCleanupSha256Hash(),
+                    gui,
+                    3
+                );
+                
+                if (cleanupOk) {
+                    // Handle old cleanup JAR
+                    if (updateInfo.hasCurrentCleanupJar()) {
+                        File oldCleanup = new File(updateInfo.getCurrentCleanupJarPath());
+                        gui.show("Removing old cleanup JAR: " + oldCleanup.getName());
+                        FileUtils.backupPathTo(oldCleanup, backupRoot);
+                        
+                        if (!oldCleanup.delete()) {
+                            gui.show("Old cleanup JAR is locked - scheduling for deletion after restart");
+                            pendingDeletes.add(oldCleanup);
+                            anyUpdateNeeded = true;
+                            
+                            PendingUpdateOperation updateOp = PendingUpdateOperation.createUpdate(
+                                oldCleanup.getAbsolutePath(),
+                                updateInfo.getLatestCleanupDownloadUrl(),
+                                updateInfo.getLatestCleanupFileName(),
+                                cleanupInstallLocation,
+                                updateInfo.getLatestCleanupSha256Hash(),
+                                "ModUpdater self-update (cleanup): " + oldCleanup.getName() + " -> " + updateInfo.getLatestCleanupFileName()
+                            );
+                            pendingUpdateOps.addOperation(updateOp);
+                            if (tmpCleanup.exists()) tmpCleanup.delete();
+                        } else {
+                            // Old file deleted, install new one
+                            try {
+                                FileUtils.atomicMoveWithRetries(tmpCleanup, newCleanupTarget, 5, 200);
+                                gui.show("Cleanup JAR installed successfully");
+                            } catch (IOException e) {
+                                gui.show("ERROR: Failed to install cleanup JAR: " + e.getMessage());
+                                if (tmpCleanup.exists()) tmpCleanup.delete();
+                            }
+                        }
+                    } else {
+                        // No old cleanup - install directly
+                        try {
+                            FileUtils.atomicMoveWithRetries(tmpCleanup, newCleanupTarget, 5, 200);
+                            gui.show("Cleanup JAR installed successfully");
+                        } catch (IOException e) {
+                            gui.show("ERROR: Failed to install cleanup JAR: " + e.getMessage());
+                            if (tmpCleanup.exists()) tmpCleanup.delete();
+                        }
+                    }
                 } else {
-                    // New cleanup JAR - create a DOWNLOAD operation (no old file to delete)
-                    PendingUpdateOperation cleanupOp = PendingUpdateOperation.createDownload(
-                        updateInfo.getLatestCleanupDownloadUrl(),
-                        updateInfo.getLatestCleanupFileName(),
-                        cleanupInstallLocation,
-                        updateInfo.getLatestCleanupSha256Hash(),
-                        "ModUpdater self-update (cleanup): new install post-restart"
+                    gui.show("WARNING: Failed to download cleanup JAR (non-critical)");
+                    if (tmpCleanup.exists()) tmpCleanup.delete();
+                }
+            }
+            
+            // ===== PHASE 2: Schedule Launchwrapper JAR for After Restart =====
+            // The launchwrapper JAR is loaded by Forge and will be locked during gameplay.
+            // We schedule it as a pending operation to be processed after the game restarts.
+            if (updateInfo.launchwrapperNeedsUpdate()) {
+                gui.show("=== Scheduling Launchwrapper Update ===");
+                gui.show("Launchwrapper JAR will be updated after restart");
+                anyUpdateNeeded = true;
+                
+                if (updateInfo.hasCurrentJar()) {
+                    // Track old launchwrapper for deletion after restart
+                    File oldJar = new File(updateInfo.getCurrentJarPath());
+                    pendingDeletes.add(oldJar);
+                    
+                    PendingUpdateOperation updateOp = PendingUpdateOperation.createUpdate(
+                        oldJar.getAbsolutePath(),
+                        updateInfo.getLatestDownloadUrl(),
+                        updateInfo.getLatestFileName(),
+                        "mods",
+                        updateInfo.getLatestSha256Hash(),
+                        "ModUpdater self-update (launchwrapper): " + updateInfo.getCurrentFileName() + " -> " + updateInfo.getLatestFileName()
                     );
-                    pendingUpdateOps.addOperation(cleanupOp);
+                    pendingUpdateOps.addOperation(updateOp);
+                } else {
+                    // No old launchwrapper - create a DOWNLOAD operation
+                    PendingUpdateOperation downloadOp = PendingUpdateOperation.createDownload(
+                        updateInfo.getLatestDownloadUrl(),
+                        updateInfo.getLatestFileName(),
+                        "mods",
+                        updateInfo.getLatestSha256Hash(),
+                        "ModUpdater self-update (launchwrapper): new install post-restart"
+                    );
+                    pendingUpdateOps.addOperation(downloadOp);
                 }
             }
             
             // Summary
-            if (anyDeletionFailed) {
-                gui.show("ModUpdater update partially complete - restart required to finish");
+            if (anyUpdateNeeded) {
+                gui.show("ModUpdater update scheduled - restart required to complete");
             } else {
                 gui.show("ModUpdater updated successfully!");
-                gui.show("Please restart the game to use the new version.");
             }
             
         } catch (Exception e) {
