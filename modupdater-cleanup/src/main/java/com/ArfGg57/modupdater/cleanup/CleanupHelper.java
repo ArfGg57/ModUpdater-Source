@@ -240,6 +240,9 @@ public class CleanupHelper {
             case UPDATE:
                 processUpdateOperation(op);
                 break;
+            case DOWNLOAD:
+                processDownloadOperation(op);
+                break;
             default:
                 throw new Exception("Unknown operation type: " + op.getType());
         }
@@ -308,6 +311,23 @@ public class CleanupHelper {
         }
         
         // Step 2: Download new file
+        downloadNewFile(op);
+    }
+    
+    /**
+     * Process a DOWNLOAD operation (download new file, no old file to delete).
+     */
+    private static void processDownloadOperation(PendingUpdateOperation op) throws Exception {
+        System.out.println("[CleanupHelper] Processing DOWNLOAD operation");
+        
+        // Just download the new file - no old file to delete
+        downloadNewFile(op);
+    }
+    
+    /**
+     * Download a new file for UPDATE or DOWNLOAD operations.
+     */
+    private static void downloadNewFile(PendingUpdateOperation op) throws Exception {
         String downloadUrl = op.getNewFileUrl();
         String newFileName = op.getNewFileName();
         String installLocation = op.getInstallLocation();

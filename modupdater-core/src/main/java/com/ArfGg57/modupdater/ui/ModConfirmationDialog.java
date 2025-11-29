@@ -712,15 +712,17 @@ public class ModConfirmationDialog {
                 modsToDownload.add(modJar);
             }
             
-            // Add the cleanup JAR if available (will be installed after restart)
+            // Add the cleanup JAR if available
+            // Note: The cleanup JAR is NOT a Forge mod, it's a standalone helper.
+            // It will be installed to config/ModUpdater/ via pending operations after restart.
             if (selfUpdateInfo.hasCleanupJar()) {
                 ModEntry cleanupJar = new ModEntry(
-                    "ModUpdater Cleanup Helper (Self-Update, post-restart)",
+                    "ModUpdater Cleanup Helper (after restart)",
                     selfUpdateInfo.getLatestCleanupDownloadUrl(),
                     selfUpdateInfo.getLatestCleanupFileName(),
-                    "https://github.com/ArfGg57/ModUpdater-Source",
+                    "https://github.com/ArfGg57/ModUpdater-Source (helper, not a mod)",
                     "MODUPDATER_SELF_CLEANUP",
-                    "mods"
+                    "config/ModUpdater"  // Install to config/ModUpdater, NOT mods
                 );
                 modsToDownload.add(cleanupJar);
             }
@@ -738,7 +740,7 @@ public class ModConfirmationDialog {
             }
             
             if (selfUpdateInfo.hasCurrentCleanupJar()) {
-                String deleteEntry = DELETE_KEY_MOD + selfUpdateInfo.getCurrentCleanupJarPath() + " (old ModUpdater cleanup)";
+                String deleteEntry = DELETE_KEY_FILE + selfUpdateInfo.getCurrentCleanupJarPath() + " (old ModUpdater cleanup helper)";
                 filesToDelete.add(deleteEntry);
             }
         }

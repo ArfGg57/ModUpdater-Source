@@ -11,6 +11,11 @@
       "github_name": "modupdater-mod-2.22.jar",
       "local_name": "!!!!!modupdater-mod-2.22.jar",
       "hash": ""
+    },
+    "cleanup": {
+      "github_name": "modupdater-cleanup-2.22.jar",
+      "local_name": "modupdater-cleanup-2.22.jar",
+      "hash": ""
     }
   }
 }

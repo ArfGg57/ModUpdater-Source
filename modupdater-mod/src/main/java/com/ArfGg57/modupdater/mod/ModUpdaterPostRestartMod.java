@@ -359,100 +359,127 @@ public class ModUpdaterPostRestartMod {
     private void processOperation(PendingUpdateOperation op) throws Exception {
         System.out.println("[ModUpdater-Mod] Processing: " + op.getType() + " - " + op.getOldFilePath());
         
-        File oldFile = new File(op.getOldFilePath());
-        
-        // Step 1: Delete the old file
-        if (oldFile.exists()) {
-            System.out.println("[ModUpdater-Mod] Deleting: " + oldFile.getAbsolutePath());
-            boolean deleted = oldFile.delete();
-            if (!deleted) {
-                // Try with retries
-                for (int i = 0; i < DELETE_RETRY_COUNT && oldFile.exists(); i++) {
-                    try {
-                        Thread.sleep(DELETE_RETRY_DELAY_MS);
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        throw new Exception("Interrupted while retrying deletion");
+        // Step 1: Delete the old file (only for DELETE and UPDATE operations)
+        if (op.getType() == PendingUpdateOperation.OperationType.DELETE || 
+            op.getType() == PendingUpdateOperation.OperationType.UPDATE) {
+            
+            String oldFilePath = op.getOldFilePath();
+            if (oldFilePath != null && !oldFilePath.isEmpty()) {
+                File oldFile = new File(oldFilePath);
+                
+                if (oldFile.exists()) {
+                    System.out.println("[ModUpdater-Mod] Deleting: " + oldFile.getAbsolutePath());
+                    boolean deleted = oldFile.delete();
+                    if (!deleted) {
+                        // Try with retries
+                        for (int i = 0; i < DELETE_RETRY_COUNT && oldFile.exists(); i++) {
+                            try {
+                                Thread.sleep(DELETE_RETRY_DELAY_MS);
+                            } catch (InterruptedException ie) {
+                                Thread.currentThread().interrupt();
+                                throw new Exception("Interrupted while retrying deletion");
+                            }
+                            System.gc(); // Suggest GC to release file handles
+                            deleted = oldFile.delete();
+                            if (deleted) break;
+                        }
                     }
-                    System.gc(); // Suggest GC to release file handles
-                    deleted = oldFile.delete();
-                    if (deleted) break;
+                    
+                    if (!deleted && oldFile.exists()) {
+                        throw new Exception("Failed to delete file after retries: " + oldFile.getAbsolutePath());
+                    }
+                    System.out.println("[ModUpdater-Mod] Successfully deleted: " + oldFile.getName());
+                    
+                    if (op.getType() == PendingUpdateOperation.OperationType.DELETE) {
+                        processedFiles.add(oldFile.getName() + " (deleted)");
+                    }
+                } else {
+                    System.out.println("[ModUpdater-Mod] Old file already gone: " + oldFile.getAbsolutePath());
+                    if (op.getType() == PendingUpdateOperation.OperationType.DELETE) {
+                        processedFiles.add(oldFilePath + " (already removed)");
+                    }
                 }
             }
-            
-            if (!deleted && oldFile.exists()) {
-                throw new Exception("Failed to delete file after retries: " + oldFile.getAbsolutePath());
-            }
-            System.out.println("[ModUpdater-Mod] Successfully deleted: " + oldFile.getName());
-        } else {
-            System.out.println("[ModUpdater-Mod] Old file already gone: " + oldFile.getAbsolutePath());
         }
         
-        // Step 2: If this is an UPDATE operation, download the new file
-        if (op.getType() == PendingUpdateOperation.OperationType.UPDATE) {
-            String newFileUrl = op.getNewFileUrl();
-            String newFileName = op.getNewFileName();
-            String installLocation = op.getInstallLocation();
-            String expectedHash = op.getExpectedHash();
+        // Step 2: Download new file (for UPDATE and DOWNLOAD operations)
+        if (op.getType() == PendingUpdateOperation.OperationType.UPDATE || 
+            op.getType() == PendingUpdateOperation.OperationType.DOWNLOAD) {
+            downloadNewFile(op);
+        }
+    }
+    
+    /**
+     * Download a new file for UPDATE or DOWNLOAD operations.
+     * 
+     * This method handles the download and installation of a new file as part of
+     * a pending operation. For UPDATE operations, this should be called after
+     * the old file has been deleted. For DOWNLOAD operations, this is the only step.
+     * 
+     * @param op The pending update operation containing download URL, filename, 
+     *           install location, and optional hash for verification
+     * @throws Exception if download fails, hash verification fails, or file installation fails
+     */
+    private void downloadNewFile(PendingUpdateOperation op) throws Exception {
+        String newFileUrl = op.getNewFileUrl();
+        String newFileName = op.getNewFileName();
+        String installLocation = op.getInstallLocation();
+        String expectedHash = op.getExpectedHash();
+        
+        if (newFileUrl == null || newFileUrl.isEmpty()) {
+            throw new Exception(op.getType() + " operation missing newFileUrl");
+        }
+        
+        if (newFileName == null || newFileName.isEmpty()) {
+            newFileName = FileUtils.extractFileNameFromUrl(newFileUrl);
+        }
+        
+        if (installLocation == null || installLocation.isEmpty()) {
+            installLocation = "mods";
+        }
+        
+        File targetDir = new File(installLocation);
+        if (!targetDir.exists()) {
+            targetDir.mkdirs();
+        }
+        
+        File targetFile = new File(targetDir, newFileName);
+        
+        System.out.println("[ModUpdater-Mod] Downloading: " + newFileUrl);
+        System.out.println("[ModUpdater-Mod] Target: " + targetFile.getAbsolutePath());
+        
+        // Download to temp file first
+        File tmpFile = new File(targetDir, newFileName + ".tmp");
+        
+        try {
+            FileUtils.downloadFile(newFileUrl, tmpFile);
             
-            if (newFileUrl == null || newFileUrl.isEmpty()) {
-                throw new Exception("UPDATE operation missing newFileUrl");
-            }
-            
-            if (newFileName == null || newFileName.isEmpty()) {
-                newFileName = FileUtils.extractFileNameFromUrl(newFileUrl);
-            }
-            
-            if (installLocation == null || installLocation.isEmpty()) {
-                installLocation = "mods";
-            }
-            
-            File targetDir = new File(installLocation);
-            if (!targetDir.exists()) {
-                targetDir.mkdirs();
-            }
-            
-            File targetFile = new File(targetDir, newFileName);
-            
-            System.out.println("[ModUpdater-Mod] Downloading: " + newFileUrl);
-            System.out.println("[ModUpdater-Mod] Target: " + targetFile.getAbsolutePath());
-            
-            // Download to temp file first
-            File tmpFile = new File(targetDir, newFileName + ".tmp");
-            
-            try {
-                FileUtils.downloadFile(newFileUrl, tmpFile);
-                
-                // Verify hash if provided
-                if (expectedHash != null && !expectedHash.isEmpty()) {
-                    String actualHash = HashUtils.sha256Hex(tmpFile);
-                    if (!FileUtils.hashEquals(expectedHash, actualHash)) {
-                        throw new Exception("Hash mismatch: expected " + expectedHash + ", got " + actualHash);
-                    }
-                    System.out.println("[ModUpdater-Mod] Hash verified successfully");
+            // Verify hash if provided
+            if (expectedHash != null && !expectedHash.isEmpty()) {
+                String actualHash = HashUtils.sha256Hex(tmpFile);
+                if (!FileUtils.hashEquals(expectedHash, actualHash)) {
+                    throw new Exception("Hash mismatch: expected " + expectedHash + ", got " + actualHash);
                 }
-                
-                // Move to final location
-                if (targetFile.exists()) {
-                    targetFile.delete();
-                }
-                if (!tmpFile.renameTo(targetFile)) {
-                    throw new Exception("Failed to rename temp file to target");
-                }
-                
-                System.out.println("[ModUpdater-Mod] Successfully installed: " + newFileName);
-                processedFiles.add(newFileName + " (updated)");
-                
-            } finally {
-                // Clean up temp file if it still exists
-                if (tmpFile.exists()) {
-                    tmpFile.delete();
-                }
+                System.out.println("[ModUpdater-Mod] Hash verified successfully");
             }
             
-        } else {
-            // DELETE operation
-            processedFiles.add(oldFile.getName() + " (deleted)");
+            // Move to final location
+            if (targetFile.exists()) {
+                targetFile.delete();
+            }
+            if (!tmpFile.renameTo(targetFile)) {
+                throw new Exception("Failed to rename temp file to target");
+            }
+            
+            String opType = op.getType() == PendingUpdateOperation.OperationType.UPDATE ? "updated" : "downloaded";
+            System.out.println("[ModUpdater-Mod] Successfully installed: " + newFileName);
+            processedFiles.add(newFileName + " (" + opType + ")");
+            
+        } finally {
+            // Clean up temp file if it still exists
+            if (tmpFile.exists()) {
+                tmpFile.delete();
+            }
         }
     }
     
