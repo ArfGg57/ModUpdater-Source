@@ -688,19 +688,30 @@ public class ModConfirmationDialog {
         if (selfUpdateInfo != null) {
             System.out.println("[ModConfirmationDialog] ModUpdater self-update available!");
             
-            // Add the launchwrapper JAR to the "Files to Add" list
-            ModEntry launchwrapperMod = new ModEntry(
-                "ModUpdater Launchwrapper (Self-Update)",
-                selfUpdateInfo.getLatestDownloadUrl(),
-                selfUpdateInfo.getLatestFileName(),
-                "https://github.com/ArfGg57/ModUpdater-Source",
-                "MODUPDATER_SELF_LAUNCHWRAPPER",
-                "mods"
-            );
-            modsToDownload.add(launchwrapperMod);
+            // Only add files that actually need updates
             
-            // Add the mod JAR if available
-            if (selfUpdateInfo.hasModJar()) {
+            // Add the launchwrapper JAR if it needs update
+            if (selfUpdateInfo.launchwrapperNeedsUpdate()) {
+                ModEntry launchwrapperMod = new ModEntry(
+                    "ModUpdater Launchwrapper (Self-Update)",
+                    selfUpdateInfo.getLatestDownloadUrl(),
+                    selfUpdateInfo.getLatestFileName(),
+                    "https://github.com/ArfGg57/ModUpdater-Source",
+                    "MODUPDATER_SELF_LAUNCHWRAPPER",
+                    "mods"
+                );
+                modsToDownload.add(launchwrapperMod);
+                
+                // Add old version to delete list
+                if (selfUpdateInfo.hasCurrentJar()) {
+                    String deleteEntry = DELETE_KEY_MOD + selfUpdateInfo.getCurrentJarPath() + " (old ModUpdater launchwrapper)";
+                    filesToDelete.add(deleteEntry);
+                    System.out.println("[ModConfirmationDialog] Added old launchwrapper to delete list: " + selfUpdateInfo.getCurrentFileName());
+                }
+            }
+            
+            // Add the mod JAR if it needs update
+            if (selfUpdateInfo.hasModJar() && selfUpdateInfo.modNeedsUpdate()) {
                 ModEntry modJar = new ModEntry(
                     "ModUpdater Post-Restart Handler (Self-Update)",
                     selfUpdateInfo.getLatestModDownloadUrl(),
@@ -710,12 +721,18 @@ public class ModConfirmationDialog {
                     "mods"
                 );
                 modsToDownload.add(modJar);
+                
+                // Add old version to delete list
+                if (selfUpdateInfo.hasCurrentModJar()) {
+                    String deleteEntry = DELETE_KEY_MOD + selfUpdateInfo.getCurrentModJarPath() + " (old ModUpdater mod)";
+                    filesToDelete.add(deleteEntry);
+                }
             }
             
-            // Add the cleanup JAR if available
+            // Add the cleanup JAR if it needs update
             // Note: The cleanup JAR is NOT a Forge mod, it's a standalone helper.
             // It will be installed to config/ModUpdater/ via pending operations after restart.
-            if (selfUpdateInfo.hasCleanupJar()) {
+            if (selfUpdateInfo.hasCleanupJar() && selfUpdateInfo.cleanupNeedsUpdate()) {
                 ModEntry cleanupJar = new ModEntry(
                     "ModUpdater Cleanup Helper (after restart)",
                     selfUpdateInfo.getLatestCleanupDownloadUrl(),
@@ -725,23 +742,12 @@ public class ModConfirmationDialog {
                     "config/ModUpdater"  // Install to config/ModUpdater, NOT mods
                 );
                 modsToDownload.add(cleanupJar);
-            }
-            
-            // Add old versions to the "Files to Delete" list
-            if (selfUpdateInfo.hasCurrentJar()) {
-                String deleteEntry = DELETE_KEY_MOD + selfUpdateInfo.getCurrentJarPath() + " (old ModUpdater launchwrapper)";
-                filesToDelete.add(deleteEntry);
-                System.out.println("[ModConfirmationDialog] Added old launchwrapper to delete list: " + selfUpdateInfo.getCurrentFileName());
-            }
-            
-            if (selfUpdateInfo.hasCurrentModJar()) {
-                String deleteEntry = DELETE_KEY_MOD + selfUpdateInfo.getCurrentModJarPath() + " (old ModUpdater mod)";
-                filesToDelete.add(deleteEntry);
-            }
-            
-            if (selfUpdateInfo.hasCurrentCleanupJar()) {
-                String deleteEntry = DELETE_KEY_FILE + selfUpdateInfo.getCurrentCleanupJarPath() + " (old ModUpdater cleanup helper)";
-                filesToDelete.add(deleteEntry);
+                
+                // Add old version to delete list
+                if (selfUpdateInfo.hasCurrentCleanupJar()) {
+                    String deleteEntry = DELETE_KEY_FILE + selfUpdateInfo.getCurrentCleanupJarPath() + " (old ModUpdater cleanup helper)";
+                    filesToDelete.add(deleteEntry);
+                }
             }
         }
     }
