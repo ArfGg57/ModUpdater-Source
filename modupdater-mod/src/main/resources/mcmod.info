@@ -2,8 +2,8 @@
   {
     "modid": "modupdater-mod",
     "name": "ModUpdater Post-Restart Handler",
-    "description": "Works with the ModUpdater Tweaker to complete updates that couldn't be processed due to locked files.",
-    "version": "2.22",
+    "description": "[IT WORKED!!!!!] Works with the ModUpdater Tweaker to complete updates that couldn't be processed due to locked files.",
+    "version": "2.47",
     "mcversion": "1.7.10",
     "url": "",
     "updateUrl": "",

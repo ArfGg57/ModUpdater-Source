@@ -11,7 +11,7 @@ buildscript {
 apply plugin: 'forge'
 
 group = 'com.ArfGg57.modupdater'
-version = '2.1'
+version = '2.47'
 archivesBaseName = 'modupdater'
 
 sourceCompatibility = 1.8

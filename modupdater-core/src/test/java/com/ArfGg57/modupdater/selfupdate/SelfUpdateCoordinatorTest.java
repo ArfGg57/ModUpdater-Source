@@ -173,20 +173,23 @@ public class SelfUpdateCoordinatorTest {
     public void testSelfUpdateInfoCreation() {
         // Test creating a SelfUpdateInfo with all fields
         SelfUpdateCoordinator.SelfUpdateInfo info = new SelfUpdateCoordinator.SelfUpdateInfo(
-            "!!!!!modupdater-2.20.jar",  // currentFileName
-            "/mods/!!!!!modupdater-2.20.jar",  // currentJarPath
-            "!!!!!modupdater-2.21.jar",  // latestFileName
-            "https://example.com/modupdater-2.21.jar",  // latestDownloadUrl
-            "abc123",  // latestSha256Hash
-            "def456",  // previousReleaseHash
-            "!!!!!modupdater-mod-2.21.jar",  // latestModFileName
-            "https://example.com/modupdater-mod-2.21.jar",  // latestModDownloadUrl
-            "mod123",  // latestModSha256Hash
-            "/mods/!!!!!modupdater-mod-2.20.jar",  // currentModJarPath
-            "modupdater-cleanup-2.21.jar",  // latestCleanupFileName
-            "https://example.com/modupdater-cleanup-2.21.jar",  // latestCleanupDownloadUrl
-            "cleanup123",  // latestCleanupSha256Hash
-            "/mods/modupdater-cleanup-2.20.jar"  // currentCleanupJarPath
+                "!!!!!modupdater-2.20.jar",  // currentFileName
+                "/mods/!!!!!modupdater-2.20.jar",  // currentJarPath
+                "!!!!!modupdater-2.21.jar",  // latestFileName
+                "https://example.com/modupdater-2.21.jar",  // latestDownloadUrl
+                "abc123",  // latestSha256Hash
+                "def456",  // previousReleaseHash
+                "!!!!!modupdater-mod-2.21.jar",  // latestModFileName
+                "https://example.com/modupdater-mod-2.21.jar",  // latestModDownloadUrl
+                "mod123",  // latestModSha256Hash
+                "/mods/!!!!!modupdater-mod-2.20.jar",  // currentModJarPath
+                "modupdater-cleanup-2.21.jar",  // latestCleanupFileName
+                "https://example.com/modupdater-cleanup-2.21.jar",  // latestCleanupDownloadUrl
+                "cleanup123",  // latestCleanupSha256Hash
+                "/mods/modupdater-cleanup-2.20.jar",  // currentCleanupJarPath
+                true,  // hasCurrentJar
+                true,  // hasCurrentModJar
+                true   // hasCurrentCleanupJar
         );
         
         // Test launchwrapper getters
@@ -216,20 +219,23 @@ public class SelfUpdateCoordinatorTest {
     public void testSelfUpdateInfoWithMissingJars() {
         // Test creating a SelfUpdateInfo with only launchwrapper (no mod or cleanup)
         SelfUpdateCoordinator.SelfUpdateInfo info = new SelfUpdateCoordinator.SelfUpdateInfo(
-            "!!!!!modupdater-2.20.jar",  // currentFileName
-            null,  // currentJarPath - not found
-            "!!!!!modupdater-2.21.jar",  // latestFileName
-            "https://example.com/modupdater-2.21.jar",  // latestDownloadUrl
-            "abc123",  // latestSha256Hash
-            "def456",  // previousReleaseHash
-            null,  // latestModFileName - no mod in release
-            null,  // latestModDownloadUrl
-            null,  // latestModSha256Hash
-            null,  // currentModJarPath
-            null,  // latestCleanupFileName - no cleanup in release
-            null,  // latestCleanupDownloadUrl
-            null,  // latestCleanupSha256Hash
-            null   // currentCleanupJarPath
+                "!!!!!modupdater-2.20.jar",  // currentFileName
+                null,  // currentJarPath - not found
+                "!!!!!modupdater-2.21.jar",  // latestFileName
+                "https://example.com/modupdater-2.21.jar",  // latestDownloadUrl
+                "abc123",  // latestSha256Hash
+                "def456",  // previousReleaseHash
+                null,  // latestModFileName - no mod in release
+                null,  // latestModDownloadUrl
+                null,  // latestModSha256Hash
+                null,  // currentModJarPath
+                null,  // latestCleanupFileName - no cleanup in release
+                null,  // latestCleanupDownloadUrl
+                null,  // latestCleanupSha256Hash
+                null,   // currentCleanupJarPath
+                false,  // hasCurrentJar
+                false,  // hasCurrentModJar
+                false   // hasCurrentCleanupJar
         );
         
         // Launchwrapper is present in release but not installed
