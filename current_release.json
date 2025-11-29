@@ -1,20 +1,20 @@
 {
-  "version": "2.22",
+  "version": "2.47",
   "filename_prefix": "!!!!!",
   "files": {
     "launchwrapper": {
-      "github_name": "modupdater-2.22.jar",
-      "local_name": "!!!!!modupdater-2.22.jar",
+      "github_name": "modupdater-2.47.jar",
+      "local_name": "!!!!!modupdater-2.47.jar",
       "hash": ""
     },
     "mod": {
-      "github_name": "modupdater-mod-2.22.jar",
-      "local_name": "!!!!!modupdater-mod-2.22.jar",
+      "github_name": "modupdater-mod-2.47.jar",
+      "local_name": "!!!!!modupdater-mod-2.47.jar",
       "hash": ""
     },
     "cleanup": {
-      "github_name": "modupdater-cleanup-2.22.jar",
-      "local_name": "modupdater-cleanup-2.22.jar",
+      "github_name": "modupdater-cleanup-2.47.jar",
+      "local_name": "modupdater-cleanup-2.47.jar",
       "hash": ""
     }
   }
