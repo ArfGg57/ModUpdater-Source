@@ -13,18 +13,21 @@ import java.util.List;
 
 /**
  * RestartRequiredDialog: Shows when files could not be deleted due to locks
- * Prompts user to restart the game to apply updates
+ * Prompts user to restart the game to apply updates.
+ * Styled to match the theme of ModConfirmationDialog and other ModUpdater GUIs.
  */
 public class RestartRequiredDialog {
     
     // Message constant
-    public static final String RESTART_MESSAGE = "A restart was required for this modpack update, please relaunch the game.";
+    public static final String RESTART_MESSAGE = "A restart was required for this modpack update. Please relaunch the game to complete the update.";
     
     // UI Constants matching other dialogs
     private static final Color COLOR_BG = new Color(34, 37, 45);
+    private static final Color COLOR_LIST_BG = new Color(44, 47, 60);
     private static final Color COLOR_TEXT_PRIMARY = new Color(220, 220, 220);
     private static final Color COLOR_TEXT_SECONDARY = new Color(160, 160, 160);
-    private static final Color COLOR_ACCENT = new Color(255, 153, 51);  // Orange for warning
+    private static final Color COLOR_ACCENT_WARNING = new Color(255, 153, 51);  // Orange for warning
+    private static final Color COLOR_ACCENT = new Color(0, 200, 100);
     private static final Color COLOR_BUTTON = new Color(70, 73, 85);
     private static final Color COLOR_BUTTON_HOVER = new Color(90, 93, 105);
     
@@ -32,6 +35,7 @@ public class RestartRequiredDialog {
     private static final int BUTTON_CORNER_RADIUS = 10;
     private static final Font FONT_TITLE = new Font("Segoe UI", Font.BOLD, 22);
     private static final Font FONT_BODY = new Font("Segoe UI", Font.PLAIN, 14);
+    private static final Font FONT_SMALL = new Font("Segoe UI", Font.PLAIN, 12);
     private static final Font FONT_BUTTON = new Font("Segoe UI", Font.BOLD, 14);
     
     private JDialog dialog;
@@ -76,9 +80,9 @@ public class RestartRequiredDialog {
         mainPanel.setBorder(new EmptyBorder(30, 30, 30, 30));
         
         // Title
-        JLabel titleLabel = new JLabel("! Restart Required", SwingConstants.CENTER);
+        JLabel titleLabel = new JLabel("⚠ Restart Required", SwingConstants.CENTER);
         titleLabel.setFont(FONT_TITLE);
-        titleLabel.setForeground(COLOR_ACCENT);
+        titleLabel.setForeground(COLOR_ACCENT_WARNING);
         mainPanel.add(titleLabel, BorderLayout.NORTH);
         
         // Make dialog draggable
@@ -103,41 +107,46 @@ public class RestartRequiredDialog {
         centerPanel.setOpaque(false);
         
         // Message
-        JLabel messageLabel = new JLabel("<html><center>" + RESTART_MESSAGE.replace(", please", ",<br>please") + "</center></html>");
+        JLabel messageLabel = new JLabel("<html><center>" + RESTART_MESSAGE + "</center></html>");
         messageLabel.setFont(FONT_BODY);
         messageLabel.setForeground(COLOR_TEXT_PRIMARY);
         messageLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
         centerPanel.add(messageLabel);
-        centerPanel.add(Box.createVerticalStrut(15));
+        centerPanel.add(Box.createVerticalStrut(20));
         
-        // File list label
-        JLabel fileListLabel = new JLabel("Files pending deletion:");
-        fileListLabel.setFont(new Font("Segoe UI", Font.BOLD, 13));
-        fileListLabel.setForeground(COLOR_TEXT_SECONDARY);
-        fileListLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
-        centerPanel.add(fileListLabel);
-        centerPanel.add(Box.createVerticalStrut(5));
-        
-        // Scrollable file list
-        JTextArea fileListArea = new JTextArea();
-        fileListArea.setEditable(false);
-        fileListArea.setFont(new Font("Consolas", Font.PLAIN, 12));
-        fileListArea.setBackground(new Color(44, 47, 55));
-        fileListArea.setForeground(COLOR_TEXT_SECONDARY);
-        fileListArea.setCaretColor(COLOR_TEXT_SECONDARY);
-        
-        StringBuilder fileListText = new StringBuilder();
-        for (File file : lockedFiles) {
-            fileListText.append("  • ").append(file.getName()).append("\n");
+        // File list label (only if there are locked files)
+        if (lockedFiles != null && !lockedFiles.isEmpty()) {
+            JLabel fileListLabel = new JLabel("Files pending update:");
+            fileListLabel.setFont(FONT_SMALL);
+            fileListLabel.setForeground(COLOR_TEXT_SECONDARY);
+            fileListLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+            centerPanel.add(fileListLabel);
+            centerPanel.add(Box.createVerticalStrut(5));
+            
+            // Scrollable file list
+            JTextArea fileListArea = new JTextArea();
+            fileListArea.setEditable(false);
+            fileListArea.setFont(new Font("Consolas", Font.PLAIN, 11));
+            fileListArea.setBackground(COLOR_LIST_BG);
+            fileListArea.setForeground(COLOR_TEXT_SECONDARY);
+            fileListArea.setCaretColor(COLOR_TEXT_SECONDARY);
+            
+            StringBuilder fileListText = new StringBuilder();
+            for (File file : lockedFiles) {
+                fileListText.append("  • ").append(file.getName()).append("\n");
+            }
+            fileListArea.setText(fileListText.toString());
+            
+            JScrollPane scrollPane = new JScrollPane(fileListArea);
+            scrollPane.setPreferredSize(new Dimension(380, 120));
+            scrollPane.setMaximumSize(new Dimension(400, 120));
+            scrollPane.setBorder(BorderFactory.createLineBorder(new Color(60, 63, 75), 1));
+            scrollPane.setAlignmentX(Component.CENTER_ALIGNMENT);
+            centerPanel.add(scrollPane);
+        } else {
+            // No files to show - just add some space
+            centerPanel.add(Box.createVerticalStrut(20));
         }
-        fileListArea.setText(fileListText.toString());
-        
-        JScrollPane scrollPane = new JScrollPane(fileListArea);
-        scrollPane.setPreferredSize(new Dimension(400, 150));
-        scrollPane.setMaximumSize(new Dimension(450, 150));
-        scrollPane.setBorder(BorderFactory.createLineBorder(new Color(60, 63, 75), 1));
-        scrollPane.setAlignmentX(Component.CENTER_ALIGNMENT);
-        centerPanel.add(scrollPane);
         
         mainPanel.add(centerPanel, BorderLayout.CENTER);
         

@@ -452,29 +452,40 @@ public class SelfUpdateCoordinator {
     }
     
     /**
-     * Find a JAR file by local name, with fallback to pattern matching
+     * Find a JAR file by local name, with fallback to pattern matching.
+     * Searches in both mods/ and config/ModUpdater/ directories.
      */
     private File findCurrentJarByLocalName(String localName, String fallbackPattern) {
-        File modsDir = new File("mods");
-        if (!modsDir.exists() || !modsDir.isDirectory()) {
-            return null;
-        }
+        // Search in multiple directories
+        String[] searchDirs = {"mods", "config/ModUpdater"};
         
-        File[] files = modsDir.listFiles();
-        if (files == null) return null;
-        
-        // First try exact match with local name
-        if (localName != null && !localName.isEmpty()) {
-            for (File file : files) {
-                if (file.getName().equals(localName)) {
-                    return file;
+        for (String dirPath : searchDirs) {
+            File dir = new File(dirPath);
+            if (!dir.exists() || !dir.isDirectory()) {
+                continue;
+            }
+            
+            File[] files = dir.listFiles();
+            if (files == null) continue;
+            
+            // First try exact match with local name
+            if (localName != null && !localName.isEmpty()) {
+                for (File file : files) {
+                    if (file.getName().equals(localName)) {
+                        return file;
+                    }
                 }
             }
-        }
-        
-        // Fall back to pattern matching
-        if (fallbackPattern != null) {
-            return findJarByPattern(fallbackPattern);
+            
+            // Fall back to pattern matching
+            if (fallbackPattern != null) {
+                for (File file : files) {
+                    String name = file.getName().toLowerCase();
+                    if (name.contains(fallbackPattern) && name.endsWith(".jar")) {
+                        return file;
+                    }
+                }
+            }
         }
         
         return null;

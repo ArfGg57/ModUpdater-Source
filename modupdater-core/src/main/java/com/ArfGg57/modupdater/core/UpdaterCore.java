@@ -1164,18 +1164,23 @@ public class UpdaterCore {
             // ===== PHASE 2: Schedule Cleanup JAR for After Restart =====
             // The cleanup JAR is scheduled as a pending operation so it gets updated
             // after the game restarts and the launchwrapper/mod are installed
+            // NOTE: The cleanup JAR is installed to config/ModUpdater/ NOT mods/
+            // This prevents Forge from trying to load it as a mod
             if (updateInfo.hasCleanupJar()) {
                 gui.show("=== Scheduling Cleanup JAR Update ===");
                 gui.show("Cleanup JAR will be updated after restart");
                 
                 // Create pending operation for cleanup JAR
+                // Install to config/ModUpdater/ to avoid Forge trying to load it as a mod
+                String cleanupInstallLocation = "config/ModUpdater";
+                
                 if (updateInfo.hasCurrentCleanupJar()) {
                     // Update existing cleanup JAR
                     PendingUpdateOperation cleanupOp = PendingUpdateOperation.createUpdate(
                         updateInfo.getCurrentCleanupJarPath(),
                         updateInfo.getLatestCleanupDownloadUrl(),
                         updateInfo.getLatestCleanupFileName(),
-                        "mods",
+                        cleanupInstallLocation,
                         updateInfo.getLatestCleanupSha256Hash(),
                         "ModUpdater self-update (cleanup): scheduled for post-restart"
                     );
@@ -1185,7 +1190,7 @@ public class UpdaterCore {
                     PendingUpdateOperation cleanupOp = PendingUpdateOperation.createDownload(
                         updateInfo.getLatestCleanupDownloadUrl(),
                         updateInfo.getLatestCleanupFileName(),
-                        "mods",
+                        cleanupInstallLocation,
                         updateInfo.getLatestCleanupSha256Hash(),
                         "ModUpdater self-update (cleanup): new install post-restart"
                     );
