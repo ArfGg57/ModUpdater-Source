@@ -33,6 +33,9 @@ public class RestartRequiredDialog {
     
     private static final int WINDOW_CORNER_RADIUS = 25;
     private static final int BUTTON_CORNER_RADIUS = 10;
+    private static final int MESSAGE_WIDTH_PX = 350;
+    private static final int DIALOG_MIN_WIDTH = 450;
+    private static final int DIALOG_MIN_HEIGHT = 300;
     private static final Font FONT_TITLE = new Font("Segoe UI", Font.BOLD, 22);
     private static final Font FONT_BODY = new Font("Segoe UI", Font.PLAIN, 14);
     private static final Font FONT_SMALL = new Font("Segoe UI", Font.PLAIN, 12);
@@ -109,7 +112,7 @@ public class RestartRequiredDialog {
         centerPanel.setOpaque(false);
         
         // Message - use HTML with width constraint for proper text wrapping
-        JLabel messageLabel = new JLabel("<html><div style='width: 350px; text-align: center;'>" + RESTART_MESSAGE + "</div></html>");
+        JLabel messageLabel = new JLabel("<html><div style='width: " + MESSAGE_WIDTH_PX + "px; text-align: center;'>" + RESTART_MESSAGE + "</div></html>");
         messageLabel.setFont(FONT_BODY);
         messageLabel.setForeground(COLOR_TEXT_PRIMARY);
         messageLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
@@ -171,7 +174,7 @@ public class RestartRequiredDialog {
         dialog.add(mainPanel);
         dialog.pack();
         // Set minimum size to ensure proper layout
-        dialog.setMinimumSize(new Dimension(450, 300));
+        dialog.setMinimumSize(new Dimension(DIALOG_MIN_WIDTH, DIALOG_MIN_HEIGHT));
         dialog.setLocationRelativeTo(null);
     }
     
