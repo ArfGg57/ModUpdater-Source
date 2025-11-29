@@ -8,7 +8,7 @@ buildscript {
 apply plugin: 'java'
 
 group = 'com.ArfGg57.modupdater'
-version = '2.20'
+version = '2.21'
 archivesBaseName = '!!!!!modupdater'
 
 sourceCompatibility = 1.8

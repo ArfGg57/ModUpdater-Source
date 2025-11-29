@@ -2,8 +2,8 @@
   {
     "modid": "modupdater-mod",
     "name": "ModUpdater Post-Restart Handler",
-    "description": "Handles deferred mod update operations after a game restart. Works with the ModUpdater Tweaker to complete updates that couldn't be processed due to locked files.",
-    "version": "2.20",
+    "description": "Works with the ModUpdater Tweaker to complete updates that couldn't be processed due to locked files.",
+    "version": "2.22",
     "mcversion": "1.7.10",
     "url": "",
     "updateUrl": "",
