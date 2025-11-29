@@ -411,6 +411,14 @@ public class ModUpdaterPostRestartMod {
     
     /**
      * Download a new file for UPDATE or DOWNLOAD operations.
+     * 
+     * This method handles the download and installation of a new file as part of
+     * a pending operation. For UPDATE operations, this should be called after
+     * the old file has been deleted. For DOWNLOAD operations, this is the only step.
+     * 
+     * @param op The pending update operation containing download URL, filename, 
+     *           install location, and optional hash for verification
+     * @throws Exception if download fails, hash verification fails, or file installation fails
      */
     private void downloadNewFile(PendingUpdateOperation op) throws Exception {
         String newFileUrl = op.getNewFileUrl();

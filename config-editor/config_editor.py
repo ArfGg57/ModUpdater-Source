@@ -1398,8 +1398,27 @@ class MainWindow(QMainWindow):
         )
     
     def closeEvent(self, event):
-        # TODO: Check for unsaved changes
-        event.accept()
+        if self.config_dir and self.has_unsaved_changes():
+            reply = QMessageBox.question(
+                self, 'Unsaved Changes',
+                'You have unsaved changes. Do you want to save before closing?',
+                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel
+            )
+            if reply == QMessageBox.StandardButton.Save:
+                self.save_all()
+                event.accept()
+            elif reply == QMessageBox.StandardButton.Discard:
+                event.accept()
+            else:
+                event.ignore()
+        else:
+            event.accept()
+    
+    def has_unsaved_changes(self) -> bool:
+        """Check if there are unsaved changes by comparing current data with loaded data."""
+        # For simplicity, we consider any edit as a change that should be saved
+        # A more sophisticated implementation would track the original data
+        return self.unsaved_changes
 
 
 def main():

@@ -79,10 +79,12 @@ public class RestartRequiredDialog {
         mainPanel.setBackground(COLOR_BG);
         mainPanel.setBorder(new EmptyBorder(30, 30, 30, 30));
         
-        // Title
+        // Title (using Unicode symbol with accessible description)
         JLabel titleLabel = new JLabel("⚠ Restart Required", SwingConstants.CENTER);
         titleLabel.setFont(FONT_TITLE);
         titleLabel.setForeground(COLOR_ACCENT_WARNING);
+        titleLabel.getAccessibleContext().setAccessibleName("Restart Required");
+        titleLabel.getAccessibleContext().setAccessibleDescription("A restart is required to complete the modpack update");
         mainPanel.add(titleLabel, BorderLayout.NORTH);
         
         // Make dialog draggable

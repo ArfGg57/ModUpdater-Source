@@ -69,11 +69,13 @@ public class WaitingForUpdateDialog {
         headerPanel.setLayout(new BoxLayout(headerPanel, BoxLayout.Y_AXIS));
         headerPanel.setOpaque(false);
         
-        // Title with warning icon
+        // Title with warning icon (using Unicode symbol with accessible description)
         JLabel titleLabel = new JLabel("⟳ Waiting for game to finish updates", SwingConstants.CENTER);
         titleLabel.setFont(FONT_TITLE);
         titleLabel.setForeground(COLOR_ACCENT_WARNING);
         titleLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        titleLabel.getAccessibleContext().setAccessibleName("Waiting for game to finish updates");
+        titleLabel.getAccessibleContext().setAccessibleDescription("The game is processing updates and will restart automatically");
         headerPanel.add(titleLabel);
         headerPanel.add(Box.createVerticalStrut(10));
         
