@@ -324,7 +324,7 @@ public class ModConfirmationDialog {
                         JSONObject source = mod.optJSONObject("source");
                         String installLocation = mod.optString("installLocation", "mods");
                         // Support both "id" (new) and "numberId" (legacy) for backward compatibility
-                        String modId = mod.optString("id", mod.optString("id", mod.optString("numberId", ""))).trim();
+                        String modId = mod.optString("id", mod.optString("numberId", "")).trim();
 
                         // resolve filenameFromSource and downloadUrl from the declared source.
                         String filenameFromSource = null;

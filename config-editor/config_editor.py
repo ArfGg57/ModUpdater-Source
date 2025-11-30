@@ -74,6 +74,12 @@ CONFIG_FILE = "editor_config.json"
 CACHE_DIR = ".cache"
 USER_AGENT = "ModUpdater-ConfigEditor"
 
+# CurseForge API configuration
+# Using the curse.tools proxy for CurseForge API (doesn't require API key)
+CF_PROXY_BASE_URL = "https://api.curse.tools/v1/cf"
+# Direct CurseForge API key (public partner key for mod managers)
+CF_API_KEY = "$2a$10$bL4bIL5pUWqfcO7KQtnMReakwtfHbNKh6v1uTpKlzhwoueEJQnPnm"
+
 
 # === Custom Exceptions ===
 class GitHubAPIError(Exception):
@@ -1399,21 +1405,23 @@ class ModEditorPanel(QWidget):
                 QMessageBox.warning(self, "No URL", "Please enter a URL first to auto-fill the hash.")
                 return
         elif self.curseforge_btn.isChecked():
-            # Fetch download URL from CurseForge
+            # Fetch download URL from CurseForge using proxy API
             project_id = self.mod_id_edit.text().strip()
             file_id = self.file_id_edit.text().strip()
             if not project_id or not file_id:
                 QMessageBox.warning(self, "Missing Info", "Please enter Project ID and File ID first.")
                 return
             try:
-                api_url = f"https://api.curseforge.com/v1/mods/{project_id}/files/{file_id}"
+                # Use the curse.tools proxy which doesn't require API key
+                api_url = f"{CF_PROXY_BASE_URL}/mods/{project_id}/files/{file_id}"
                 req = urllib.request.Request(api_url, headers={
-                    "User-Agent": USER_AGENT,
-                    "x-api-key": "$2a$10$bL4bIL5pUWqfcO7KQtnMReakwtfHbNKh6v1uTpKlzhwoueEJQnPnm"
+                    "User-Agent": USER_AGENT
                 })
                 with urllib.request.urlopen(req, timeout=30) as response:
                     data = json.loads(response.read())
-                    url = data.get('data', {}).get('downloadUrl')
+                    # Handle both direct response and nested data response
+                    file_data = data.get('data', data)
+                    url = file_data.get('downloadUrl')
                     if not url:
                         QMessageBox.warning(self, "Error", "Could not get download URL from CurseForge.")
                         return
