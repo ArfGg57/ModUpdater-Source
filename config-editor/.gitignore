@@ -18,3 +18,12 @@ env/
 dist/
 build/
 *.egg-info/
+
+# Local versions cache
+versions/
+
+# Cache directory
+.cache/
+
+# Editor config (contains API tokens)
+editor_config.json

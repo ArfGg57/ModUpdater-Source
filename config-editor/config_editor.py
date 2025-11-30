@@ -74,6 +74,12 @@ CONFIG_FILE = "editor_config.json"
 CACHE_DIR = ".cache"
 USER_AGENT = "ModUpdater-ConfigEditor"
 
+# CurseForge API configuration
+# Using the curse.tools proxy for CurseForge API (doesn't require API key)
+CF_PROXY_BASE_URL = "https://api.curse.tools/v1/cf"
+# Direct CurseForge API key (public partner key for mod managers)
+CF_API_KEY = "$2a$10$bL4bIL5pUWqfcO7KQtnMReakwtfHbNKh6v1uTpKlzhwoueEJQnPnm"
+
 
 # === Custom Exceptions ===
 class GitHubAPIError(Exception):
@@ -532,7 +538,8 @@ class IconFetcher(QThread):
         """Fetch icon from CurseForge or Modrinth."""
         source = self.mod_info.get('source', {})
         source_type = source.get('type', '')
-        mod_id = self.mod_info.get('numberId', '')
+        # Support both "id" (new) and "numberId" (legacy)
+        mod_id = self.mod_info.get('id', self.mod_info.get('numberId', ''))
         
         try:
             icon_data = None
@@ -616,24 +623,25 @@ class ModEntry:
             data = {}
         self.display_name = data.get('display_name', '')
         self.file_name = data.get('file_name', '')
-        self.number_id = data.get('numberId', '')
+        # Support both "id" (new) and "numberId" (legacy) for backward compatibility
+        self.id = data.get('id', data.get('numberId', ''))
         self.hash = data.get('hash', '')
         self.install_location = data.get('installLocation', 'mods')
         self.source = data.get('source', {'type': 'url', 'url': ''})
         self.icon_path = data.get('icon_path', '')
-        self._is_new = not bool(data.get('numberId', ''))
+        self._is_new = not bool(self.id)
+        self._is_from_previous = data.get('_is_from_previous', False)
     
     def to_dict(self) -> Dict[str, Any]:
         result = {
             'display_name': self.display_name,
             'file_name': self.file_name,
-            'numberId': self.number_id,
+            'id': self.id,  # Use new "id" field
             'hash': self.hash,
             'installLocation': self.install_location,
             'source': self.source
         }
-        if self.icon_path:
-            result['icon_path'] = self.icon_path
+        # Don't include icon_path or internal flags in output
         return result
     
     def is_new(self) -> bool:
@@ -656,6 +664,7 @@ class FileEntry:
         self.overwrite = data.get('overwrite', True)
         self.extract = data.get('extract', False)
         self.icon_path = data.get('icon_path', '')
+        self._is_from_previous = data.get('_is_from_previous', False)
     
     def to_dict(self) -> Dict[str, Any]:
         result = {
@@ -667,8 +676,7 @@ class FileEntry:
             'overwrite': self.overwrite,
             'extract': self.extract
         }
-        if self.icon_path:
-            result['icon_path'] = self.icon_path
+        # Don't include icon_path or internal flags in output
         return result
 
 
@@ -681,6 +689,7 @@ class DeleteEntry:
         self.type = data.get('type', 'file')
         self.reason = data.get('reason', '')
         self.icon_path = data.get('icon_path', '')
+        self._is_unremovable = data.get('_is_unremovable', False)  # For auto-added deletes from removed mods/files
     
     def to_dict(self) -> Dict[str, Any]:
         result = {
@@ -689,8 +698,7 @@ class DeleteEntry:
         }
         if self.reason:
             result['reason'] = self.reason
-        if self.icon_path:
-            result['icon_path'] = self.icon_path
+        # Don't include icon_path or internal flags in output
         return result
 
 
@@ -704,6 +712,8 @@ class VersionConfig:
         self.icon_path = ""
         self.modified = False
         self._file_shas = {}
+        self._is_locked = False  # Once saved/created to repo, version is locked
+        self._is_new = True  # True if version hasn't been saved to repo yet
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -711,6 +721,17 @@ class VersionConfig:
             'files': [f.to_dict() for f in self.files],
             'deletes': [d.to_dict() for d in self.deletes]
         }
+    
+    def lock(self):
+        """Lock the version after it has been saved to repo"""
+        self._is_locked = True
+        self._is_new = False
+    
+    def is_locked(self) -> bool:
+        return self._is_locked
+    
+    def is_new(self) -> bool:
+        return self._is_new
 
 
 
@@ -725,7 +746,7 @@ class SetupDialog(QDialog):
     
     def setup_ui(self):
         self.setWindowTitle("GitHub Repository Setup")
-        self.setMinimumSize(550, 400)
+        self.setMinimumSize(550, 450)
         self.setModal(True)
         
         layout = QVBoxLayout(self)
@@ -738,7 +759,7 @@ class SetupDialog(QDialog):
         layout.addWidget(header)
         
         desc = QLabel("Configure your GitHub repository to store configuration files.\n"
-                      "The editor will fetch and save configs directly to GitHub.")
+                      "The editor will create and edit configs directly in your GitHub repository.")
         desc.setWordWrap(True)
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(desc)
@@ -752,9 +773,12 @@ class SetupDialog(QDialog):
         form_layout.addRow("Repository URL:", self.repo_url_edit)
         
         self.token_edit = QLineEdit(self.config.get('token', ''))
-        self.token_edit.setPlaceholderText("ghp_xxxxxxxxxxxx (optional for public repos)")
+        self.token_edit.setPlaceholderText("ghp_xxxxxxxxxxxx (REQUIRED)")
         self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        form_layout.addRow("API Token:", self.token_edit)
+        token_note = QLabel("API Token is required to edit the repository")
+        token_note.setStyleSheet("font-size: 11px; color: #f9e2af;")
+        form_layout.addRow("API Token*:", self.token_edit)
+        form_layout.addRow("", token_note)
         
         self.branch_edit = QLineEdit(self.config.get('branch', 'main'))
         self.branch_edit.setPlaceholderText("main")
@@ -783,7 +807,7 @@ class SetupDialog(QDialog):
         button_layout.addStretch()
         save_btn = QPushButton("Save & Continue")
         save_btn.setObjectName("primaryButton")
-        save_btn.clicked.connect(self.accept)
+        save_btn.clicked.connect(self.validate_and_accept)
         button_layout.addWidget(save_btn)
         layout.addLayout(button_layout)
     
@@ -793,6 +817,11 @@ class SetupDialog(QDialog):
         
         if not repo_url:
             self.status_label.setText("Please enter a repository URL")
+            self.status_label.setStyleSheet("color: #f38ba8;")
+            return
+        
+        if not token:
+            self.status_label.setText("API Token is required")
             self.status_label.setStyleSheet("color: #f38ba8;")
             return
         
@@ -813,6 +842,18 @@ class SetupDialog(QDialog):
             self.status_label.setText(f"Error: {str(e)[:50]}")
             self.status_label.setStyleSheet("color: #f38ba8;")
     
+    def validate_and_accept(self):
+        """Validate that API token is provided before accepting."""
+        if not self.repo_url_edit.text().strip():
+            self.status_label.setText("Repository URL is required")
+            self.status_label.setStyleSheet("color: #f38ba8;")
+            return
+        if not self.token_edit.text().strip():
+            self.status_label.setText("API Token is required to edit the repository")
+            self.status_label.setStyleSheet("color: #f38ba8;")
+            return
+        self.accept()
+    
     def get_config(self) -> dict:
         return {
             'repo_url': self.repo_url_edit.text().strip(),
@@ -832,7 +873,7 @@ class AddVersionDialog(QDialog):
     
     def setup_ui(self):
         self.setWindowTitle("Add New Version")
-        self.setMinimumSize(400, 200)
+        self.setMinimumSize(450, 280)
         self.setModal(True)
         
         layout = QVBoxLayout(self)
@@ -843,12 +884,23 @@ class AddVersionDialog(QDialog):
         header.setStyleSheet("font-size: 18px; font-weight: bold;")
         layout.addWidget(header)
         
+        # Warning message
+        warning = QLabel("⚠️ Warning: Once a version is created and saved to the repository,\n"
+                        "it cannot be edited. Make sure your mods and files are correct.")
+        warning.setStyleSheet("color: #f9e2af; padding: 10px; background-color: rgba(249, 226, 175, 0.1); border-radius: 6px;")
+        warning.setWordWrap(True)
+        layout.addWidget(warning)
+        
         form_layout = QFormLayout()
         form_layout.setSpacing(15)
         self.version_edit = QLineEdit()
-        self.version_edit.setPlaceholderText("e.g., 1.0.0")
+        self.version_edit.setPlaceholderText("e.g., 1.0.0 (format: X.Y.Z)")
         form_layout.addRow("Version Number:", self.version_edit)
         layout.addLayout(form_layout)
+        
+        format_note = QLabel("Version must be in X.Y.Z format (e.g., 1.0.0, 2.1.0)")
+        format_note.setStyleSheet("font-size: 11px; color: #a6adc8;")
+        layout.addWidget(format_note)
         
         self.error_label = QLabel("")
         self.error_label.setStyleSheet("color: #f38ba8;")
@@ -861,7 +913,7 @@ class AddVersionDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(cancel_btn)
         button_layout.addStretch()
-        confirm_btn = QPushButton("Confirm")
+        confirm_btn = QPushButton("Create Version")
         confirm_btn.setObjectName("primaryButton")
         confirm_btn.clicked.connect(self.validate_and_accept)
         button_layout.addWidget(confirm_btn)
@@ -872,9 +924,9 @@ class AddVersionDialog(QDialog):
         if not version:
             self.error_label.setText("Please enter a version number")
             return
-        # Support semantic versioning: 1.0.0, 1.0.0-beta, 2.1.0-rc1, etc.
-        if not re.match(r'^[\d]+\.[\d]+\.[\d]+(-[a-zA-Z0-9]+)?$', version):
-            self.error_label.setText("Version format: X.Y.Z or X.Y.Z-tag (e.g., 1.0.0, 1.0.0-beta)")
+        # Only allow X.Y.Z format - no -beta, -rc, etc.
+        if not re.match(r'^\d+\.\d+\.\d+$', version):
+            self.error_label.setText("Version must be in X.Y.Z format (e.g., 1.0.0)")
             return
         if version in self.existing_versions:
             self.error_label.setText("This version already exists")
@@ -995,7 +1047,7 @@ class AddModDialog(QDialog):
     def get_mod(self) -> ModEntry:
         mod = ModEntry()
         mod.display_name = self.name_edit.text().strip()
-        mod.number_id = self.id_edit.text().strip()
+        mod.id = self.id_edit.text().strip()
         mod.icon_path = self.custom_icon_path
         return mod
 
@@ -1127,6 +1179,8 @@ class ItemCard(QFrame):
 class ModEditorPanel(QWidget):
     """Right panel for editing a selected mod."""
     mod_changed = pyqtSignal()
+    mod_saved = pyqtSignal()  # Emitted when save is clicked - to close panel
+    mod_deleted = pyqtSignal(object)  # Emitted when delete is confirmed, passes the mod
     hash_requested = pyqtSignal(str)
     
     def __init__(self, parent=None):
@@ -1280,7 +1334,7 @@ class ModEditorPanel(QWidget):
         # Block signals during load
         self.blockSignals(True)
         
-        self.id_edit.setText(mod.number_id)
+        self.id_edit.setText(mod.id)
         self.id_edit.setEnabled(mod.is_new())  # Only editable for new mods
         
         self.hash_edit.setText(mod.hash)
@@ -1312,7 +1366,7 @@ class ModEditorPanel(QWidget):
         if not self.current_mod:
             return
         
-        self.current_mod.number_id = self.id_edit.text().strip()
+        self.current_mod.id = self.id_edit.text().strip()
         self.current_mod.hash = self.hash_edit.text().strip()
         self.current_mod.display_name = self.display_name_edit.text().strip()
         self.current_mod.file_name = self.file_name_edit.text().strip()
@@ -1339,14 +1393,63 @@ class ModEditorPanel(QWidget):
         
         self.current_mod.mark_saved()
         self.mod_changed.emit()
+        self.mod_saved.emit()  # Signal to close the editor panel
     
     def auto_fill_hash(self):
-        url = ""
+        """Auto-fill hash from URL, CurseForge, or Modrinth source."""
+        url = None
+        
         if self.url_btn.isChecked():
             url = self.url_edit.text().strip()
-        
-        if not url:
-            QMessageBox.warning(self, "No URL", "Please enter a URL first to auto-fill the hash.")
+            if not url:
+                QMessageBox.warning(self, "No URL", "Please enter a URL first to auto-fill the hash.")
+                return
+        elif self.curseforge_btn.isChecked():
+            # Fetch download URL from CurseForge using proxy API
+            project_id = self.mod_id_edit.text().strip()
+            file_id = self.file_id_edit.text().strip()
+            if not project_id or not file_id:
+                QMessageBox.warning(self, "Missing Info", "Please enter Project ID and File ID first.")
+                return
+            try:
+                # Use the curse.tools proxy which doesn't require API key
+                api_url = f"{CF_PROXY_BASE_URL}/mods/{project_id}/files/{file_id}"
+                req = urllib.request.Request(api_url, headers={
+                    "User-Agent": USER_AGENT
+                })
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    data = json.loads(response.read())
+                    # Handle both direct response and nested data response
+                    file_data = data.get('data', data)
+                    url = file_data.get('downloadUrl')
+                    if not url:
+                        QMessageBox.warning(self, "Error", "Could not get download URL from CurseForge.")
+                        return
+            except Exception as e:
+                QMessageBox.warning(self, "API Error", f"Failed to fetch from CurseForge:\n{str(e)}")
+                return
+        elif self.modrinth_btn.isChecked():
+            # Fetch download URL from Modrinth
+            version_id = self.file_id_edit.text().strip()
+            if not version_id:
+                QMessageBox.warning(self, "Missing Info", "Please enter Version ID first.")
+                return
+            try:
+                api_url = f"https://api.modrinth.com/v2/version/{version_id}"
+                req = urllib.request.Request(api_url, headers={"User-Agent": USER_AGENT})
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    data = json.loads(response.read())
+                    files = data.get('files', [])
+                    if files:
+                        url = files[0].get('url')
+                    if not url:
+                        QMessageBox.warning(self, "Error", "Could not get download URL from Modrinth.")
+                        return
+            except Exception as e:
+                QMessageBox.warning(self, "API Error", f"Failed to fetch from Modrinth:\n{str(e)}")
+                return
+        else:
+            QMessageBox.warning(self, "No Source", "Please select a source type and enter required information.")
             return
         
         self.hash_progress.setVisible(True)
@@ -1374,9 +1477,9 @@ class ModEditorPanel(QWidget):
     
     def request_delete(self):
         if self.current_mod:
-            dialog = ConfirmDeleteDialog(self.current_mod.display_name or self.current_mod.number_id, "mod", self)
+            dialog = ConfirmDeleteDialog(self.current_mod.display_name or self.current_mod.id, "mod", self)
             if dialog.exec():
-                self.mod_changed.emit()
+                self.mod_deleted.emit(self.current_mod)
     
     def clear(self):
         self.current_mod = None
@@ -1396,6 +1499,8 @@ class ModEditorPanel(QWidget):
 class FileEditorPanel(QWidget):
     """Panel for editing a file entry."""
     file_changed = pyqtSignal()
+    file_saved = pyqtSignal()  # Emitted when save is clicked - to close panel
+    file_deleted = pyqtSignal(object)  # Emitted when delete is confirmed, passes the file
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1507,6 +1612,7 @@ class FileEditorPanel(QWidget):
         self.current_file.overwrite = self.overwrite_check.isChecked()
         self.current_file.extract = self.extract_check.isChecked()
         self.file_changed.emit()
+        self.file_saved.emit()  # Signal to close the editor panel
     
     def auto_fill_hash(self):
         url = self.url_edit.text().strip()
@@ -1538,7 +1644,7 @@ class FileEditorPanel(QWidget):
         if self.current_file:
             dialog = ConfirmDeleteDialog(self.current_file.display_name, "file", self)
             if dialog.exec():
-                self.file_changed.emit()
+                self.file_deleted.emit(self.current_file)
     
     def clear(self):
         self.current_file = None
@@ -1555,6 +1661,8 @@ class FileEditorPanel(QWidget):
 class DeleteEditorPanel(QWidget):
     """Panel for editing a delete entry."""
     delete_changed = pyqtSignal()
+    delete_saved = pyqtSignal()  # Emitted when save is clicked - to close panel
+    delete_entry_deleted = pyqtSignal(object)  # Emitted when delete is confirmed
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1603,6 +1711,10 @@ class DeleteEditorPanel(QWidget):
         self.path_edit.setText(delete_entry.path)
         self.type_combo.setCurrentText(delete_entry.type)
         self.reason_edit.setText(delete_entry.reason)
+        # Disable delete button for unremovable entries
+        self.delete_btn.setEnabled(not delete_entry._is_unremovable)
+        if delete_entry._is_unremovable:
+            self.delete_btn.setToolTip("This entry was auto-added and cannot be removed")
     
     def save_changes(self):
         if not self.current_delete:
@@ -1611,18 +1723,24 @@ class DeleteEditorPanel(QWidget):
         self.current_delete.type = self.type_combo.currentText()
         self.current_delete.reason = self.reason_edit.text().strip()
         self.delete_changed.emit()
+        self.delete_saved.emit()  # Signal to close the editor panel
     
     def request_delete(self):
         if self.current_delete:
+            if self.current_delete._is_unremovable:
+                QMessageBox.warning(self, "Cannot Delete", "This entry was auto-added from a removed mod/file and cannot be deleted.")
+                return
             dialog = ConfirmDeleteDialog(self.current_delete.path, "delete entry", self)
             if dialog.exec():
-                self.delete_changed.emit()
+                self.delete_entry_deleted.emit(self.current_delete)
     
     def clear(self):
         self.current_delete = None
         self.path_edit.clear()
         self.type_combo.setCurrentIndex(0)
         self.reason_edit.clear()
+        self.delete_btn.setEnabled(True)
+        self.delete_btn.setToolTip("")
 
 
 
@@ -1631,6 +1749,7 @@ class VersionEditorPage(QWidget):
     """Page for editing a specific version (mods, files, deletes)."""
     version_modified = pyqtSignal()
     back_requested = pyqtSignal()
+    create_requested = pyqtSignal(object)  # Emitted with version_config when Create is clicked
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1650,7 +1769,7 @@ class VersionEditorPage(QWidget):
         header_layout.setContentsMargins(16, 12, 16, 12)
         
         self.back_btn = QPushButton("← Back")
-        self.back_btn.clicked.connect(self.back_requested.emit)
+        self.back_btn.clicked.connect(self.on_back_clicked)
         header_layout.addWidget(self.back_btn)
         
         self.version_label = QLabel("Version")
@@ -1658,6 +1777,21 @@ class VersionEditorPage(QWidget):
         header_layout.addWidget(self.version_label)
         
         header_layout.addStretch()
+        
+        # Locked indicator (shown for already-saved versions)
+        self.locked_label = QLabel("🔒 Locked")
+        self.locked_label.setStyleSheet("color: #f9e2af; font-weight: bold;")
+        self.locked_label.setVisible(False)
+        header_layout.addWidget(self.locked_label)
+        
+        # Create Version button (only shown for new versions)
+        self.create_btn = QPushButton("✓ Create Version")
+        self.create_btn.setObjectName("successButton")
+        self.create_btn.setToolTip("Save this version to the repository. Once created, it cannot be edited.")
+        self.create_btn.clicked.connect(self.on_create_clicked)
+        self.create_btn.setVisible(False)
+        header_layout.addWidget(self.create_btn)
+        
         main_layout.addLayout(header_layout)
         
         # Tab widget
@@ -1700,7 +1834,7 @@ class VersionEditorPage(QWidget):
         
         self.mods_grid_widget = QWidget()
         self.mods_grid = QGridLayout(self.mods_grid_widget)
-        self.mods_grid.setSpacing(12)
+        self.mods_grid.setSpacing(8)  # Reduced spacing
         self.mods_scroll.setWidget(self.mods_grid_widget)
         
         left_layout.addWidget(self.mods_scroll)
@@ -1708,6 +1842,9 @@ class VersionEditorPage(QWidget):
         # Right: Editor panel
         self.mod_editor = ModEditorPanel()
         self.mod_editor.mod_changed.connect(self.on_mod_changed)
+        self.mod_editor.mod_saved.connect(self.on_mod_saved)
+        self.mod_editor.mod_deleted.connect(self.on_mod_deleted)
+        self.mod_editor.setVisible(False)  # Hidden until a mod is selected
         
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_panel)
@@ -1731,7 +1868,7 @@ class VersionEditorPage(QWidget):
         
         self.files_grid_widget = QWidget()
         self.files_grid = QGridLayout(self.files_grid_widget)
-        self.files_grid.setSpacing(12)
+        self.files_grid.setSpacing(8)  # Reduced spacing
         self.files_scroll.setWidget(self.files_grid_widget)
         
         left_layout.addWidget(self.files_scroll)
@@ -1739,6 +1876,9 @@ class VersionEditorPage(QWidget):
         # Right: Editor panel
         self.file_editor = FileEditorPanel()
         self.file_editor.file_changed.connect(self.on_file_changed)
+        self.file_editor.file_saved.connect(self.on_file_saved)
+        self.file_editor.file_deleted.connect(self.on_file_deleted)
+        self.file_editor.setVisible(False)  # Hidden until a file is selected
         
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_panel)
@@ -1768,6 +1908,9 @@ class VersionEditorPage(QWidget):
         # Right: Editor panel
         self.delete_editor = DeleteEditorPanel()
         self.delete_editor.delete_changed.connect(self.on_delete_changed)
+        self.delete_editor.delete_saved.connect(self.on_delete_entry_saved)
+        self.delete_editor.delete_entry_deleted.connect(self.on_delete_entry_deleted)
+        self.delete_editor.setVisible(False)  # Hidden until a delete entry is selected
         
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_panel)
@@ -1815,15 +1958,58 @@ class VersionEditorPage(QWidget):
         self.refresh_mods_grid()
         self.refresh_files_grid()
         self.refresh_deletes_list()
+        
+        # Clear and hide editor panels
         self.mod_editor.clear()
+        self.mod_editor.setVisible(False)
         self.file_editor.clear()
+        self.file_editor.setVisible(False)
         self.delete_editor.clear()
+        self.delete_editor.setVisible(False)
+        
+        self.selected_mod_index = -1
+        self.selected_file_index = -1
+        self.selected_delete_index = -1
+        
+        # Update UI based on locked/new status
+        is_locked = version_config.is_locked()
+        is_new = version_config.is_new()
+        
+        self.locked_label.setVisible(is_locked)
+        self.create_btn.setVisible(is_new)
+        
+        # Disable editing if locked
+        self.tabs.setEnabled(not is_locked)
+        if is_locked:
+            self.version_label.setText(f"Version {version_config.version} (Read-Only)")
         
         # Load version icon
         if version_config.icon_path and os.path.exists(version_config.icon_path):
             pixmap = QPixmap(version_config.icon_path)
             if not pixmap.isNull():
                 self.version_icon_preview.setPixmap(pixmap.scaled(60, 60, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+    
+    def on_back_clicked(self):
+        """Handle back button click."""
+        self.back_requested.emit()
+    
+    def on_create_clicked(self):
+        """Handle Create button click - save version to repo."""
+        if not self.version_config:
+            return
+        
+        # Show confirmation dialog
+        reply = QMessageBox.question(
+            self, "Create Version",
+            f"Are you sure you want to create version {self.version_config.version}?\n\n"
+            "⚠️ Warning: Once created, this version cannot be edited.\n"
+            "Make sure all mods and files are correctly configured.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.create_requested.emit(self.version_config)
     
     def refresh_mods_grid(self):
         # Clear grid
@@ -1840,7 +2026,7 @@ class VersionEditorPage(QWidget):
         
         # Add mod cards
         for i, mod in enumerate(self.version_config.mods):
-            card = ItemCard(mod.display_name or mod.number_id, mod.icon_path)
+            card = ItemCard(mod.display_name or mod.id, mod.icon_path)
             card.clicked.connect(lambda idx=i: self.select_mod(idx))
             card.double_clicked.connect(lambda idx=i: self.select_mod(idx))
             self.mods_grid.addWidget(card, row, col)
@@ -1897,6 +2083,7 @@ class VersionEditorPage(QWidget):
             return
         self.selected_mod_index = index
         self.mod_editor.load_mod(self.version_config.mods[index])
+        self.mod_editor.setVisible(True)  # Show editor panel
         
         # Update selection visuals
         for i in range(self.mods_grid.count()):
@@ -1909,6 +2096,7 @@ class VersionEditorPage(QWidget):
             return
         self.selected_file_index = index
         self.file_editor.load_file(self.version_config.files[index])
+        self.file_editor.setVisible(True)  # Show editor panel
     
     def on_delete_selected(self, item):
         index = self.deletes_list.row(item)
@@ -1916,12 +2104,13 @@ class VersionEditorPage(QWidget):
             return
         self.selected_delete_index = index
         self.delete_editor.load_delete(self.version_config.deletes[index])
+        self.delete_editor.setVisible(True)  # Show editor panel
     
     def add_mod(self):
         if not self.version_config:
             return
         
-        existing_ids = [m.number_id for m in self.version_config.mods]
+        existing_ids = [m.id for m in self.version_config.mods]
         dialog = AddModDialog(existing_ids, self)
         if dialog.exec():
             mod = dialog.get_mod()
@@ -1929,6 +2118,7 @@ class VersionEditorPage(QWidget):
             self.version_config.modified = True
             self.refresh_mods_grid()
             self.select_mod(len(self.version_config.mods) - 1)
+            self.mod_editor.setVisible(True)
             self.version_modified.emit()
     
     def add_file(self):
@@ -1940,6 +2130,7 @@ class VersionEditorPage(QWidget):
         self.version_config.modified = True
         self.refresh_files_grid()
         self.select_file(len(self.version_config.files) - 1)
+        self.file_editor.setVisible(True)
         self.version_modified.emit()
     
     def add_delete(self):
@@ -1952,6 +2143,7 @@ class VersionEditorPage(QWidget):
         self.refresh_deletes_list()
         self.deletes_list.setCurrentRow(len(self.version_config.deletes) - 1)
         self.delete_editor.load_delete(delete_entry)
+        self.delete_editor.setVisible(True)
         self.version_modified.emit()
     
     def on_mod_changed(self):
@@ -1966,6 +2158,82 @@ class VersionEditorPage(QWidget):
     
     def on_delete_changed(self):
         self.version_config.modified = True
+        self.refresh_deletes_list()
+        self.version_modified.emit()
+    
+    def on_mod_saved(self):
+        """Handle when mod save button is clicked - hide editor panel."""
+        self.mod_editor.setVisible(False)
+        self.selected_mod_index = -1
+    
+    def on_mod_deleted(self, mod):
+        """Handle when mod delete is confirmed."""
+        if not self.version_config or mod not in self.version_config.mods:
+            return
+        
+        # If this is a mod from a previous version, add to deletes
+        if mod._is_from_previous and mod.install_location:
+            delete_entry = DeleteEntry({
+                'path': f"{mod.install_location}/{mod.file_name or mod.id + '.jar'}",
+                'type': 'file',
+                'reason': f"Removed mod: {mod.display_name or mod.id}",
+                '_is_unremovable': True
+            })
+            self.version_config.deletes.append(delete_entry)
+        
+        self.version_config.mods.remove(mod)
+        self.version_config.modified = True
+        self.mod_editor.clear()
+        self.mod_editor.setVisible(False)
+        self.selected_mod_index = -1
+        self.refresh_mods_grid()
+        self.refresh_deletes_list()
+        self.version_modified.emit()
+    
+    def on_file_saved(self):
+        """Handle when file save button is clicked - hide editor panel."""
+        self.file_editor.setVisible(False)
+        self.selected_file_index = -1
+    
+    def on_file_deleted(self, file_entry):
+        """Handle when file delete is confirmed."""
+        if not self.version_config or file_entry not in self.version_config.files:
+            return
+        
+        # If this is a file from a previous version, add to deletes
+        if file_entry._is_from_previous and file_entry.download_path:
+            delete_entry = DeleteEntry({
+                'path': f"{file_entry.download_path}{file_entry.file_name or file_entry.display_name}",
+                'type': 'file',
+                'reason': f"Removed file: {file_entry.display_name or file_entry.file_name}",
+                '_is_unremovable': True
+            })
+            self.version_config.deletes.append(delete_entry)
+        
+        self.version_config.files.remove(file_entry)
+        self.version_config.modified = True
+        self.file_editor.clear()
+        self.file_editor.setVisible(False)
+        self.selected_file_index = -1
+        self.refresh_files_grid()
+        self.refresh_deletes_list()
+        self.version_modified.emit()
+    
+    def on_delete_entry_saved(self):
+        """Handle when delete save button is clicked - hide editor panel."""
+        self.delete_editor.setVisible(False)
+        self.selected_delete_index = -1
+    
+    def on_delete_entry_deleted(self, delete_entry):
+        """Handle when delete entry delete is confirmed."""
+        if not self.version_config or delete_entry not in self.version_config.deletes:
+            return
+        
+        self.version_config.deletes.remove(delete_entry)
+        self.version_config.modified = True
+        self.delete_editor.clear()
+        self.delete_editor.setVisible(False)
+        self.selected_delete_index = -1
         self.refresh_deletes_list()
         self.version_modified.emit()
     
@@ -2022,7 +2290,7 @@ class VersionSelectionPage(QWidget):
         
         self.grid_widget = QWidget()
         self.grid = QGridLayout(self.grid_widget)
-        self.grid.setSpacing(16)
+        self.grid.setSpacing(8)  # Reduced spacing between version cards
         self.scroll.setWidget(self.grid_widget)
         
         layout.addWidget(self.scroll)
@@ -2089,7 +2357,44 @@ class VersionSelectionPage(QWidget):
         dialog = AddVersionDialog(existing, self)
         if dialog.exec():
             version = dialog.get_version()
-            self.versions[version] = VersionConfig(version)
+            new_config = VersionConfig(version)
+            
+            # Copy mods and files from the most recent version (if any)
+            if self.versions:
+                # Find the most recent version
+                def version_sort_key(v: str):
+                    """Sort key for semantic versions."""
+                    parts = v.split('.') 
+                    nums = []
+                    for x in parts:
+                        try:
+                            nums.append(int(x))
+                        except ValueError:
+                            nums.append(0)
+                    return nums
+                
+                sorted_versions = sorted(self.versions.keys(), key=version_sort_key, reverse=True)
+                if sorted_versions:
+                    latest_version = sorted_versions[0]
+                    latest_config = self.versions[latest_version]
+                    
+                    # Copy mods, marking them as from previous version
+                    for mod in latest_config.mods:
+                        new_mod_data = mod.to_dict()
+                        new_mod_data['_is_from_previous'] = True
+                        new_config.mods.append(ModEntry(new_mod_data))
+                    
+                    # Copy files, marking them as from previous version
+                    for file in latest_config.files:
+                        new_file_data = file.to_dict()
+                        new_file_data['_is_from_previous'] = True
+                        new_config.files.append(FileEntry(new_file_data))
+                    
+                    # Clear deletes for new version
+                    new_config.deletes = []
+            
+            new_config._is_new = True  # Mark as new version
+            self.versions[version] = new_config
             self.refresh_grid()
             self.version_selected.emit(version)
 
@@ -2098,6 +2403,7 @@ class VersionSelectionPage(QWidget):
 class SettingsPage(QWidget):
     """Settings page for app configuration."""
     settings_changed = pyqtSignal()
+    reconfigure_requested = pyqtSignal()  # Signal for reconfigure button
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2178,7 +2484,7 @@ class SettingsPage(QWidget):
         self.settings_changed.emit()
     
     def reconfigure_github(self):
-        self.settings_changed.emit()
+        self.reconfigure_requested.emit()  # Emit specific signal for reconfigure
 
 
 
@@ -2213,10 +2519,10 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(0)
         
         # Sidebar
-        sidebar = QWidget()
-        sidebar.setFixedWidth(220)
-        sidebar.setObjectName("sidebar")
-        sidebar_layout = QVBoxLayout(sidebar)
+        self.sidebar = QWidget()
+        self.sidebar.setFixedWidth(220)
+        self.sidebar.setObjectName("sidebar")
+        sidebar_layout = QVBoxLayout(self.sidebar)
         sidebar_layout.setContentsMargins(12, 16, 12, 16)
         sidebar_layout.setSpacing(8)
         
@@ -2246,7 +2552,7 @@ class MainWindow(QMainWindow):
         save_btn.clicked.connect(self.save_all)
         sidebar_layout.addWidget(save_btn)
         
-        main_layout.addWidget(sidebar)
+        main_layout.addWidget(self.sidebar)
         
         # Content stack
         self.stack = QStackedWidget()
@@ -2260,11 +2566,13 @@ class MainWindow(QMainWindow):
         self.version_editor_page = VersionEditorPage()
         self.version_editor_page.version_modified.connect(self.on_version_modified)
         self.version_editor_page.back_requested.connect(self.show_version_selection)
+        self.version_editor_page.create_requested.connect(self.on_create_version)
         self.stack.addWidget(self.version_editor_page)
         
         # Settings Page
         self.settings_page = SettingsPage()
         self.settings_page.settings_changed.connect(self.on_settings_changed)
+        self.settings_page.reconfigure_requested.connect(self.reconfigure_github)
         self.stack.addWidget(self.settings_page)
         
         main_layout.addWidget(self.stack)
@@ -2479,17 +2787,115 @@ class MainWindow(QMainWindow):
         """Show the version selection page."""
         self.stack.setCurrentWidget(self.version_selection_page)
         self.nav_list.setCurrentRow(0)
+        self.sidebar.setVisible(True)  # Show sidebar when returning to version selection
     
     def open_version(self, version: str):
         """Open a version for editing."""
         if version in self.versions:
             self.version_editor_page.load_version(self.versions[version])
             self.stack.setCurrentWidget(self.version_editor_page)
+            self.sidebar.setVisible(False)  # Hide sidebar when editing version
     
     def on_version_modified(self):
         """Handle version modification."""
         # Update status or indicator
         pass
+    
+    def on_create_version(self, version_config: VersionConfig):
+        """Handle Create Version button - save version to repo and lock it."""
+        if not self.github_api:
+            QMessageBox.warning(self, "Not Connected", "Please configure GitHub connection first.")
+            return
+        
+        version = version_config.version
+        config_path = self.editor_config.get('github', {}).get('config_path', '')
+        base_path = f"{config_path}/{version}" if config_path else version
+        
+        # Prepare files
+        changes = []
+        
+        # Prepare mods.json
+        mods_content = json.dumps([m.to_dict() for m in version_config.mods], indent=2)
+        changes.append((f"{base_path}/mods.json", mods_content, None))
+        
+        # Prepare files.json
+        files_content = json.dumps({'files': [f.to_dict() for f in version_config.files]}, indent=2)
+        changes.append((f"{base_path}/files.json", files_content, None))
+        
+        # Prepare deletes.json - format with version as key
+        deletes_obj = {
+            'safetyMode': True,
+            'deletions': [
+                {
+                    'version': version,
+                    'paths': [d.to_dict() for d in version_config.deletes]
+                }
+            ] if version_config.deletes else []
+        }
+        deletes_content = json.dumps(deletes_obj, indent=2)
+        changes.append((f"{base_path}/deletes.json", deletes_content, None))
+        
+        # Show progress
+        progress = QProgressDialog(f"Creating version {version}...", "Cancel", 0, len(changes), self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        
+        errors = []
+        
+        for i, (path, content, sha) in enumerate(changes):
+            progress.setValue(i)
+            QApplication.processEvents()
+            
+            if progress.wasCanceled():
+                break
+            
+            try:
+                self.github_api.create_or_update_file(
+                    path=path,
+                    content=content,
+                    sha=sha,
+                    message=f"Create version {version}"
+                )
+            except Exception as e:
+                errors.append(f"{path}: {str(e)}")
+        
+        progress.setValue(len(changes))
+        
+        if errors:
+            QMessageBox.warning(self, "Errors", "Some files failed to save:\n\n" + "\n".join(errors))
+        else:
+            # Lock the version so it can't be edited
+            version_config.lock()
+            version_config.modified = False
+            
+            # Save version locally
+            self.save_version_locally(version_config)
+            
+            QMessageBox.information(self, "Success", f"Version {version} created successfully!\n\nThis version is now locked and cannot be edited.")
+            
+            # Refresh the editor to show locked state
+            self.version_editor_page.load_version(version_config)
+    
+    def save_version_locally(self, version_config: VersionConfig):
+        """Save version config locally in versions folder."""
+        try:
+            versions_dir = Path("versions")
+            versions_dir.mkdir(exist_ok=True)
+            
+            version_file = versions_dir / f"{version_config.version}.json"
+            
+            data = {
+                'version': version_config.version,
+                'mods': [m.to_dict() for m in version_config.mods],
+                'files': [f.to_dict() for f in version_config.files],
+                'deletes': [d.to_dict() for d in version_config.deletes],
+                'locked': version_config.is_locked()
+            }
+            
+            with open(version_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"Failed to save version locally: {e}")
     
     def on_settings_changed(self):
         """Handle settings change."""
@@ -2497,6 +2903,20 @@ class MainWindow(QMainWindow):
         if new_theme != self.current_theme:
             self.apply_theme(new_theme)
             self.save_editor_config()
+    
+    def reconfigure_github(self):
+        """Open the setup dialog to reconfigure GitHub connection."""
+        existing_config = self.editor_config.get('github', {})
+        dialog = SetupDialog(self, existing_config)
+        if dialog.exec():
+            new_config = dialog.get_config()
+            self.editor_config['github'] = new_config
+            self.save_editor_config()
+            self.github_api = GitHubAPI(new_config.get('repo_url', ''), new_config.get('token', ''))
+            self.github_api.branch = new_config.get('branch', 'main')
+            self.update_connection_status()
+            self.settings_page.set_repo_url(new_config.get('repo_url', ''))
+            self.fetch_versions()
     
     def refresh_from_github(self):
         """Refresh all data from GitHub."""
@@ -2593,12 +3013,12 @@ class MainWindow(QMainWindow):
             # Check mods
             ids_seen = set()
             for i, mod in enumerate(config.mods):
-                if not mod.number_id:
+                if not mod.id:
                     errors.append(f"[{version}] Mod {i+1}: Missing ID")
-                elif mod.number_id in ids_seen:
-                    errors.append(f"[{version}] Mod {i+1}: Duplicate ID '{mod.number_id}'")
+                elif mod.id in ids_seen:
+                    errors.append(f"[{version}] Mod {i+1}: Duplicate ID '{mod.id}'")
                 else:
-                    ids_seen.add(mod.number_id)
+                    ids_seen.add(mod.id)
                 
                 if not mod.display_name:
                     errors.append(f"[{version}] Mod {i+1}: Missing display name")

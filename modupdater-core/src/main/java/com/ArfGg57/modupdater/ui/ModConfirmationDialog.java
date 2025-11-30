@@ -323,7 +323,8 @@ public class ModConfirmationDialog {
                         String jsonFileName = mod.optString("file_name", "").trim();
                         JSONObject source = mod.optJSONObject("source");
                         String installLocation = mod.optString("installLocation", "mods");
-                        String numberId = mod.optString("numberId", "").trim();
+                        // Support both "id" (new) and "numberId" (legacy) for backward compatibility
+                        String modId = mod.optString("id", mod.optString("numberId", "")).trim();
 
                         // resolve filenameFromSource and downloadUrl from the declared source.
                         String filenameFromSource = null;
@@ -417,7 +418,7 @@ public class ModConfirmationDialog {
                             finalName = filenameResolver.resolve(displayName, downloadUrl, null, FilenameResolver.ArtifactType.MOD);
                         } else {
                             // Last resort fallback
-                            finalName = "mod_" + numberId + ".jar";
+                            finalName = "mod_" + modId + ".jar";
                         }
 
                         // build a key for dedupe: prefer displayName + finalName
@@ -435,9 +436,9 @@ public class ModConfirmationDialog {
                         // Check if mod is already correctly installed by hash
                         if (renamedFileResolver != null && modMetadata != null && !expectedHash.isEmpty()) {
                             // Use metadata to check if mod is installed
-                            if (modMetadata.isModInstalledAndMatches(numberId, source, expectedHash)) {
+                            if (modMetadata.isModInstalledAndMatches(modId, source, expectedHash)) {
                                 // Mod is in metadata with matching hash
-                                String installedFileName = modMetadata.findInstalledFile(numberId);
+                                String installedFileName = modMetadata.findInstalledFile(modId);
                                 if (installedFileName != null) {
                                     java.io.File installedFile = new java.io.File(targetDir, installedFileName);
                                     if (installedFile.exists()) {
@@ -450,7 +451,7 @@ public class ModConfirmationDialog {
                                             if (renamed) {
                                                 System.out.println("[ModConfirmationDialog] Successfully renamed mod back to: " + finalName);
                                                 // Update metadata with new filename
-                                                modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                                modMetadata.recordMod(modId, finalName, expectedHash, source);
                                                 modMetadata.save();
                                             } else {
                                                 System.out.println("[ModConfirmationDialog] Failed to rename (file may be locked); keeping existing file with correct hash");
@@ -469,7 +470,7 @@ public class ModConfirmationDialog {
                                             boolean renamed = renamedFile.renameTo(targetFile);
                                             if (renamed) {
                                                 System.out.println("[ModConfirmationDialog] Successfully renamed mod to: " + finalName);
-                                                modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                                modMetadata.recordMod(modId, finalName, expectedHash, source);
                                                 modMetadata.save();
                                             } else {
                                                 System.out.println("[ModConfirmationDialog] Failed to rename; keeping existing file with correct hash");
@@ -495,7 +496,7 @@ public class ModConfirmationDialog {
                                         boolean renamed = foundFile.renameTo(targetFile);
                                         if (renamed) {
                                             System.out.println("[ModConfirmationDialog] Successfully renamed mod to: " + finalName);
-                                            modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                            modMetadata.recordMod(modId, finalName, expectedHash, source);
                                             modMetadata.save();
                                         } else {
                                             System.out.println("[ModConfirmationDialog] Failed to rename; keeping existing file with correct hash");
@@ -523,13 +524,13 @@ public class ModConfirmationDialog {
                             }
                         } else {
                             // Fallback: no hash available or metadata not loaded - use legacy filename checking
-                            List<java.io.File> existing = FileUtils.findFilesForNumberId(targetDir, numberId);
+                            List<java.io.File> existing = FileUtils.findFilesForNumberId(targetDir, modId);
                             if (existing.isEmpty()) {
                                 // nothing found by numberId; check for file with finalName
                                 if (!targetFile.exists()) needs = true;
                             } else {
                                 // Without hash: compare filename suffix (the part after numberId-)
-                                boolean matches = FileUtils.fileNameSuffixMatches(existing.get(0), numberId, finalName);
+                                boolean matches = FileUtils.fileNameSuffixMatches(existing.get(0), modId, finalName);
                                 if (!matches) {
                                     needs = true;
                                     System.out.println("[ModConfirmationDialog] Mod filename mismatch; will propose re-download: " + existing.get(0).getPath());
@@ -539,7 +540,7 @@ public class ModConfirmationDialog {
 
                         if (needs) {
                             // create ModEntry so existing UpdaterCore code remains compatible (if used)
-                            ModEntry me = new ModEntry(displayName, downloadUrl, finalName, srcDisplay, mod.optString("numberId", ""), installLocation);
+                            ModEntry me = new ModEntry(displayName, downloadUrl, finalName, srcDisplay, mod.optString("id", mod.optString("numberId", "")), installLocation);
                             modsToDownload.add(me);
                             addKeys.add(modKey);
                         }
@@ -563,7 +564,7 @@ public class ModConfirmationDialog {
                     Set<String> installLocations = new HashSet<>();
                     for (int i = 0; i < modsArr.length(); i++) {
                         JSONObject mod = modsArr.getJSONObject(i);
-                        String numberId = mod.optString("numberId", "").trim();
+                        String numberId = mod.optString("id", mod.optString("numberId", "")).trim();
                         String installLocation = mod.optString("installLocation", "mods");
                         if (!numberId.isEmpty()) {
                             validNumberIds.add(numberId);
