@@ -2299,7 +2299,44 @@ class VersionSelectionPage(QWidget):
         dialog = AddVersionDialog(existing, self)
         if dialog.exec():
             version = dialog.get_version()
-            self.versions[version] = VersionConfig(version)
+            new_config = VersionConfig(version)
+            
+            # Copy mods and files from the most recent version (if any)
+            if self.versions:
+                # Find the most recent version
+                def version_sort_key(v: str):
+                    """Sort key for semantic versions."""
+                    parts = v.split('.') 
+                    nums = []
+                    for x in parts:
+                        try:
+                            nums.append(int(x))
+                        except ValueError:
+                            nums.append(0)
+                    return nums
+                
+                sorted_versions = sorted(self.versions.keys(), key=version_sort_key, reverse=True)
+                if sorted_versions:
+                    latest_version = sorted_versions[0]
+                    latest_config = self.versions[latest_version]
+                    
+                    # Copy mods, marking them as from previous version
+                    for mod in latest_config.mods:
+                        new_mod_data = mod.to_dict()
+                        new_mod_data['_is_from_previous'] = True
+                        new_config.mods.append(ModEntry(new_mod_data))
+                    
+                    # Copy files, marking them as from previous version
+                    for file in latest_config.files:
+                        new_file_data = file.to_dict()
+                        new_file_data['_is_from_previous'] = True
+                        new_config.files.append(FileEntry(new_file_data))
+                    
+                    # Clear deletes for new version
+                    new_config.deletes = []
+            
+            new_config._is_new = True  # Mark as new version
+            self.versions[version] = new_config
             self.refresh_grid()
             self.version_selected.emit(version)
 

@@ -417,10 +417,11 @@ public class UpdaterCore {
             gui.show("Expected mods from mods.json: " + modHandleMap.size());
 
             // Step 1: Clean up mods folder - remove ONLY ModUpdater-managed files that are outdated
+            // This handles the case where a mod id is in the local manifest but not in the remote config
             // CHANGED: Only delete files that are in metadata AND not in current mods.json
             // This prevents deletion of user-added mods or mods from other sources
             gui.show("--- Cleanup Phase: Scanning for outdated mods ---");
-            Set<String> validNumberIds = modHandleMap.keySet();
+            Set<String> validIds = modHandleMap.keySet();
             Set<String> installLocations = new HashSet<>();
             for (JSONObject m : modHandleMap.values()) {
                 installLocations.add(m.optString("installLocation", "mods"));
@@ -440,15 +441,15 @@ public class UpdaterCore {
                     if (file.getName().endsWith(".tmp")) continue; // skip temp files
                     
                     // Use fileResolver to determine ownership
-                    String belongsToNumberId = fileResolver.getOwnerNumberId(file);
-                    boolean isTrackedByModUpdater = (belongsToNumberId != null);
-                    boolean isStillValid = isTrackedByModUpdater && validNumberIds.contains(belongsToNumberId);
+                    String belongsToModId = fileResolver.getOwnerNumberId(file);
+                    boolean isTrackedByModUpdater = (belongsToModId != null);
+                    boolean isStillValid = isTrackedByModUpdater && validIds.contains(belongsToModId);
                     
                     // ONLY delete if:
-                    // 1. File is tracked by ModUpdater (in metadata or has numberId prefix from metadata)
-                    // 2. AND the mod is no longer in mods.json OR will be replaced by a different version
+                    // 1. File is tracked by ModUpdater (in metadata)
+                    // 2. AND the mod id is no longer in mods.json (removed from remote config)
                     if (isTrackedByModUpdater && !isStillValid) {
-                        gui.show("Removing outdated ModUpdater-managed mod: " + file.getPath());
+                        gui.show("Removing outdated ModUpdater-managed mod (no longer in remote config): " + file.getPath());
                         FileUtils.backupPathTo(file, backupRoot);
                         
                         // Try to delete the file - track it if deletion fails
@@ -459,22 +460,22 @@ public class UpdaterCore {
                             // Create a DELETE operation (not an update, just removal)
                             PendingUpdateOperation deleteOp = PendingUpdateOperation.createDelete(
                                 file.getAbsolutePath(),
-                                "Remove outdated mod: " + file.getName() + " (numberId=" + belongsToNumberId + ")"
+                                "Remove outdated mod: " + file.getName() + " (id=" + belongsToModId + ")"
                             );
                             pendingUpdateOps.addOperation(deleteOp);
                         }
                         
-                        if (belongsToNumberId != null) {
-                            modMetadata.removeMod(belongsToNumberId);
+                        if (belongsToModId != null) {
+                            modMetadata.removeMod(belongsToModId);
                         }
                     } else if (!isTrackedByModUpdater) {
                         // File is not tracked by ModUpdater - leave it alone
                         gui.show("Skipping unmanaged file (not installed by ModUpdater): " + file.getName());
                     } else if (isStillValid) {
                         // File is tracked and still valid - check if it was renamed
-                        ModMetadata.ModEntry entry = modMetadata.getMod(belongsToNumberId);
+                        ModMetadata.ModEntry entry = modMetadata.getMod(belongsToModId);
                         if (entry != null && entry.fileName != null && !entry.fileName.equals(file.getName())) {
-                            gui.show("Detected renamed mod: " + entry.fileName + " -> " + file.getName() + " (numberId=" + belongsToNumberId + ")");
+                            gui.show("Detected renamed mod: " + entry.fileName + " -> " + file.getName() + " (id=" + belongsToModId + ")");
                             entry.fileName = file.getName();
                         }
                     }
