@@ -73,6 +73,7 @@ APP_VERSION = "2.0.0"
 CONFIG_FILE = "editor_config.json"
 CACHE_DIR = ".cache"
 USER_AGENT = "ModUpdater-ConfigEditor"
+DEFAULT_VERSION = "1.0.0"  # Default version for new mods/files
 
 # CurseForge API configuration
 # Using the curse.tools proxy for CurseForge API (doesn't require API key)
@@ -628,7 +629,7 @@ class ModEntry:
         self.hash = data.get('hash', '')
         self.install_location = data.get('installLocation', 'mods')
         self.source = data.get('source', {'type': 'url', 'url': ''})
-        self.since = data.get('since', '1.0.0')  # Version this mod was introduced
+        self.since = data.get('since', DEFAULT_VERSION)  # Version this mod was introduced
         self.icon_path = data.get('icon_path', '')
         self._is_new = not bool(self.id)
         self._is_from_previous = data.get('_is_from_previous', False)
@@ -666,7 +667,7 @@ class FileEntry:
         self.hash = data.get('hash', '')
         self.overwrite = data.get('overwrite', True)
         self.extract = data.get('extract', False)
-        self.since = data.get('since', '1.0.0')  # Version this file was introduced
+        self.since = data.get('since', DEFAULT_VERSION)  # Version this file was introduced
         self.icon_path = data.get('icon_path', '')
         self._is_from_previous = data.get('_is_from_previous', False)
     
@@ -693,7 +694,7 @@ class DeleteEntry:
         self.path = data.get('path', '')
         self.type = data.get('type', 'file')
         self.reason = data.get('reason', '')
-        self.version = data.get('version', '1.0.0')  # Version this deletion applies to
+        self.version = data.get('version', DEFAULT_VERSION)  # Version this deletion applies to
         self.icon_path = data.get('icon_path', '')
         self._is_unremovable = data.get('_is_unremovable', False)  # For auto-added deletes from removed mods/files
     
@@ -1596,16 +1597,22 @@ class ModBrowserDialog(QDialog):
         mod.since = self.current_version
         
         if self.selected_mod['source'] == 'curseforge':
+            try:
+                project_id = int(self.selected_mod['id'])
+                file_id = int(self.selected_version['file_id'])
+            except (ValueError, TypeError):
+                project_id = 0
+                file_id = 0
             mod.source = {
                 'type': 'curseforge',
-                'projectId': int(self.selected_mod['id']),
-                'fileId': int(self.selected_version['file_id'])
+                'projectId': project_id,
+                'fileId': file_id
             }
         else:
             mod.source = {
                 'type': 'modrinth',
                 'projectSlug': self.selected_mod['slug'],
-                'versionId': self.selected_version['file_id']
+                'versionId': str(self.selected_version['file_id'])
             }
         
         return mod
@@ -3467,6 +3474,21 @@ class MainWindow(QMainWindow):
                 "The application will close.")
             QTimer.singleShot(100, self.close)
     
+    def _update_connection_status(self, status: str):
+        """Update the connection status indicator."""
+        if status == "connected":
+            self.status_label.setText("● Connected")
+            self.status_label.setStyleSheet("color: #a6e3a1;")
+        elif status == "failed":
+            self.status_label.setText("● Connection failed")
+            self.status_label.setStyleSheet("color: #f38ba8;")
+        elif status == "not_configured":
+            self.status_label.setText("● Not configured")
+            self.status_label.setStyleSheet("color: #f38ba8;")
+        else:
+            self.status_label.setText("● Error")
+            self.status_label.setStyleSheet("color: #f38ba8;")
+    
     def connect_to_github(self):
         """Connect to GitHub and fetch configs."""
         github_config = self.editor_config.get('github', {})
@@ -3475,8 +3497,7 @@ class MainWindow(QMainWindow):
         branch = github_config.get('branch', 'main')
         
         if not repo_url:
-            self.status_label.setText("● Not configured")
-            self.status_label.setStyleSheet("color: #f38ba8;")
+            self._update_connection_status("not_configured")
             return
         
         try:
@@ -3484,16 +3505,13 @@ class MainWindow(QMainWindow):
             self.github_api.branch = branch
             
             if self.github_api.test_connection():
-                self.status_label.setText("● Connected")
-                self.status_label.setStyleSheet("color: #a6e3a1;")
+                self._update_connection_status("connected")
                 self.settings_page.set_repo_url(repo_url)
                 self.fetch_configs()
             else:
-                self.status_label.setText("● Connection failed")
-                self.status_label.setStyleSheet("color: #f38ba8;")
+                self._update_connection_status("failed")
         except Exception as e:
-            self.status_label.setText("● Error")
-            self.status_label.setStyleSheet("color: #f38ba8;")
+            self._update_connection_status("error")
             QMessageBox.warning(self, "Connection Error", f"Failed to connect to GitHub:\n{str(e)}")
     
     def fetch_configs(self):
@@ -3633,14 +3651,20 @@ class MainWindow(QMainWindow):
     def _compare_versions(self, v1: str, v2: str) -> int:
         """Compare two version strings. Returns positive if v1 > v2, negative if v1 < v2, 0 if equal."""
         def parse(v):
-            parts = v.split('.') if v else ['0']
+            if not v or not v.strip():
+                return [0]
+            parts = v.strip().split('.')
             nums = []
             for x in parts:
+                x = x.strip()
+                if not x:
+                    nums.append(0)
+                    continue
                 try:
                     nums.append(int(x))
                 except ValueError:
                     nums.append(0)
-            return nums
+            return nums if nums else [0]
         
         p1, p2 = parse(v1), parse(v2)
         # Pad with zeros
@@ -3867,11 +3891,9 @@ class MainWindow(QMainWindow):
             self.github_api.branch = new_config.get('branch', 'main')
             # Update connection status
             if self.github_api.test_connection():
-                self.status_label.setText("● Connected")
-                self.status_label.setStyleSheet("color: #a6e3a1;")
+                self._update_connection_status("connected")
             else:
-                self.status_label.setText("● Connection failed")
-                self.status_label.setStyleSheet("color: #f38ba8;")
+                self._update_connection_status("failed")
             self.settings_page.set_repo_url(new_config.get('repo_url', ''))
             self.fetch_configs()
     
