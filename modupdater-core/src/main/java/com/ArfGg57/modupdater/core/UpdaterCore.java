@@ -207,7 +207,8 @@ public class UpdaterCore {
             // Build map of all mods that should be installed
             Map<String, JSONObject> modHandleMap = new LinkedHashMap<>();
             for (JSONObject m : modsToVerify) {
-                String key = m.optString("numberId", "");
+                // Support both "id" (new) and "numberId" (legacy) for backward compatibility
+                String key = m.optString("id", m.optString("numberId", ""));
                 if (!key.isEmpty()) {
                     modHandleMap.put(key, m);
                 }
@@ -482,14 +483,15 @@ public class UpdaterCore {
 
             // Step 2: Process each mod in mods.json
             for (JSONObject mod : modHandleMap.values()) {
-                String numberId = mod.optString("numberId", "").trim();
+                // Support both "id" (new) and "numberId" (legacy) for backward compatibility
+                String modId = mod.optString("id", mod.optString("numberId", "")).trim();
                 String installLocation = mod.optString("installLocation", "mods");
                 String displayName = mod.optString("display_name", "").trim();
                 String fileName = mod.optString("file_name", "").trim();
                 String expectedHash = mod.optString("hash", "").trim();
                 JSONObject source = mod.optJSONObject("source");
                 if (source == null) {
-                    gui.show("Skipping mod with no source: numberId=" + numberId);
+                    gui.show("Skipping mod with no source: id=" + modId);
                     completed++;
                     updateProgress(completed, totalTasks);
                     continue;
@@ -511,7 +513,7 @@ public class UpdaterCore {
                         if (data == null) data = fileData;
                         downloadUrl = data.getString("downloadUrl");
                         filenameFromSource = data.getString("fileName");
-                    } else gui.show("CurseForge entry missing projectId/fileId for numberId " + numberId);
+                    } else gui.show("CurseForge entry missing projectId/fileId for id " + modId);
                 } else if ("modrinth".equals(type)) {
                     String versionId = source.optString("versionId", "");
                     if (!versionId.isEmpty()) {
@@ -523,11 +525,11 @@ public class UpdaterCore {
                             downloadUrl = fileObj.getString("url");
                             filenameFromSource = fileObj.getString("filename");
                         }
-                    } else gui.show("Modrinth entry missing versionId for numberId " + numberId);
+                    } else gui.show("Modrinth entry missing versionId for id " + modId);
                 }
 
                 if (filenameFromSource == null) {
-                    gui.show("Could not determine filename for mod numberId " + numberId + "; skipping.");
+                    gui.show("Could not determine filename for mod id " + modId + "; skipping.");
                     completed++;
                     updateProgress(completed, totalTasks);
                     continue;
@@ -547,7 +549,7 @@ public class UpdaterCore {
                     finalName = filenameResolver.resolve(displayName, downloadUrl, null, FilenameResolver.ArtifactType.MOD);
                 } else {
                     // Last resort fallback
-                    finalName = "mod_" + numberId + ".jar";
+                    finalName = "mod_" + modId + ".jar";
                 }
                 
                 File targetDir = new File(installLocation);
@@ -559,8 +561,8 @@ public class UpdaterCore {
                 File existingFile = null;
                 
                 // Check metadata first
-                if (modMetadata.isModInstalledAndMatches(numberId, source, expectedHash)) {
-                    String installedFileName = modMetadata.findInstalledFile(numberId);
+                if (modMetadata.isModInstalledAndMatches(modId, source, expectedHash)) {
+                    String installedFileName = modMetadata.findInstalledFile(modId);
                     if (installedFileName != null) {
                         existingFile = new File(targetDir, installedFileName);
                         if (existingFile.exists()) {
@@ -579,7 +581,7 @@ public class UpdaterCore {
                                             try {
                                                 FileUtils.atomicMoveWithRetries(existingFile, target, 3, 100);
                                                 gui.show("Successfully renamed mod to: " + target.getPath());
-                                                modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                                modMetadata.recordMod(modId, finalName, expectedHash, source);
                                                 existingFile = target;
                                             } catch (IOException e) {
                                                 gui.show("RENAME FAILED: " + e.getMessage());
@@ -587,7 +589,7 @@ public class UpdaterCore {
                                                 pendingDeletes.add(existingFile);
                                                 gui.show("Continuing with existing file (valid): " + existingFile.getPath());
                                                 // Update metadata with current filename so we know it's the same file
-                                                modMetadata.recordMod(numberId, existingFile.getName(), expectedHash, source);
+                                                modMetadata.recordMod(modId, existingFile.getName(), expectedHash, source);
                                                 modMetadata.save();
                                             }
                                     }
@@ -612,7 +614,7 @@ public class UpdaterCore {
                                     gui.show("Found renamed mod by hash: " + renamedFile.getName());
                                     existingFile = renamedFile;
                                     // Update metadata with new filename
-                                    modMetadata.recordMod(numberId, renamedFile.getName(), expectedHash, source);
+                                    modMetadata.recordMod(modId, renamedFile.getName(), expectedHash, source);
                                     // Rename to expected name if different
                                     if (!renamedFile.getName().equals(finalName)) {
                                         gui.show("Renaming mod from: " + renamedFile.getName() + " to: " + finalName);
@@ -622,7 +624,7 @@ public class UpdaterCore {
                                         try {
                                             FileUtils.atomicMoveWithRetries(renamedFile, target, 3, 100);
                                             gui.show("Successfully renamed mod to: " + target.getPath());
-                                            modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                            modMetadata.recordMod(modId, finalName, expectedHash, source);
                                         } catch (IOException e) {
                                             gui.show("RENAME FAILED: " + e.getMessage());
                                             gui.show("File may be locked - tracking for deletion after restart");
@@ -646,8 +648,8 @@ public class UpdaterCore {
                     }
                 } else {
                     // Not in metadata or doesn't match
-                    // First check by numberId prefix (backwards compatibility with old installations)
-                    List<File> existing = FileUtils.findFilesForNumberId(targetDir, numberId);
+                    // First check by id prefix (backwards compatibility with old installations)
+                    List<File> existing = FileUtils.findFilesForNumberId(targetDir, modId);
                     if (!existing.isEmpty()) {
                         existingFile = existing.get(0);
                         if (!expectedHash.isEmpty()) {
@@ -656,7 +658,7 @@ public class UpdaterCore {
                                 if (FileUtils.hashEquals(expectedHash, actual)) {
                                     gui.show("Mod OK (via prefix): " + existingFile.getPath());
                                     // Update metadata
-                                    modMetadata.recordMod(numberId, existingFile.getName(), expectedHash, source);
+                                    modMetadata.recordMod(modId, existingFile.getName(), expectedHash, source);
                                     // Rename if needed
                                     if (!existingFile.getName().equals(finalName)) {
                                         gui.show("Renaming mod from: " + existingFile.getName() + " to: " + finalName);
@@ -666,7 +668,7 @@ public class UpdaterCore {
                                         try {
                                             FileUtils.atomicMoveWithRetries(existingFile, target, 3, 100);
                                             gui.show("Successfully renamed mod to: " + target.getPath());
-                                            modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                            modMetadata.recordMod(modId, finalName, expectedHash, source);
                                         } catch (IOException e) {
                                             gui.show("RENAME FAILED: " + e.getMessage());
                                             gui.show("File may be locked - tracking for deletion after restart");
@@ -686,7 +688,7 @@ public class UpdaterCore {
                             }
                         } else {
                             gui.show("Mod present (no hash): " + existingFile.getPath());
-                            modMetadata.recordMod(numberId, existingFile.getName(), "", source);
+                            modMetadata.recordMod(modId, existingFile.getName(), "", source);
                         }
                     } else if (target.exists()) {
                         // File exists at target location but not tracked
@@ -695,7 +697,7 @@ public class UpdaterCore {
                                 String actual = HashUtils.sha256Hex(target);
                                 if (FileUtils.hashEquals(expectedHash, actual)) {
                                     gui.show("Mod OK at target location: " + target.getPath());
-                                    modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                    modMetadata.recordMod(modId, finalName, expectedHash, source);
                                 } else {
                                     gui.show("File at target has wrong hash (expected: " + expectedHash.substring(0, Math.min(8, expectedHash.length())) + "..., got: " + actual.substring(0, Math.min(8, actual.length())) + "...); will redownload: " + target.getPath());
                                     needDownload = true;
@@ -706,7 +708,7 @@ public class UpdaterCore {
                             }
                         } else {
                             gui.show("Mod present at target (no hash): " + target.getPath());
-                            modMetadata.recordMod(numberId, finalName, "", source);
+                            modMetadata.recordMod(modId, finalName, "", source);
                         }
                     } else if (!expectedHash.isEmpty()) {
                         // IMPROVED: Scan directory for renamed mods by hash
@@ -716,7 +718,7 @@ public class UpdaterCore {
                         // Find files that shouldn't be considered (already tracked by other mods)
                         List<String> skipFileNames = new ArrayList<>();
                         for (ModMetadata.ModEntry entry : modMetadata.getAllMods()) {
-                            if (entry.fileName != null && !entry.numberId.equals(numberId)) {
+                            if (entry.fileName != null && !entry.id.equals(modId)) {
                                 skipFileNames.add(entry.fileName);
                             }
                         }
@@ -728,7 +730,7 @@ public class UpdaterCore {
                             gui.show("Found renamed mod by hash: " + renamedFile.getName() + " -> will rename to: " + finalName);
                             existingFile = renamedFile;
                             // Record in metadata
-                            modMetadata.recordMod(numberId, renamedFile.getName(), expectedHash, source);
+                            modMetadata.recordMod(modId, renamedFile.getName(), expectedHash, source);
                             // Rename to expected name
                             gui.show("Renaming mod from: " + renamedFile.getName() + " to: " + finalName);
                             FileUtils.backupPathTo(existingFile, backupRoot);
@@ -737,7 +739,7 @@ public class UpdaterCore {
                             try {
                                 FileUtils.atomicMoveWithRetries(existingFile, target, 3, 100);
                                 gui.show("Successfully renamed mod to: " + target.getPath());
-                                modMetadata.recordMod(numberId, finalName, expectedHash, source);
+                                modMetadata.recordMod(modId, finalName, expectedHash, source);
                             } catch (IOException e) {
                                 gui.show("RENAME FAILED: " + e.getMessage());
                                 gui.show("File may be locked - tracking for deletion after restart");
@@ -764,12 +766,12 @@ public class UpdaterCore {
                     File tmp = new File(tmpRoot, safeTmpName);
 
                     if (downloadUrl == null) {
-                        gui.show("ERROR: No download URL available for mod numberId=" + numberId + " (displayName=" + displayName + "); skipping.");
+                        gui.show("ERROR: No download URL available for mod id=" + modId + " (displayName=" + displayName + "); skipping.");
                         completed++;
                         updateProgress(completed, totalTasks);
                         continue;
                     }
-                    gui.show("Starting mod download: " + (displayName.isEmpty() ? finalName : displayName) + " (numberId=" + numberId + ")");
+                    gui.show("Starting mod download: " + (displayName.isEmpty() ? finalName : displayName) + " (id=" + modId + ")");
                     gui.show("Download URL: " + downloadUrl);
                     gui.show("Downloading to temporary file: " + tmp.getName());
                     boolean ok = FileUtils.downloadWithVerification(downloadUrl, tmp, expectedHash, gui, maxRetries);
@@ -780,9 +782,9 @@ public class UpdaterCore {
                     }
                     gui.show("Download completed successfully");
 
-                    // backup & delete existing files for this numberId
-                    // FIXED: Use metadata to find old files, not just numberId prefix
-                    List<File> existingFiles = findFilesForNumberIdViaMetadata(targetDir, numberId, modMetadata);
+                    // backup & delete existing files for this modId
+                    // FIXED: Use metadata to find old files, not just id prefix
+                    List<File> existingFiles = findFilesForModIdViaMetadata(targetDir, modId, modMetadata);
                     if (!existingFiles.isEmpty()) {
                         gui.show("Removing " + existingFiles.size() + " old version(s) of this mod...");
                     }
@@ -853,7 +855,7 @@ public class UpdaterCore {
                             finalName,
                             installLocation,
                             expectedHash,
-                            "Mod update for " + (displayName.isEmpty() ? finalName : displayName) + " (numberId=" + numberId + ")"
+                            "Mod update for " + (displayName.isEmpty() ? finalName : displayName) + " (id=" + modId + ")"
                         );
                         pendingUpdateOps.addOperation(updateOp);
                         
@@ -879,7 +881,7 @@ public class UpdaterCore {
                             gui.show("Warning: Could not compute hash for installed mod: " + ex.getMessage());
                         }
                     }
-                    modMetadata.recordMod(numberId, finalName, actualHash, source);
+                    modMetadata.recordMod(modId, finalName, actualHash, source);
                     gui.show("Metadata updated for mod: " + finalName);
                 }
 
@@ -995,14 +997,14 @@ public class UpdaterCore {
     }
 
     /**
-     * Find all files in the directory that belong to a given numberId.
+     * Find all files in the directory that belong to a given mod id.
      * Uses RenamedFileResolver for centralized hash-based detection.
      * @deprecated Use fileResolver.findAllFilesForMod() directly
      */
-    private List<File> findFilesForNumberIdViaMetadata(File dir, String numberId, ModMetadata metadata) {
+    private List<File> findFilesForModIdViaMetadata(File dir, String modId, ModMetadata metadata) {
         // Create a temporary resolver for this operation
         RenamedFileResolver tempResolver = new RenamedFileResolver(metadata, null);
-        File[] files = tempResolver.findAllFilesForMod(dir, numberId);
+        File[] files = tempResolver.findAllFilesForMod(dir, modId);
         return Arrays.asList(files);
     }
     

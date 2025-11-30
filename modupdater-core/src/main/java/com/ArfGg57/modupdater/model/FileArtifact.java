@@ -21,7 +21,7 @@ public class FileArtifact {
     private final String installLocation;    // Target directory
     private final String expectedHash;       // Expected SHA-256 hash (may be empty)
     private final JSONObject source;         // Source info (for mods: CurseForge, Modrinth, URL)
-    private final String numberId;           // Unique identifier (for mods)
+    private final String id;                 // Unique identifier (for mods) - renamed from numberId
     private final boolean extract;           // Whether to extract after download (for zip files)
     
     private FileArtifact(Builder builder) {
@@ -34,7 +34,7 @@ public class FileArtifact {
         this.installLocation = builder.installLocation;
         this.expectedHash = builder.expectedHash;
         this.source = builder.source;
-        this.numberId = builder.numberId;
+        this.id = builder.id;
         this.extract = builder.extract;
     }
     
@@ -74,8 +74,16 @@ public class FileArtifact {
         return source;
     }
     
+    public String getId() {
+        return id;
+    }
+    
+    /**
+     * @deprecated Use getId() instead
+     */
+    @Deprecated
     public String getNumberId() {
-        return numberId;
+        return id;
     }
     
     public boolean isExtract() {
@@ -103,7 +111,7 @@ public class FileArtifact {
         private String installLocation = "config/";
         private String expectedHash = "";
         private JSONObject source;
-        private String numberId;
+        private String id;
         private boolean extract = false;
         
         public Builder logicalName(String logicalName) {
@@ -151,8 +159,17 @@ public class FileArtifact {
             return this;
         }
         
+        public Builder id(String id) {
+            this.id = id;
+            return this;
+        }
+        
+        /**
+         * @deprecated Use id() instead
+         */
+        @Deprecated
         public Builder numberId(String numberId) {
-            this.numberId = numberId;
+            this.id = numberId;
             return this;
         }
         

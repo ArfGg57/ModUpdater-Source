@@ -12,11 +12,11 @@ import java.util.*;
  * This allows us to identify artifacts even when filenames change and prevents
  * repeated downloads of files that are already present.
  * 
- * Unified manifest format for both mods (with numberId) and auxiliary files (without).
+ * Unified manifest format for both mods (with id) and auxiliary files (without).
  */
 public class ModMetadata {
 
-    private Map<String, ModEntry> installedMods; // key: numberId (for mods)
+    private Map<String, ModEntry> installedMods; // key: id (for mods)
     private Map<String, ArtifactEntry> installedFiles; // key: fileName (for auxiliary files)
     private String metadataFilePath;
 
@@ -73,7 +73,7 @@ public class ModMetadata {
     }
 
     public static class ModEntry {
-        public String numberId;
+        public String id;  // Renamed from numberId - unique identifier for the mod
         public String fileName;
         public String hash;
         public String sourceType; // "curseforge", "modrinth", "url"
@@ -85,15 +85,15 @@ public class ModMetadata {
 
         public ModEntry() {}
 
-        public ModEntry(String numberId, String fileName, String hash) {
-            this.numberId = numberId;
+        public ModEntry(String id, String fileName, String hash) {
+            this.id = id;
             this.fileName = fileName;
             this.hash = hash;
         }
 
         public JSONObject toJson() {
             JSONObject obj = new JSONObject();
-            obj.put("numberId", numberId);
+            obj.put("id", id);  // Use "id" for new format
             obj.put("fileName", fileName);
             if (hash != null && !hash.isEmpty()) obj.put("hash", hash);
             obj.put("sourceType", sourceType);
@@ -107,7 +107,8 @@ public class ModMetadata {
 
         public static ModEntry fromJson(JSONObject obj) {
             ModEntry entry = new ModEntry();
-            entry.numberId = obj.optString("numberId", "");
+            // Support both "id" (new) and "numberId" (legacy) for backward compatibility
+            entry.id = obj.optString("id", obj.optString("numberId", ""));
             entry.fileName = obj.optString("fileName", "");
             entry.hash = obj.optString("hash", "");
             entry.sourceType = obj.optString("sourceType", "");
@@ -141,7 +142,7 @@ public class ModMetadata {
                 installedMods = new LinkedHashMap<>();
                 for (int i = 0; i < modsArray.length(); i++) {
                     ModEntry entry = ModEntry.fromJson(modsArray.getJSONObject(i));
-                    installedMods.put(entry.numberId, entry);
+                    installedMods.put(entry.id, entry);
                 }
             }
             
@@ -198,8 +199,8 @@ public class ModMetadata {
     /**
      * Record a mod installation
      */
-    public void recordMod(String numberId, String fileName, String hash, JSONObject source) {
-        ModEntry entry = new ModEntry(numberId, fileName, hash);
+    public void recordMod(String id, String fileName, String hash, JSONObject source) {
+        ModEntry entry = new ModEntry(id, fileName, hash);
         if (source != null) {
             entry.sourceType = source.optString("type", "");
             if ("curseforge".equals(entry.sourceType)) {
@@ -214,37 +215,37 @@ public class ModMetadata {
                 entry.directUrl = source.optString("url", null);
             }
         }
-        installedMods.put(numberId, entry);
+        installedMods.put(id, entry);
     }
 
     /**
      * Remove a mod from metadata
      */
-    public void removeMod(String numberId) {
-        installedMods.remove(numberId);
+    public void removeMod(String id) {
+        installedMods.remove(id);
     }
 
     /**
-     * Get mod entry by numberId
+     * Get mod entry by id
      */
-    public ModEntry getMod(String numberId) {
-        return installedMods.get(numberId);
+    public ModEntry getMod(String id) {
+        return installedMods.get(id);
     }
 
     /**
      * Find which file (if any) currently represents a given mod definition from mods.json
      * Returns the filename if found, or null if not installed
      */
-    public String findInstalledFile(String numberId) {
-        ModEntry entry = installedMods.get(numberId);
+    public String findInstalledFile(String id) {
+        ModEntry entry = installedMods.get(id);
         return (entry != null) ? entry.fileName : null;
     }
 
     /**
-     * Check if a mod with this numberId is installed and matches the expected source
+     * Check if a mod with this id is installed and matches the expected source
      */
-    public boolean isModInstalledAndMatches(String numberId, JSONObject expectedSource, String expectedHash) {
-        ModEntry entry = installedMods.get(numberId);
+    public boolean isModInstalledAndMatches(String id, JSONObject expectedSource, String expectedHash) {
+        ModEntry entry = installedMods.get(id);
         if (entry == null) return false;
 
         // Check hash if provided

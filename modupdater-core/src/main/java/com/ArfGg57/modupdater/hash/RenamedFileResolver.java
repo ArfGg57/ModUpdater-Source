@@ -172,15 +172,15 @@ public class RenamedFileResolver {
     }
     
     /**
-     * Check if a file belongs to a specific mod (by numberId).
+     * Check if a file belongs to a specific mod (by id).
      * This checks both the metadata entry and performs hash verification.
      * 
      * @param file The file to check
-     * @param numberId The mod's numberId to check against
+     * @param modId The mod's id to check against
      * @return true if the file belongs to the specified mod
      */
-    public boolean belongsToMod(File file, String numberId) {
-        if (file == null || numberId == null || numberId.isEmpty()) {
+    public boolean belongsToMod(File file, String modId) {
+        if (file == null || modId == null || modId.isEmpty()) {
             return false;
         }
         
@@ -189,26 +189,26 @@ public class RenamedFileResolver {
             return false;
         }
         
-        return numberId.equals(entry.numberId);
+        return modId.equals(entry.id);
     }
     
     /**
-     * Find all files in a directory that match any hash in the metadata for a specific numberId.
+     * Find all files in a directory that match any hash in the metadata for a specific id.
      * This is useful for cleanup operations where you need to find all versions of a mod.
      * 
      * @param directory The directory to scan
-     * @param numberId The numberId to find files for
+     * @param modId The id to find files for
      * @return An array of files belonging to the specified mod (may be empty, never null)
      */
-    public File[] findAllFilesForMod(File directory, String numberId) {
-        if (directory == null || !directory.isDirectory() || numberId == null || numberId.isEmpty()) {
+    public File[] findAllFilesForMod(File directory, String modId) {
+        if (directory == null || !directory.isDirectory() || modId == null || modId.isEmpty()) {
             return new File[0];
         }
         
         java.util.List<File> results = new java.util.ArrayList<>();
         
         // First check metadata for tracked file
-        ModMetadata.ModEntry entry = metadata.getMod(numberId);
+        ModMetadata.ModEntry entry = metadata.getMod(modId);
         if (entry != null && entry.fileName != null && !entry.fileName.isEmpty()) {
             File trackedFile = new File(directory, entry.fileName);
             if (trackedFile.exists() && trackedFile.isFile()) {
@@ -222,13 +222,13 @@ public class RenamedFileResolver {
             }
         }
         
-        // Also check for legacy numberId- prefix files
+        // Also check for legacy id- prefix files
         File[] allFiles = directory.listFiles();
         if (allFiles != null) {
             for (File f : allFiles) {
                 if (!f.isFile()) continue;
                 if (f.getName().endsWith(".tmp")) continue;
-                if (f.getName().startsWith(numberId + "-")) {
+                if (f.getName().startsWith(modId + "-")) {
                     if (!results.contains(f)) {
                         results.add(f);
                     }
@@ -243,7 +243,7 @@ public class RenamedFileResolver {
      * Check if a file is tracked by any mod in the metadata.
      * 
      * @param file The file to check
-     * @return The numberId of the mod that owns this file, or null if not tracked
+     * @return The id of the mod that owns this file, or null if not tracked
      */
     public String getOwnerNumberId(File file) {
         if (file == null) return null;
@@ -251,14 +251,14 @@ public class RenamedFileResolver {
         // First check by filename
         for (ModMetadata.ModEntry entry : metadata.getAllMods()) {
             if (entry.fileName != null && entry.fileName.equals(file.getName())) {
-                return entry.numberId;
+                return entry.id;
             }
         }
         
         // Then check by hash
         ModMetadata.ModEntry entry = resolveByHash(file);
         if (entry != null) {
-            return entry.numberId;
+            return entry.id;
         }
         
         return null;
