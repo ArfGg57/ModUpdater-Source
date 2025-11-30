@@ -73,6 +73,7 @@ APP_VERSION = "2.0.0"
 CONFIG_FILE = "editor_config.json"
 CACHE_DIR = ".cache"
 USER_AGENT = "ModUpdater-ConfigEditor"
+DEFAULT_VERSION = "1.0.0"  # Default version for new mods/files
 
 # CurseForge API configuration
 # Using the curse.tools proxy for CurseForge API (doesn't require API key)
@@ -628,9 +629,11 @@ class ModEntry:
         self.hash = data.get('hash', '')
         self.install_location = data.get('installLocation', 'mods')
         self.source = data.get('source', {'type': 'url', 'url': ''})
+        self.since = data.get('since', DEFAULT_VERSION)  # Version this mod was introduced
         self.icon_path = data.get('icon_path', '')
         self._is_new = not bool(self.id)
         self._is_from_previous = data.get('_is_from_previous', False)
+        self._icon_data = None  # Cached icon bytes
     
     def to_dict(self) -> Dict[str, Any]:
         result = {
@@ -639,7 +642,8 @@ class ModEntry:
             'id': self.id,  # Use new "id" field
             'hash': self.hash,
             'installLocation': self.install_location,
-            'source': self.source
+            'source': self.source,
+            'since': self.since
         }
         # Don't include icon_path or internal flags in output
         return result
@@ -663,6 +667,7 @@ class FileEntry:
         self.hash = data.get('hash', '')
         self.overwrite = data.get('overwrite', True)
         self.extract = data.get('extract', False)
+        self.since = data.get('since', DEFAULT_VERSION)  # Version this file was introduced
         self.icon_path = data.get('icon_path', '')
         self._is_from_previous = data.get('_is_from_previous', False)
     
@@ -674,7 +679,8 @@ class FileEntry:
             'downloadPath': self.download_path,
             'hash': self.hash,
             'overwrite': self.overwrite,
-            'extract': self.extract
+            'extract': self.extract,
+            'since': self.since
         }
         # Don't include icon_path or internal flags in output
         return result
@@ -688,6 +694,7 @@ class DeleteEntry:
         self.path = data.get('path', '')
         self.type = data.get('type', 'file')
         self.reason = data.get('reason', '')
+        self.version = data.get('version', DEFAULT_VERSION)  # Version this deletion applies to
         self.icon_path = data.get('icon_path', '')
         self._is_unremovable = data.get('_is_unremovable', False)  # For auto-added deletes from removed mods/files
     
@@ -698,8 +705,38 @@ class DeleteEntry:
         }
         if self.reason:
             result['reason'] = self.reason
-        # Don't include icon_path or internal flags in output
+        # Don't include icon_path, version (handled at group level), or internal flags in output
         return result
+
+
+class ModpackConfig:
+    """Represents the main config.json for the modpack."""
+    def __init__(self, data: Dict[str, Any] = None):
+        if data is None:
+            data = {}
+        self.modpack_version = data.get('modpackVersion', '1.0.0')
+        self.configs_base_url = data.get('configsBaseUrl', '')
+        self.mods_json = data.get('modsJson', 'mods.json')
+        self.files_json = data.get('filesJson', 'files.json')
+        self.deletes_json = data.get('deletesJson', 'deletes.json')
+        self.check_current_version = data.get('checkCurrentVersion', True)
+        self.max_retries = data.get('maxRetries', 3)
+        self.backup_keep = data.get('backupKeep', 5)
+        self.debug_mode = data.get('debugMode', False)
+        self._sha = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'modpackVersion': self.modpack_version,
+            'configsBaseUrl': self.configs_base_url,
+            'modsJson': self.mods_json,
+            'filesJson': self.files_json,
+            'deletesJson': self.deletes_json,
+            'checkCurrentVersion': self.check_current_version,
+            'maxRetries': self.max_retries,
+            'backupKeep': self.backup_keep,
+            'debugMode': self.debug_mode
+        }
 
 
 class VersionConfig:
@@ -869,11 +906,56 @@ class AddVersionDialog(QDialog):
     def __init__(self, existing_versions: List[str], parent=None):
         super().__init__(parent)
         self.existing_versions = existing_versions
+        self.latest_version = self._get_latest_version()
         self.setup_ui()
+    
+    def _get_latest_version(self) -> Optional[str]:
+        """Get the latest version from existing versions."""
+        if not self.existing_versions:
+            return None
+        
+        def version_tuple(v: str):
+            parts = v.split('.')
+            nums = []
+            for x in parts:
+                try:
+                    nums.append(int(x))
+                except ValueError:
+                    nums.append(0)
+            return tuple(nums)
+        
+        sorted_versions = sorted(self.existing_versions, key=version_tuple, reverse=True)
+        return sorted_versions[0] if sorted_versions else None
+    
+    def _compare_versions(self, v1: str, v2: str) -> int:
+        """Compare two version strings. Returns positive if v1 > v2, negative if v1 < v2, 0 if equal."""
+        def parse(v):
+            parts = v.split('.')
+            nums = []
+            for x in parts:
+                try:
+                    nums.append(int(x))
+                except ValueError:
+                    nums.append(0)
+            return nums
+        
+        p1, p2 = parse(v1), parse(v2)
+        # Pad with zeros
+        while len(p1) < len(p2):
+            p1.append(0)
+        while len(p2) < len(p1):
+            p2.append(0)
+        
+        for a, b in zip(p1, p2):
+            if a > b:
+                return 1
+            elif a < b:
+                return -1
+        return 0
     
     def setup_ui(self):
         self.setWindowTitle("Add New Version")
-        self.setMinimumSize(450, 280)
+        self.setMinimumSize(450, 320)
         self.setModal(True)
         
         layout = QVBoxLayout(self)
@@ -901,6 +983,12 @@ class AddVersionDialog(QDialog):
         format_note = QLabel("Version must be in X.Y.Z format (e.g., 1.0.0, 2.1.0)")
         format_note.setStyleSheet("font-size: 11px; color: #a6adc8;")
         layout.addWidget(format_note)
+        
+        # Show latest version info
+        if self.latest_version:
+            latest_note = QLabel(f"Current latest version: {self.latest_version} - New version must be higher")
+            latest_note.setStyleSheet("font-size: 11px; color: #89b4fa;")
+            layout.addWidget(latest_note)
         
         self.error_label = QLabel("")
         self.error_label.setStyleSheet("color: #f38ba8;")
@@ -930,6 +1018,10 @@ class AddVersionDialog(QDialog):
             return
         if version in self.existing_versions:
             self.error_label.setText("This version already exists")
+            return
+        # Check that new version is higher than latest
+        if self.latest_version and self._compare_versions(version, self.latest_version) <= 0:
+            self.error_label.setText(f"New version must be higher than {self.latest_version}")
             return
         self.accept()
     
@@ -1092,6 +1184,440 @@ class ConfirmDeleteDialog(QDialog):
         layout.addLayout(button_layout)
 
 
+class ModSearchThread(QThread):
+    """Background thread for searching mods from CurseForge/Modrinth."""
+    search_complete = pyqtSignal(list)
+    error_occurred = pyqtSignal(str)
+    
+    def __init__(self, source: str, query: str, version_filter: str = ""):
+        super().__init__()
+        self.source = source
+        self.query = query
+        self.version_filter = version_filter
+        self._running = True
+    
+    def run(self):
+        try:
+            if self.source == 'curseforge':
+                results = self._search_curseforge()
+            else:
+                results = self._search_modrinth()
+            
+            if self._running:
+                self.search_complete.emit(results)
+        except Exception as e:
+            if self._running:
+                self.error_occurred.emit(str(e))
+    
+    def _search_curseforge(self) -> list:
+        """Search CurseForge for mods."""
+        # Use curse.tools proxy API
+        params = {
+            'gameId': '432',  # Minecraft
+            'classId': '6',   # Mods
+            'searchFilter': self.query,
+            'sortField': '2',  # Popularity
+            'sortOrder': 'desc',
+            'pageSize': '50'
+        }
+        if self.version_filter:
+            params['gameVersion'] = self.version_filter
+        
+        query_str = urllib.parse.urlencode(params)
+        url = f"{CF_PROXY_BASE_URL}/mods/search?{query_str}"
+        
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = json.loads(response.read())
+            mods = data.get('data', [])
+            
+            results = []
+            for mod in mods:
+                results.append({
+                    'source': 'curseforge',
+                    'id': str(mod.get('id', '')),
+                    'name': mod.get('name', ''),
+                    'summary': mod.get('summary', ''),
+                    'author': mod.get('authors', [{}])[0].get('name', '') if mod.get('authors') else '',
+                    'downloads': mod.get('downloadCount', 0),
+                    'icon_url': mod.get('logo', {}).get('thumbnailUrl', '') if mod.get('logo') else '',
+                    'slug': mod.get('slug', '')
+                })
+            return results
+    
+    def _search_modrinth(self) -> list:
+        """Search Modrinth for mods."""
+        facets = [['project_type:mod']]
+        if self.version_filter:
+            facets.append([f'versions:{self.version_filter}'])
+        
+        params = {
+            'query': self.query,
+            'facets': json.dumps(facets),
+            'limit': '50'
+        }
+        
+        query_str = urllib.parse.urlencode(params)
+        url = f"https://api.modrinth.com/v2/search?{query_str}"
+        
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = json.loads(response.read())
+            hits = data.get('hits', [])
+            
+            results = []
+            for mod in hits:
+                results.append({
+                    'source': 'modrinth',
+                    'id': mod.get('project_id', ''),
+                    'name': mod.get('title', ''),
+                    'summary': mod.get('description', ''),
+                    'author': mod.get('author', ''),
+                    'downloads': mod.get('downloads', 0),
+                    'icon_url': mod.get('icon_url', ''),
+                    'slug': mod.get('slug', '')
+                })
+            return results
+    
+    def stop(self):
+        self._running = False
+
+
+class ModVersionFetchThread(QThread):
+    """Background thread for fetching mod versions/files."""
+    versions_fetched = pyqtSignal(list)
+    error_occurred = pyqtSignal(str)
+    
+    def __init__(self, source: str, project_id: str, game_version: str = ""):
+        super().__init__()
+        self.source = source
+        self.project_id = project_id
+        self.game_version = game_version
+        self._running = True
+    
+    def run(self):
+        try:
+            if self.source == 'curseforge':
+                versions = self._fetch_curseforge_versions()
+            else:
+                versions = self._fetch_modrinth_versions()
+            
+            if self._running:
+                self.versions_fetched.emit(versions)
+        except Exception as e:
+            if self._running:
+                self.error_occurred.emit(str(e))
+    
+    def _fetch_curseforge_versions(self) -> list:
+        """Fetch versions from CurseForge."""
+        url = f"{CF_PROXY_BASE_URL}/mods/{self.project_id}/files"
+        if self.game_version:
+            url += f"?gameVersion={self.game_version}"
+        
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = json.loads(response.read())
+            files = data.get('data', [])
+            
+            results = []
+            for f in files[:20]:  # Limit to 20 most recent
+                results.append({
+                    'file_id': str(f.get('id', '')),
+                    'name': f.get('displayName', ''),
+                    'file_name': f.get('fileName', ''),
+                    'game_versions': f.get('gameVersions', []),
+                    'download_url': f.get('downloadUrl', ''),
+                    'release_type': ['Release', 'Beta', 'Alpha'][f.get('releaseType', 1) - 1] if f.get('releaseType') else 'Release'
+                })
+            return results
+    
+    def _fetch_modrinth_versions(self) -> list:
+        """Fetch versions from Modrinth."""
+        url = f"https://api.modrinth.com/v2/project/{self.project_id}/version"
+        
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            versions = json.loads(response.read())
+            
+            results = []
+            for v in versions[:20]:  # Limit to 20 most recent
+                files = v.get('files', [])
+                primary_file = files[0] if files else {}
+                results.append({
+                    'file_id': v.get('id', ''),
+                    'name': v.get('name', ''),
+                    'file_name': primary_file.get('filename', ''),
+                    'game_versions': v.get('game_versions', []),
+                    'download_url': primary_file.get('url', ''),
+                    'release_type': v.get('version_type', 'release').capitalize()
+                })
+            return results
+    
+    def stop(self):
+        self._running = False
+
+
+class ModBrowserDialog(QDialog):
+    """Dialog for browsing and selecting mods from CurseForge/Modrinth (like Prism Launcher)."""
+    
+    def __init__(self, existing_ids: List[str], current_version: str = "1.0.0", parent=None):
+        super().__init__(parent)
+        self.existing_ids = existing_ids
+        self.current_version = current_version
+        self.search_thread: Optional[ModSearchThread] = None
+        self.version_thread: Optional[ModVersionFetchThread] = None
+        self.selected_mod = None
+        self.selected_version = None
+        self.setup_ui()
+    
+    def setup_ui(self):
+        self.setWindowTitle("Browse Mods")
+        self.setMinimumSize(900, 600)
+        self.setModal(True)
+        
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(16, 16, 16, 16)
+        
+        # Source selection and search
+        top_layout = QHBoxLayout()
+        
+        self.source_combo = QComboBox()
+        self.source_combo.addItem("🔥 CurseForge", "curseforge")
+        self.source_combo.addItem("📦 Modrinth", "modrinth")
+        self.source_combo.currentIndexChanged.connect(self.on_source_changed)
+        top_layout.addWidget(self.source_combo)
+        
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Search mods...")
+        self.search_edit.returnPressed.connect(self.search_mods)
+        top_layout.addWidget(self.search_edit, 1)
+        
+        self.version_filter = QLineEdit()
+        self.version_filter.setPlaceholderText("MC Version (e.g., 1.12.2)")
+        self.version_filter.setFixedWidth(150)
+        top_layout.addWidget(self.version_filter)
+        
+        search_btn = QPushButton("Search")
+        search_btn.setObjectName("primaryButton")
+        search_btn.clicked.connect(self.search_mods)
+        top_layout.addWidget(search_btn)
+        
+        layout.addLayout(top_layout)
+        
+        # Main content area with splitter
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        
+        # Left: Search results
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        
+        left_layout.addWidget(QLabel("Search Results:"))
+        
+        self.results_list = QListWidget()
+        self.results_list.itemClicked.connect(self.on_mod_selected)
+        left_layout.addWidget(self.results_list)
+        
+        self.search_status = QLabel("")
+        left_layout.addWidget(self.search_status)
+        
+        splitter.addWidget(left_panel)
+        
+        # Right: Mod details and versions
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Mod info
+        self.mod_info_group = QGroupBox("Mod Details")
+        mod_info_layout = QFormLayout(self.mod_info_group)
+        
+        self.mod_name_label = QLabel("")
+        self.mod_name_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        mod_info_layout.addRow("Name:", self.mod_name_label)
+        
+        self.mod_author_label = QLabel("")
+        mod_info_layout.addRow("Author:", self.mod_author_label)
+        
+        self.mod_downloads_label = QLabel("")
+        mod_info_layout.addRow("Downloads:", self.mod_downloads_label)
+        
+        self.mod_summary_label = QLabel("")
+        self.mod_summary_label.setWordWrap(True)
+        mod_info_layout.addRow("Summary:", self.mod_summary_label)
+        
+        right_layout.addWidget(self.mod_info_group)
+        
+        # Version selection
+        right_layout.addWidget(QLabel("Available Files:"))
+        
+        self.versions_list = QListWidget()
+        self.versions_list.itemClicked.connect(self.on_version_selected)
+        right_layout.addWidget(self.versions_list)
+        
+        splitter.addWidget(right_panel)
+        splitter.setSizes([450, 450])
+        
+        layout.addWidget(splitter)
+        
+        # Bottom buttons
+        button_layout = QHBoxLayout()
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        button_layout.addStretch()
+        
+        self.add_btn = QPushButton("Add Mod")
+        self.add_btn.setObjectName("primaryButton")
+        self.add_btn.clicked.connect(self.add_selected_mod)
+        self.add_btn.setEnabled(False)
+        button_layout.addWidget(self.add_btn)
+        
+        layout.addLayout(button_layout)
+    
+    def on_source_changed(self):
+        """Clear results when source changes."""
+        self.results_list.clear()
+        self.versions_list.clear()
+        self.selected_mod = None
+        self.selected_version = None
+        self.add_btn.setEnabled(False)
+    
+    def search_mods(self):
+        """Search for mods on the selected platform."""
+        query = self.search_edit.text().strip()
+        if not query:
+            return
+        
+        source = self.source_combo.currentData()
+        version_filter = self.version_filter.text().strip()
+        
+        self.results_list.clear()
+        self.versions_list.clear()
+        self.selected_mod = None
+        self.selected_version = None
+        self.add_btn.setEnabled(False)
+        self.search_status.setText("Searching...")
+        
+        if self.search_thread and self.search_thread.isRunning():
+            self.search_thread.stop()
+            self.search_thread.wait()
+        
+        self.search_thread = ModSearchThread(source, query, version_filter)
+        self.search_thread.search_complete.connect(self.on_search_complete)
+        self.search_thread.error_occurred.connect(self.on_search_error)
+        self.search_thread.start()
+    
+    def on_search_complete(self, results: list):
+        """Handle search results."""
+        self.results_list.clear()
+        self.search_status.setText(f"Found {len(results)} mods")
+        
+        for mod in results:
+            item = QListWidgetItem(f"{mod['name']} by {mod['author']}")
+            item.setData(Qt.ItemDataRole.UserRole, mod)
+            self.results_list.addItem(item)
+    
+    def on_search_error(self, error: str):
+        """Handle search error."""
+        self.search_status.setText(f"Error: {error}")
+    
+    def on_mod_selected(self, item: QListWidgetItem):
+        """Handle mod selection."""
+        mod = item.data(Qt.ItemDataRole.UserRole)
+        if not mod:
+            return
+        
+        self.selected_mod = mod
+        self.selected_version = None
+        self.add_btn.setEnabled(False)
+        
+        # Update mod info
+        self.mod_name_label.setText(mod['name'])
+        self.mod_author_label.setText(mod['author'])
+        self.mod_downloads_label.setText(f"{mod['downloads']:,}")
+        self.mod_summary_label.setText(mod['summary'][:200] + '...' if len(mod['summary']) > 200 else mod['summary'])
+        
+        # Fetch versions
+        self.versions_list.clear()
+        self.versions_list.addItem("Loading versions...")
+        
+        if self.version_thread and self.version_thread.isRunning():
+            self.version_thread.stop()
+            self.version_thread.wait()
+        
+        game_version = self.version_filter.text().strip()
+        self.version_thread = ModVersionFetchThread(mod['source'], mod['id'], game_version)
+        self.version_thread.versions_fetched.connect(self.on_versions_fetched)
+        self.version_thread.error_occurred.connect(self.on_versions_error)
+        self.version_thread.start()
+    
+    def on_versions_fetched(self, versions: list):
+        """Handle version list."""
+        self.versions_list.clear()
+        
+        for v in versions:
+            game_vers = ', '.join(v['game_versions'][:3])
+            if len(v['game_versions']) > 3:
+                game_vers += '...'
+            item = QListWidgetItem(f"[{v['release_type']}] {v['name']} ({game_vers})")
+            item.setData(Qt.ItemDataRole.UserRole, v)
+            self.versions_list.addItem(item)
+    
+    def on_versions_error(self, error: str):
+        """Handle version fetch error."""
+        self.versions_list.clear()
+        self.versions_list.addItem(f"Error: {error}")
+    
+    def on_version_selected(self, item: QListWidgetItem):
+        """Handle version selection."""
+        version = item.data(Qt.ItemDataRole.UserRole)
+        if version:
+            self.selected_version = version
+            self.add_btn.setEnabled(True)
+    
+    def add_selected_mod(self):
+        """Add the selected mod."""
+        if not self.selected_mod or not self.selected_version:
+            return
+        self.accept()
+    
+    def get_mod(self) -> Optional[ModEntry]:
+        """Get the selected mod as a ModEntry."""
+        if not self.selected_mod or not self.selected_version:
+            return None
+        
+        mod = ModEntry()
+        mod.display_name = self.selected_mod['name']
+        mod.id = self.selected_mod['slug'] or self.selected_mod['id']
+        mod.file_name = self.selected_version['file_name']
+        mod.since = self.current_version
+        
+        if self.selected_mod['source'] == 'curseforge':
+            try:
+                project_id = int(self.selected_mod['id'])
+                file_id = int(self.selected_version['file_id'])
+            except (ValueError, TypeError):
+                project_id = 0
+                file_id = 0
+            mod.source = {
+                'type': 'curseforge',
+                'projectId': project_id,
+                'fileId': file_id
+            }
+        else:
+            mod.source = {
+                'type': 'modrinth',
+                'projectSlug': self.selected_mod['slug'],
+                'versionId': str(self.selected_version['file_id'])
+            }
+        
+        return mod
+
+
 
 # === Grid Item Widget ===
 class ItemCard(QFrame):
@@ -1099,12 +1625,13 @@ class ItemCard(QFrame):
     clicked = pyqtSignal()
     double_clicked = pyqtSignal()
     
-    def __init__(self, name: str, icon_path: str = "", is_add_button: bool = False, parent=None):
+    def __init__(self, name: str, icon_path: str = "", is_add_button: bool = False, icon_data: bytes = None, parent=None):
         super().__init__(parent)
         self.name = name
         self.icon_path = icon_path
         self.is_add_button = is_add_button
         self.selected = False
+        self._icon_data = icon_data
         self.setup_ui()
     
     def setup_ui(self):
@@ -1123,13 +1650,17 @@ class ItemCard(QFrame):
         if self.is_add_button:
             self.icon_label.setText("+")
             self.icon_label.setStyleSheet("font-size: 32px; font-weight: bold; color: #89b4fa;")
+        elif self._icon_data:
+            # Load icon from bytes data
+            self._load_icon_from_bytes(self._icon_data)
         elif self.icon_path and os.path.exists(self.icon_path):
             pixmap = QPixmap(self.icon_path)
             if not pixmap.isNull():
                 self.icon_label.setPixmap(pixmap.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            else:
+                self._set_default_icon()
         else:
-            self.icon_label.setText("📦")
-            self.icon_label.setStyleSheet("font-size: 24px;")
+            self._set_default_icon()
         
         layout.addWidget(self.icon_label, alignment=Qt.AlignmentFlag.AlignCenter)
         
@@ -1138,6 +1669,22 @@ class ItemCard(QFrame):
         self.name_label.setWordWrap(True)
         self.name_label.setStyleSheet("font-size: 11px;")
         layout.addWidget(self.name_label)
+    
+    def _set_default_icon(self):
+        """Set the default package icon."""
+        self.icon_label.setText("📦")
+        self.icon_label.setStyleSheet("font-size: 24px;")
+    
+    def _load_icon_from_bytes(self, data: bytes):
+        """Load icon from bytes data."""
+        try:
+            pixmap = QPixmap()
+            if pixmap.loadFromData(data):
+                self.icon_label.setPixmap(pixmap.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            else:
+                self._set_default_icon()
+        except Exception:
+            self._set_default_icon()
     
     def update_style(self):
         if self.selected:
@@ -1167,6 +1714,10 @@ class ItemCard(QFrame):
     def set_icon(self, pixmap: QPixmap):
         if not pixmap.isNull():
             self.icon_label.setPixmap(pixmap.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+    
+    def set_icon_from_bytes(self, data: bytes):
+        """Set icon from bytes data."""
+        self._load_icon_from_bytes(data)
     
     def mousePressEvent(self, event):
         self.clicked.emit()
@@ -1978,8 +2529,10 @@ class VersionEditorPage(QWidget):
         self.locked_label.setVisible(is_locked)
         self.create_btn.setVisible(is_new)
         
-        # Disable editing if locked
-        self.tabs.setEnabled(not is_locked)
+        # Always enable tabs for viewing, but disable editing controls if locked
+        self.tabs.setEnabled(True)
+        self._set_editing_enabled(not is_locked)
+        
         if is_locked:
             self.version_label.setText(f"Version {version_config.version} (Read-Only)")
         
@@ -1988,6 +2541,29 @@ class VersionEditorPage(QWidget):
             pixmap = QPixmap(version_config.icon_path)
             if not pixmap.isNull():
                 self.version_icon_preview.setPixmap(pixmap.scaled(60, 60, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+    
+    def _set_editing_enabled(self, enabled: bool):
+        """Enable or disable editing controls (for locked versions)."""
+        # Mod editor controls
+        self.mod_editor.save_btn.setEnabled(enabled)
+        self.mod_editor.delete_btn.setEnabled(enabled)
+        self.mod_editor.id_edit.setEnabled(enabled)
+        self.mod_editor.hash_edit.setEnabled(enabled)
+        self.mod_editor.mod_id_edit.setEnabled(enabled)
+        self.mod_editor.file_id_edit.setEnabled(enabled)
+        self.mod_editor.url_edit.setEnabled(enabled)
+        self.mod_editor.install_location_edit.setEnabled(enabled)
+        self.mod_editor.file_name_edit.setEnabled(enabled)
+        self.mod_editor.display_name_edit.setEnabled(enabled)
+        self.mod_editor.auto_hash_btn.setEnabled(enabled)
+        
+        # File editor controls
+        self.file_editor.save_btn.setEnabled(enabled)
+        self.file_editor.delete_btn.setEnabled(enabled)
+        
+        # Delete editor controls
+        self.delete_editor.save_btn.setEnabled(enabled)
+        self.delete_editor.delete_btn.setEnabled(enabled)
     
     def on_back_clicked(self):
         """Handle back button click."""
@@ -2026,7 +2602,9 @@ class VersionEditorPage(QWidget):
         
         # Add mod cards
         for i, mod in enumerate(self.version_config.mods):
-            card = ItemCard(mod.display_name or mod.id, mod.icon_path)
+            # Support both icon_path and cached icon_data
+            icon_data = getattr(mod, '_icon_data', None)
+            card = ItemCard(mod.display_name or mod.id, mod.icon_path, icon_data=icon_data)
             card.clicked.connect(lambda idx=i: self.select_mod(idx))
             card.double_clicked.connect(lambda idx=i: self.select_mod(idx))
             self.mods_grid.addWidget(card, row, col)
@@ -2036,10 +2614,11 @@ class VersionEditorPage(QWidget):
                 col = 0
                 row += 1
         
-        # Add "Add" button
-        add_card = ItemCard("", "", is_add_button=True)
-        add_card.clicked.connect(self.add_mod)
-        self.mods_grid.addWidget(add_card, row, col)
+        # Add "Add" button only if version is not locked
+        if self.version_config and not self.version_config.is_locked():
+            add_card = ItemCard("", "", is_add_button=True)
+            add_card.clicked.connect(self.add_mod)
+            self.mods_grid.addWidget(add_card, row, col)
     
     def refresh_files_grid(self):
         # Clear grid
@@ -2065,10 +2644,11 @@ class VersionEditorPage(QWidget):
                 col = 0
                 row += 1
         
-        # Add "Add" button
-        add_card = ItemCard("", "", is_add_button=True)
-        add_card.clicked.connect(self.add_file)
-        self.files_grid.addWidget(add_card, row, col)
+        # Add "Add" button only if version is not locked
+        if self.version_config and not self.version_config.is_locked():
+            add_card = ItemCard("", "", is_add_button=True)
+            add_card.clicked.connect(self.add_file)
+            self.files_grid.addWidget(add_card, row, col)
     
     def refresh_deletes_list(self):
         self.deletes_list.clear()
@@ -2110,16 +2690,62 @@ class VersionEditorPage(QWidget):
         if not self.version_config:
             return
         
+        # Show a choice dialog: Manual Add or Browse CurseForge/Modrinth
+        menu = QMenu(self)
+        manual_action = menu.addAction("✏️ Add Manually")
+        browse_action = menu.addAction("🔍 Browse CurseForge/Modrinth")
+        
+        # Get the "Add" button position
+        add_card = None
+        for i in range(self.mods_grid.count()):
+            widget = self.mods_grid.itemAt(i).widget()
+            if isinstance(widget, ItemCard) and widget.is_add_button:
+                add_card = widget
+                break
+        
+        if add_card:
+            pos = add_card.mapToGlobal(add_card.rect().bottomLeft())
+        else:
+            pos = self.mods_grid_widget.mapToGlobal(self.mods_grid_widget.rect().center())
+        
+        action = menu.exec(pos)
+        
+        if action == manual_action:
+            self._add_mod_manual()
+        elif action == browse_action:
+            self._add_mod_browse()
+    
+    def _add_mod_manual(self):
+        """Add a mod manually."""
         existing_ids = [m.id for m in self.version_config.mods]
         dialog = AddModDialog(existing_ids, self)
         if dialog.exec():
             mod = dialog.get_mod()
+            mod.since = self.version_config.version  # Set since to current version
             self.version_config.mods.append(mod)
             self.version_config.modified = True
             self.refresh_mods_grid()
             self.select_mod(len(self.version_config.mods) - 1)
             self.mod_editor.setVisible(True)
             self.version_modified.emit()
+    
+    def _add_mod_browse(self):
+        """Add a mod by browsing CurseForge/Modrinth."""
+        existing_ids = [m.id for m in self.version_config.mods]
+        dialog = ModBrowserDialog(existing_ids, self.version_config.version, self)
+        if dialog.exec():
+            mod = dialog.get_mod()
+            if mod:
+                # Check for duplicate
+                if mod.id in existing_ids:
+                    QMessageBox.warning(self, "Duplicate", f"A mod with ID '{mod.id}' already exists.")
+                    return
+                self.version_config.mods.append(mod)
+                self.version_config.modified = True
+                self.refresh_mods_grid()
+                self.select_mod(len(self.version_config.mods) - 1)
+                self.mod_editor.setVisible(True)
+                self.version_modified.emit()
     
     def add_file(self):
         if not self.version_config:
@@ -2399,6 +3025,176 @@ class VersionSelectionPage(QWidget):
             self.version_selected.emit(version)
 
 
+# === Configuration Page ===
+class ConfigurationPage(QWidget):
+    """Page for editing the main config.json file."""
+    config_changed = pyqtSignal()
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.modpack_config: Optional[ModpackConfig] = None
+        self.setup_ui()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        
+        header = QLabel("Modpack Configuration")
+        header.setObjectName("headerLabel")
+        layout.addWidget(header)
+        
+        desc = QLabel("Edit the main config.json that controls how ModUpdater fetches updates.\n"
+                      "This file is stored in the repository and downloaded by clients.")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+        
+        layout.addSpacing(16)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout(scroll_widget)
+        scroll_layout.setSpacing(16)
+        
+        # Version Info
+        version_group = QGroupBox("Version Information")
+        version_layout = QFormLayout(version_group)
+        
+        self.modpack_version_edit = QLineEdit()
+        self.modpack_version_edit.setPlaceholderText("e.g., 1.0.0")
+        self.modpack_version_edit.textChanged.connect(self.on_field_changed)
+        version_layout.addRow("Modpack Version:", self.modpack_version_edit)
+        
+        scroll_layout.addWidget(version_group)
+        
+        # URL Configuration
+        url_group = QGroupBox("URL Configuration")
+        url_layout = QFormLayout(url_group)
+        
+        self.configs_base_url_edit = QLineEdit()
+        self.configs_base_url_edit.setPlaceholderText("https://raw.githubusercontent.com/user/repo/main/")
+        self.configs_base_url_edit.textChanged.connect(self.on_field_changed)
+        url_layout.addRow("Configs Base URL:", self.configs_base_url_edit)
+        
+        url_note = QLabel("Base URL where mods.json, files.json, and deletes.json are stored")
+        url_note.setStyleSheet("font-size: 11px; color: #a6adc8;")
+        url_layout.addRow("", url_note)
+        
+        scroll_layout.addWidget(url_group)
+        
+        # File Names
+        files_group = QGroupBox("Config File Names")
+        files_layout = QFormLayout(files_group)
+        
+        self.mods_json_edit = QLineEdit()
+        self.mods_json_edit.setPlaceholderText("mods.json")
+        self.mods_json_edit.setText("mods.json")
+        self.mods_json_edit.textChanged.connect(self.on_field_changed)
+        files_layout.addRow("Mods File:", self.mods_json_edit)
+        
+        self.files_json_edit = QLineEdit()
+        self.files_json_edit.setPlaceholderText("files.json")
+        self.files_json_edit.setText("files.json")
+        self.files_json_edit.textChanged.connect(self.on_field_changed)
+        files_layout.addRow("Files File:", self.files_json_edit)
+        
+        self.deletes_json_edit = QLineEdit()
+        self.deletes_json_edit.setPlaceholderText("deletes.json")
+        self.deletes_json_edit.setText("deletes.json")
+        self.deletes_json_edit.textChanged.connect(self.on_field_changed)
+        files_layout.addRow("Deletes File:", self.deletes_json_edit)
+        
+        scroll_layout.addWidget(files_group)
+        
+        # Advanced Options
+        advanced_group = QGroupBox("Advanced Options")
+        advanced_layout = QFormLayout(advanced_group)
+        
+        self.check_current_version_check = QCheckBox()
+        self.check_current_version_check.setChecked(True)
+        self.check_current_version_check.stateChanged.connect(self.on_field_changed)
+        advanced_layout.addRow("Check Current Version:", self.check_current_version_check)
+        
+        self.max_retries_spin = QSpinBox()
+        self.max_retries_spin.setRange(1, 10)
+        self.max_retries_spin.setValue(3)
+        self.max_retries_spin.valueChanged.connect(self.on_field_changed)
+        advanced_layout.addRow("Max Retries:", self.max_retries_spin)
+        
+        self.backup_keep_spin = QSpinBox()
+        self.backup_keep_spin.setRange(1, 20)
+        self.backup_keep_spin.setValue(5)
+        self.backup_keep_spin.valueChanged.connect(self.on_field_changed)
+        advanced_layout.addRow("Backups to Keep:", self.backup_keep_spin)
+        
+        self.debug_mode_check = QCheckBox()
+        self.debug_mode_check.stateChanged.connect(self.on_field_changed)
+        advanced_layout.addRow("Debug Mode:", self.debug_mode_check)
+        
+        scroll_layout.addWidget(advanced_group)
+        scroll_layout.addStretch()
+        
+        scroll.setWidget(scroll_widget)
+        layout.addWidget(scroll)
+        
+        # Save button at bottom
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        
+        self.save_btn = QPushButton("Save Configuration")
+        self.save_btn.setObjectName("successButton")
+        self.save_btn.clicked.connect(self.save_config)
+        btn_layout.addWidget(self.save_btn)
+        
+        layout.addLayout(btn_layout)
+    
+    def load_config(self, config: ModpackConfig):
+        """Load a ModpackConfig into the form."""
+        self.modpack_config = config
+        
+        # Block signals during load
+        self.blockSignals(True)
+        
+        self.modpack_version_edit.setText(config.modpack_version)
+        self.configs_base_url_edit.setText(config.configs_base_url)
+        self.mods_json_edit.setText(config.mods_json)
+        self.files_json_edit.setText(config.files_json)
+        self.deletes_json_edit.setText(config.deletes_json)
+        self.check_current_version_check.setChecked(config.check_current_version)
+        self.max_retries_spin.setValue(config.max_retries)
+        self.backup_keep_spin.setValue(config.backup_keep)
+        self.debug_mode_check.setChecked(config.debug_mode)
+        
+        self.blockSignals(False)
+    
+    def save_config(self):
+        """Save the form values to the ModpackConfig."""
+        if not self.modpack_config:
+            self.modpack_config = ModpackConfig()
+        
+        self.modpack_config.modpack_version = self.modpack_version_edit.text().strip()
+        self.modpack_config.configs_base_url = self.configs_base_url_edit.text().strip()
+        self.modpack_config.mods_json = self.mods_json_edit.text().strip() or 'mods.json'
+        self.modpack_config.files_json = self.files_json_edit.text().strip() or 'files.json'
+        self.modpack_config.deletes_json = self.deletes_json_edit.text().strip() or 'deletes.json'
+        self.modpack_config.check_current_version = self.check_current_version_check.isChecked()
+        self.modpack_config.max_retries = self.max_retries_spin.value()
+        self.modpack_config.backup_keep = self.backup_keep_spin.value()
+        self.modpack_config.debug_mode = self.debug_mode_check.isChecked()
+        
+        self.config_changed.emit()
+    
+    def get_config(self) -> Optional[ModpackConfig]:
+        """Get the current ModpackConfig."""
+        return self.modpack_config
+    
+    def on_field_changed(self):
+        """Handle field changes - mark as modified."""
+        pass  # Could add unsaved indicator
+
+
 # === Settings Page ===
 class SettingsPage(QWidget):
     """Settings page for app configuration."""
@@ -2500,6 +3296,13 @@ class MainWindow(QMainWindow):
         self.current_theme = "dark"
         self.pending_changes: List[Tuple[str, str, str]] = []  # (path, content, sha)
         
+        # New data model: single files for all versions
+        self.all_mods: List[ModEntry] = []
+        self.all_files: List[FileEntry] = []
+        self.all_deletes: Dict[str, List[DeleteEntry]] = {}  # version -> list of deletes
+        self.modpack_config: Optional[ModpackConfig] = None
+        self.file_shas: Dict[str, str] = {}  # filename -> sha for GitHub updates
+        
         self.load_editor_config()
         self.setup_ui()
         self.apply_theme(self.current_theme)
@@ -2534,6 +3337,7 @@ class MainWindow(QMainWindow):
         # Navigation
         self.nav_list = QListWidget()
         self.nav_list.addItem("📦 Versions")
+        self.nav_list.addItem("🔧 Configuration")
         self.nav_list.addItem("⚙️ Settings")
         self.nav_list.setCurrentRow(0)
         self.nav_list.currentRowChanged.connect(self.on_nav_changed)
@@ -2568,6 +3372,11 @@ class MainWindow(QMainWindow):
         self.version_editor_page.back_requested.connect(self.show_version_selection)
         self.version_editor_page.create_requested.connect(self.on_create_version)
         self.stack.addWidget(self.version_editor_page)
+        
+        # Configuration Page (for main config.json)
+        self.config_page = ConfigurationPage()
+        self.config_page.config_changed.connect(self.on_config_changed)
+        self.stack.addWidget(self.config_page)
         
         # Settings Page
         self.settings_page = SettingsPage()
@@ -2665,6 +3474,21 @@ class MainWindow(QMainWindow):
                 "The application will close.")
             QTimer.singleShot(100, self.close)
     
+    def _update_connection_status(self, status: str):
+        """Update the connection status indicator."""
+        if status == "connected":
+            self.status_label.setText("● Connected")
+            self.status_label.setStyleSheet("color: #a6e3a1;")
+        elif status == "failed":
+            self.status_label.setText("● Connection failed")
+            self.status_label.setStyleSheet("color: #f38ba8;")
+        elif status == "not_configured":
+            self.status_label.setText("● Not configured")
+            self.status_label.setStyleSheet("color: #f38ba8;")
+        else:
+            self.status_label.setText("● Error")
+            self.status_label.setStyleSheet("color: #f38ba8;")
+    
     def connect_to_github(self):
         """Connect to GitHub and fetch configs."""
         github_config = self.editor_config.get('github', {})
@@ -2673,8 +3497,7 @@ class MainWindow(QMainWindow):
         branch = github_config.get('branch', 'main')
         
         if not repo_url:
-            self.status_label.setText("● Not configured")
-            self.status_label.setStyleSheet("color: #f38ba8;")
+            self._update_connection_status("not_configured")
             return
         
         try:
@@ -2682,78 +3505,180 @@ class MainWindow(QMainWindow):
             self.github_api.branch = branch
             
             if self.github_api.test_connection():
-                self.status_label.setText("● Connected")
-                self.status_label.setStyleSheet("color: #a6e3a1;")
+                self._update_connection_status("connected")
                 self.settings_page.set_repo_url(repo_url)
-                self.fetch_versions()
+                self.fetch_configs()
             else:
-                self.status_label.setText("● Connection failed")
-                self.status_label.setStyleSheet("color: #f38ba8;")
+                self._update_connection_status("failed")
         except Exception as e:
-            self.status_label.setText("● Error")
-            self.status_label.setStyleSheet("color: #f38ba8;")
+            self._update_connection_status("error")
             QMessageBox.warning(self, "Connection Error", f"Failed to connect to GitHub:\n{str(e)}")
     
-    def fetch_versions(self):
-        """Fetch version configs from GitHub."""
+    def fetch_configs(self):
+        """Fetch config files from GitHub (single files, not per-version folders)."""
         if not self.github_api:
             return
         
         config_path = self.editor_config.get('github', {}).get('config_path', '')
         
         try:
-            # List directories in config path
-            items = self.github_api.list_directory(config_path)
-            
+            # Reset data
+            self.all_mods = []
+            self.all_files = []
+            self.all_deletes = {}
+            self.modpack_config = None
+            self.file_shas = {}
             self.versions = {}
             
-            for item in items:
-                if item.get('type') == 'dir':
-                    version = item['name']
-                    version_config = VersionConfig(version)
-                    
-                    # Fetch mods.json
-                    mods_path = f"{config_path}/{version}/mods.json" if config_path else f"{version}/mods.json"
-                    try:
-                        content, sha = self.github_api.get_file(mods_path)
-                        if content:
-                            data = json.loads(content)
-                            if isinstance(data, list):
-                                version_config.mods = [ModEntry(m) for m in data]
-                            version_config._file_shas['mods.json'] = sha
-                    except:
-                        pass
-                    
-                    # Fetch files.json
-                    files_path = f"{config_path}/{version}/files.json" if config_path else f"{version}/files.json"
-                    try:
-                        content, sha = self.github_api.get_file(files_path)
-                        if content:
-                            data = json.loads(content)
-                            files_data = data.get('files', []) if isinstance(data, dict) else []
-                            version_config.files = [FileEntry(f) for f in files_data]
-                            version_config._file_shas['files.json'] = sha
-                    except:
-                        pass
-                    
-                    # Fetch deletes.json
-                    deletes_path = f"{config_path}/{version}/deletes.json" if config_path else f"{version}/deletes.json"
-                    try:
-                        content, sha = self.github_api.get_file(deletes_path)
-                        if content:
-                            data = json.loads(content)
-                            deletes_data = data.get('deletes', []) if isinstance(data, dict) else []
-                            version_config.deletes = [DeleteEntry(d) for d in deletes_data]
-                            version_config._file_shas['deletes.json'] = sha
-                    except:
-                        pass
-                    
-                    self.versions[version] = version_config
+            # Fetch config.json (main config file)
+            config_file = f"{config_path}/config.json" if config_path else "config.json"
+            try:
+                content, sha = self.github_api.get_file(config_file)
+                if content:
+                    data = json.loads(content)
+                    self.modpack_config = ModpackConfig(data)
+                    self.modpack_config._sha = sha
+                    self.file_shas['config.json'] = sha
+                    self.config_page.load_config(self.modpack_config)
+            except Exception as e:
+                print(f"No config.json found, creating default: {e}")
+                self.modpack_config = ModpackConfig()
+                self.config_page.load_config(self.modpack_config)
+            
+            # Fetch mods.json
+            mods_file = f"{config_path}/mods.json" if config_path else "mods.json"
+            try:
+                content, sha = self.github_api.get_file(mods_file)
+                if content:
+                    data = json.loads(content)
+                    if isinstance(data, list):
+                        self.all_mods = [ModEntry(m) for m in data]
+                    self.file_shas['mods.json'] = sha
+            except Exception as e:
+                print(f"No mods.json found: {e}")
+            
+            # Fetch files.json
+            files_file = f"{config_path}/files.json" if config_path else "files.json"
+            try:
+                content, sha = self.github_api.get_file(files_file)
+                if content:
+                    data = json.loads(content)
+                    files_data = data.get('files', []) if isinstance(data, dict) else data
+                    if isinstance(files_data, list):
+                        self.all_files = [FileEntry(f) for f in files_data]
+                    self.file_shas['files.json'] = sha
+            except Exception as e:
+                print(f"No files.json found: {e}")
+            
+            # Fetch deletes.json (new format with version groups)
+            deletes_file = f"{config_path}/deletes.json" if config_path else "deletes.json"
+            try:
+                content, sha = self.github_api.get_file(deletes_file)
+                if content:
+                    data = json.loads(content)
+                    # Parse new format: { "safetyMode": true, "deletions": [{"version": "1.0.0", "paths": [...]}] }
+                    deletions = data.get('deletions', [])
+                    for deletion in deletions:
+                        version = deletion.get('version', '')
+                        if version:
+                            paths = deletion.get('paths', [])
+                            self.all_deletes[version] = [DeleteEntry(p) for p in paths]
+                    self.file_shas['deletes.json'] = sha
+            except Exception as e:
+                print(f"No deletes.json found: {e}")
+            
+            # Build versions based on unique "since" values from mods and files
+            self._build_versions_from_data()
             
             self.version_selection_page.set_versions(self.versions)
             
         except Exception as e:
-            QMessageBox.warning(self, "Fetch Error", f"Failed to fetch versions:\n{str(e)}")
+            QMessageBox.warning(self, "Fetch Error", f"Failed to fetch configs:\n{str(e)}")
+    
+    def _build_versions_from_data(self):
+        """Build version configs from loaded mods, files, and deletes."""
+        # Collect all unique versions
+        all_versions = set()
+        
+        # From modpack config
+        if self.modpack_config and self.modpack_config.modpack_version:
+            all_versions.add(self.modpack_config.modpack_version)
+        
+        # From mods
+        for mod in self.all_mods:
+            if mod.since:
+                all_versions.add(mod.since)
+        
+        # From files
+        for f in self.all_files:
+            if f.since:
+                all_versions.add(f.since)
+        
+        # From deletes
+        for version in self.all_deletes.keys():
+            all_versions.add(version)
+        
+        # Create VersionConfig for each version
+        self.versions = {}
+        for version in all_versions:
+            version_config = VersionConfig(version)
+            
+            # Add mods that were introduced at or before this version
+            for mod in self.all_mods:
+                if self._compare_versions(mod.since, version) <= 0:
+                    # Create a copy for this version
+                    mod_copy = ModEntry(mod.to_dict())
+                    mod_copy.since = mod.since
+                    version_config.mods.append(mod_copy)
+            
+            # Add files that were introduced at or before this version
+            for f in self.all_files:
+                if self._compare_versions(f.since, version) <= 0:
+                    file_copy = FileEntry(f.to_dict())
+                    file_copy.since = f.since
+                    version_config.files.append(file_copy)
+            
+            # Add deletes for this specific version
+            if version in self.all_deletes:
+                version_config.deletes = list(self.all_deletes[version])
+            
+            # Mark existing versions as locked
+            version_config._is_locked = True
+            version_config._is_new = False
+            
+            self.versions[version] = version_config
+    
+    def _compare_versions(self, v1: str, v2: str) -> int:
+        """Compare two version strings. Returns positive if v1 > v2, negative if v1 < v2, 0 if equal."""
+        def parse(v):
+            if not v or not v.strip():
+                return [0]
+            parts = v.strip().split('.')
+            nums = []
+            for x in parts:
+                x = x.strip()
+                if not x:
+                    nums.append(0)
+                    continue
+                try:
+                    nums.append(int(x))
+                except ValueError:
+                    nums.append(0)
+            return nums if nums else [0]
+        
+        p1, p2 = parse(v1), parse(v2)
+        # Pad with zeros
+        while len(p1) < len(p2):
+            p1.append(0)
+        while len(p2) < len(p1):
+            p2.append(0)
+        
+        for a, b in zip(p1, p2):
+            if a > b:
+                return 1
+            elif a < b:
+                return -1
+        return 0
     
     def apply_theme(self, theme_key: str):
         """Apply a theme to the application."""
@@ -2781,6 +3706,8 @@ class MainWindow(QMainWindow):
         if index == 0:
             self.show_version_selection()
         elif index == 1:
+            self.stack.setCurrentWidget(self.config_page)
+        elif index == 2:
             self.stack.setCurrentWidget(self.settings_page)
     
     def show_version_selection(self):
@@ -2801,39 +3728,78 @@ class MainWindow(QMainWindow):
         # Update status or indicator
         pass
     
+    def on_config_changed(self):
+        """Handle configuration page changes."""
+        # Configuration was saved, mark as needing to be pushed to GitHub
+        pass
+    
     def on_create_version(self, version_config: VersionConfig):
-        """Handle Create Version button - save version to repo and lock it."""
+        """Handle Create Version button - save version to repo using single-file format."""
         if not self.github_api:
             QMessageBox.warning(self, "Not Connected", "Please configure GitHub connection first.")
             return
         
         version = version_config.version
         config_path = self.editor_config.get('github', {}).get('config_path', '')
-        base_path = f"{config_path}/{version}" if config_path else version
         
-        # Prepare files
+        # Add new mods to all_mods with their since field
+        for mod in version_config.mods:
+            # Check if mod already exists
+            existing = [m for m in self.all_mods if m.id == mod.id]
+            if not existing:
+                mod.since = version
+                self.all_mods.append(mod)
+        
+        # Add new files to all_files
+        for f in version_config.files:
+            # Check if file already exists (by URL or name)
+            existing = [ef for ef in self.all_files if ef.url == f.url]
+            if not existing:
+                f.since = version
+                self.all_files.append(f)
+        
+        # Add deletes for this version
+        if version_config.deletes:
+            self.all_deletes[version] = version_config.deletes
+        
+        # Update modpack config version
+        if not self.modpack_config:
+            self.modpack_config = ModpackConfig()
+        self.modpack_config.modpack_version = version
+        
+        # Prepare single files
         changes = []
         
-        # Prepare mods.json
-        mods_content = json.dumps([m.to_dict() for m in version_config.mods], indent=2)
-        changes.append((f"{base_path}/mods.json", mods_content, None))
+        # Prepare config.json
+        config_file = f"{config_path}/config.json" if config_path else "config.json"
+        config_content = json.dumps(self.modpack_config.to_dict(), indent=2)
+        changes.append((config_file, config_content, self.file_shas.get('config.json')))
         
-        # Prepare files.json
-        files_content = json.dumps({'files': [f.to_dict() for f in version_config.files]}, indent=2)
-        changes.append((f"{base_path}/files.json", files_content, None))
+        # Prepare mods.json (all mods)
+        mods_file = f"{config_path}/mods.json" if config_path else "mods.json"
+        mods_content = json.dumps([m.to_dict() for m in self.all_mods], indent=2)
+        changes.append((mods_file, mods_content, self.file_shas.get('mods.json')))
         
-        # Prepare deletes.json - format with version as key
+        # Prepare files.json (all files)
+        files_file = f"{config_path}/files.json" if config_path else "files.json"
+        files_content = json.dumps({'files': [f.to_dict() for f in self.all_files]}, indent=2)
+        changes.append((files_file, files_content, self.file_shas.get('files.json')))
+        
+        # Prepare deletes.json (all versions' deletes in new format)
+        deletes_file = f"{config_path}/deletes.json" if config_path else "deletes.json"
+        deletions_list = []
+        for del_version, del_entries in self.all_deletes.items():
+            if del_entries:
+                deletions_list.append({
+                    'version': del_version,
+                    'paths': [d.to_dict() for d in del_entries]
+                })
         deletes_obj = {
             'safetyMode': True,
-            'deletions': [
-                {
-                    'version': version,
-                    'paths': [d.to_dict() for d in version_config.deletes]
-                }
-            ] if version_config.deletes else []
+            'deletions': deletions_list
         }
         deletes_content = json.dumps(deletes_obj, indent=2)
-        changes.append((f"{base_path}/deletes.json", deletes_content, None))
+        changes.append((deletes_file, deletes_content, self.file_shas.get('deletes.json')))
         
         # Show progress
         progress = QProgressDialog(f"Creating version {version}...", "Cancel", 0, len(changes), self)
@@ -2850,12 +3816,17 @@ class MainWindow(QMainWindow):
                 break
             
             try:
-                self.github_api.create_or_update_file(
+                result = self.github_api.create_or_update_file(
                     path=path,
                     content=content,
-                    sha=sha,
-                    message=f"Create version {version}"
+                    message=f"Update to version {version}",
+                    sha=sha
                 )
+                # Update SHA
+                new_sha = result.get('content', {}).get('sha')
+                if new_sha:
+                    filename = path.split('/')[-1]
+                    self.file_shas[filename] = new_sha
             except Exception as e:
                 errors.append(f"{path}: {str(e)}")
         
@@ -2868,8 +3839,11 @@ class MainWindow(QMainWindow):
             version_config.lock()
             version_config.modified = False
             
-            # Save version locally
-            self.save_version_locally(version_config)
+            # Update versions dict
+            self.versions[version] = version_config
+            
+            # Refresh config page
+            self.config_page.load_config(self.modpack_config)
             
             QMessageBox.information(self, "Success", f"Version {version} created successfully!\n\nThis version is now locked and cannot be edited.")
             
@@ -2911,12 +3885,17 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             new_config = dialog.get_config()
             self.editor_config['github'] = new_config
+            self.editor_config['repo_url'] = new_config.get('repo_url', '')
             self.save_editor_config()
             self.github_api = GitHubAPI(new_config.get('repo_url', ''), new_config.get('token', ''))
             self.github_api.branch = new_config.get('branch', 'main')
-            self.update_connection_status()
+            # Update connection status
+            if self.github_api.test_connection():
+                self._update_connection_status("connected")
+            else:
+                self._update_connection_status("failed")
             self.settings_page.set_repo_url(new_config.get('repo_url', ''))
-            self.fetch_versions()
+            self.fetch_configs()
     
     def refresh_from_github(self):
         """Refresh all data from GitHub."""
@@ -2926,40 +3905,51 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
-            self.fetch_versions()
+            self.fetch_configs()
             self.show_version_selection()
     
     def save_all(self):
-        """Save all changes to GitHub."""
+        """Save all changes to GitHub using single-file format."""
         if not self.github_api:
             QMessageBox.warning(self, "Not Connected", "Please configure GitHub connection first.")
             return
         
         config_path = self.editor_config.get('github', {}).get('config_path', '')
         
-        # Collect all changes
+        # Prepare all files
         changes = []
         
-        for version, config in self.versions.items():
-            if not config.modified:
-                continue
-            
-            base_path = f"{config_path}/{version}" if config_path else version
-            
-            # Prepare mods.json
-            mods_content = json.dumps([m.to_dict() for m in config.mods], indent=2)
-            mods_sha = config._file_shas.get('mods.json')
-            changes.append((f"{base_path}/mods.json", mods_content, mods_sha))
-            
-            # Prepare files.json
-            files_content = json.dumps({'files': [f.to_dict() for f in config.files]}, indent=2)
-            files_sha = config._file_shas.get('files.json')
-            changes.append((f"{base_path}/files.json", files_content, files_sha))
-            
-            # Prepare deletes.json
-            deletes_content = json.dumps({'deletes': [d.to_dict() for d in config.deletes]}, indent=2)
-            deletes_sha = config._file_shas.get('deletes.json')
-            changes.append((f"{base_path}/deletes.json", deletes_content, deletes_sha))
+        # Save config.json if modified
+        if self.modpack_config:
+            config_file = f"{config_path}/config.json" if config_path else "config.json"
+            config_content = json.dumps(self.modpack_config.to_dict(), indent=2)
+            changes.append((config_file, config_content, self.file_shas.get('config.json')))
+        
+        # Save mods.json (all mods)
+        mods_file = f"{config_path}/mods.json" if config_path else "mods.json"
+        mods_content = json.dumps([m.to_dict() for m in self.all_mods], indent=2)
+        changes.append((mods_file, mods_content, self.file_shas.get('mods.json')))
+        
+        # Save files.json (all files)
+        files_file = f"{config_path}/files.json" if config_path else "files.json"
+        files_content = json.dumps({'files': [f.to_dict() for f in self.all_files]}, indent=2)
+        changes.append((files_file, files_content, self.file_shas.get('files.json')))
+        
+        # Save deletes.json (all versions' deletes)
+        deletes_file = f"{config_path}/deletes.json" if config_path else "deletes.json"
+        deletions_list = []
+        for del_version, del_entries in self.all_deletes.items():
+            if del_entries:
+                deletions_list.append({
+                    'version': del_version,
+                    'paths': [d.to_dict() for d in del_entries]
+                })
+        deletes_obj = {
+            'safetyMode': True,
+            'deletions': deletions_list
+        }
+        deletes_content = json.dumps(deletes_obj, indent=2)
+        changes.append((deletes_file, deletes_content, self.file_shas.get('deletes.json')))
         
         if not changes:
             QMessageBox.information(self, "No Changes", "No changes to save.")
@@ -2986,13 +3976,9 @@ class MainWindow(QMainWindow):
                 )
                 # Update SHA for future saves
                 new_sha = result.get('content', {}).get('sha')
-                
-                # Update version config with new SHA
-                version = path.split('/')[1] if config_path else path.split('/')[0]
-                filename = path.split('/')[-1]
-                if version in self.versions and new_sha:
-                    self.versions[version]._file_shas[filename] = new_sha
-                    self.versions[version].modified = False
+                if new_sha:
+                    filename = path.split('/')[-1]
+                    self.file_shas[filename] = new_sha
                     
             except Exception as e:
                 errors.append(f"{path}: {str(e)}")
@@ -3003,6 +3989,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Save Errors", 
                 f"Some files failed to save:\n\n" + "\n".join(errors))
         else:
+            # Mark all versions as not modified
+            for config in self.versions.values():
+                config.modified = False
             QMessageBox.information(self, "Saved", "All changes saved to GitHub successfully!")
     
     def validate_all(self):
