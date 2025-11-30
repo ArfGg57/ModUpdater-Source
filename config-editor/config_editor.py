@@ -1741,6 +1741,7 @@ class VersionEditorPage(QWidget):
     """Page for editing a specific version (mods, files, deletes)."""
     version_modified = pyqtSignal()
     back_requested = pyqtSignal()
+    create_requested = pyqtSignal(object)  # Emitted with version_config when Create is clicked
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1760,7 +1761,7 @@ class VersionEditorPage(QWidget):
         header_layout.setContentsMargins(16, 12, 16, 12)
         
         self.back_btn = QPushButton("← Back")
-        self.back_btn.clicked.connect(self.back_requested.emit)
+        self.back_btn.clicked.connect(self.on_back_clicked)
         header_layout.addWidget(self.back_btn)
         
         self.version_label = QLabel("Version")
@@ -1768,6 +1769,21 @@ class VersionEditorPage(QWidget):
         header_layout.addWidget(self.version_label)
         
         header_layout.addStretch()
+        
+        # Locked indicator (shown for already-saved versions)
+        self.locked_label = QLabel("🔒 Locked")
+        self.locked_label.setStyleSheet("color: #f9e2af; font-weight: bold;")
+        self.locked_label.setVisible(False)
+        header_layout.addWidget(self.locked_label)
+        
+        # Create Version button (only shown for new versions)
+        self.create_btn = QPushButton("✓ Create Version")
+        self.create_btn.setObjectName("successButton")
+        self.create_btn.setToolTip("Save this version to the repository. Once created, it cannot be edited.")
+        self.create_btn.clicked.connect(self.on_create_clicked)
+        self.create_btn.setVisible(False)
+        header_layout.addWidget(self.create_btn)
+        
         main_layout.addLayout(header_layout)
         
         # Tab widget
@@ -1947,11 +1963,45 @@ class VersionEditorPage(QWidget):
         self.selected_file_index = -1
         self.selected_delete_index = -1
         
+        # Update UI based on locked/new status
+        is_locked = version_config.is_locked()
+        is_new = version_config.is_new()
+        
+        self.locked_label.setVisible(is_locked)
+        self.create_btn.setVisible(is_new)
+        
+        # Disable editing if locked
+        self.tabs.setEnabled(not is_locked)
+        if is_locked:
+            self.version_label.setText(f"Version {version_config.version} (Read-Only)")
+        
         # Load version icon
         if version_config.icon_path and os.path.exists(version_config.icon_path):
             pixmap = QPixmap(version_config.icon_path)
             if not pixmap.isNull():
                 self.version_icon_preview.setPixmap(pixmap.scaled(60, 60, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+    
+    def on_back_clicked(self):
+        """Handle back button click."""
+        self.back_requested.emit()
+    
+    def on_create_clicked(self):
+        """Handle Create button click - save version to repo."""
+        if not self.version_config:
+            return
+        
+        # Show confirmation dialog
+        reply = QMessageBox.question(
+            self, "Create Version",
+            f"Are you sure you want to create version {self.version_config.version}?\n\n"
+            "⚠️ Warning: Once created, this version cannot be edited.\n"
+            "Make sure all mods and files are correctly configured.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.create_requested.emit(self.version_config)
     
     def refresh_mods_grid(self):
         # Clear grid
@@ -2508,6 +2558,7 @@ class MainWindow(QMainWindow):
         self.version_editor_page = VersionEditorPage()
         self.version_editor_page.version_modified.connect(self.on_version_modified)
         self.version_editor_page.back_requested.connect(self.show_version_selection)
+        self.version_editor_page.create_requested.connect(self.on_create_version)
         self.stack.addWidget(self.version_editor_page)
         
         # Settings Page
@@ -2741,6 +2792,102 @@ class MainWindow(QMainWindow):
         """Handle version modification."""
         # Update status or indicator
         pass
+    
+    def on_create_version(self, version_config: VersionConfig):
+        """Handle Create Version button - save version to repo and lock it."""
+        if not self.github_api:
+            QMessageBox.warning(self, "Not Connected", "Please configure GitHub connection first.")
+            return
+        
+        version = version_config.version
+        config_path = self.editor_config.get('github', {}).get('config_path', '')
+        base_path = f"{config_path}/{version}" if config_path else version
+        
+        # Prepare files
+        changes = []
+        
+        # Prepare mods.json
+        mods_content = json.dumps([m.to_dict() for m in version_config.mods], indent=2)
+        changes.append((f"{base_path}/mods.json", mods_content, None))
+        
+        # Prepare files.json
+        files_content = json.dumps({'files': [f.to_dict() for f in version_config.files]}, indent=2)
+        changes.append((f"{base_path}/files.json", files_content, None))
+        
+        # Prepare deletes.json - format with version as key
+        deletes_obj = {
+            'safetyMode': True,
+            'deletions': [
+                {
+                    'version': version,
+                    'paths': [d.to_dict() for d in version_config.deletes]
+                }
+            ] if version_config.deletes else []
+        }
+        deletes_content = json.dumps(deletes_obj, indent=2)
+        changes.append((f"{base_path}/deletes.json", deletes_content, None))
+        
+        # Show progress
+        progress = QProgressDialog(f"Creating version {version}...", "Cancel", 0, len(changes), self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        
+        errors = []
+        
+        for i, (path, content, sha) in enumerate(changes):
+            progress.setValue(i)
+            QApplication.processEvents()
+            
+            if progress.wasCanceled():
+                break
+            
+            try:
+                self.github_api.create_or_update_file(
+                    path=path,
+                    content=content,
+                    sha=sha,
+                    message=f"Create version {version}"
+                )
+            except Exception as e:
+                errors.append(f"{path}: {str(e)}")
+        
+        progress.setValue(len(changes))
+        
+        if errors:
+            QMessageBox.warning(self, "Errors", "Some files failed to save:\n\n" + "\n".join(errors))
+        else:
+            # Lock the version so it can't be edited
+            version_config.lock()
+            version_config.modified = False
+            
+            # Save version locally
+            self.save_version_locally(version_config)
+            
+            QMessageBox.information(self, "Success", f"Version {version} created successfully!\n\nThis version is now locked and cannot be edited.")
+            
+            # Refresh the editor to show locked state
+            self.version_editor_page.load_version(version_config)
+    
+    def save_version_locally(self, version_config: VersionConfig):
+        """Save version config locally in versions folder."""
+        try:
+            versions_dir = Path("versions")
+            versions_dir.mkdir(exist_ok=True)
+            
+            version_file = versions_dir / f"{version_config.version}.json"
+            
+            data = {
+                'version': version_config.version,
+                'mods': [m.to_dict() for m in version_config.mods],
+                'files': [f.to_dict() for f in version_config.files],
+                'deletes': [d.to_dict() for d in version_config.deletes],
+                'locked': version_config.is_locked()
+            }
+            
+            with open(version_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"Failed to save version locally: {e}")
     
     def on_settings_changed(self):
         """Handle settings change."""
