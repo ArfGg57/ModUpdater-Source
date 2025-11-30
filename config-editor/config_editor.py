@@ -72,6 +72,16 @@ APP_NAME = "ModUpdater Config Editor"
 APP_VERSION = "2.0.0"
 CONFIG_FILE = "editor_config.json"
 CACHE_DIR = ".cache"
+USER_AGENT = "ModUpdater-ConfigEditor"
+
+
+# === Custom Exceptions ===
+class GitHubAPIError(Exception):
+    """Custom exception for GitHub API errors."""
+    def __init__(self, status_code: int, message: str):
+        self.status_code = status_code
+        self.message = message
+        super().__init__(f"GitHub API error {status_code}: {message}")
 
 
 # === Themes ===
@@ -412,14 +422,12 @@ class GitHubAPI:
     
     def _parse_repo_url(self, url: str) -> Tuple[str, str]:
         """Parse owner and repo from GitHub URL."""
-        patterns = [
-            r'github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?/?$',
-            r'github\.com/([^/]+)/([^/]+)',
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, url)
-            if match:
-                return match.group(1), match.group(2).replace('.git', '')
+        # Single comprehensive pattern that handles various GitHub URL formats
+        # Supports: https://github.com/owner/repo, git@github.com:owner/repo, etc.
+        pattern = r'github\.com[:/]([^/]+)/([^/\s]+?)(?:\.git)?/?$'
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1), match.group(2).replace('.git', '')
         raise ValueError(f"Invalid GitHub URL: {url}")
     
     def _request(self, method: str, endpoint: str, data: dict = None) -> dict:
@@ -427,7 +435,7 @@ class GitHubAPI:
         url = f"{self.api_base}{endpoint}"
         headers = {
             "Accept": "application/vnd.github.v3+json",
-            "User-Agent": "ModUpdater-ConfigEditor"
+            "User-Agent": USER_AGENT
         }
         if self.token:
             headers["Authorization"] = f"token {self.token}"
@@ -444,7 +452,7 @@ class GitHubAPI:
                 return json.loads(response.read().decode('utf-8'))
         except urllib.error.HTTPError as e:
             error_body = e.read().decode('utf-8') if e.fp else ""
-            raise Exception(f"GitHub API error {e.code}: {error_body}")
+            raise GitHubAPIError(e.code, error_body)
     
     def get_file(self, path: str) -> Tuple[str, str]:
         """Get file content and SHA from repository."""
@@ -544,7 +552,7 @@ class IconFetcher(QThread):
         """Fetch icon from Modrinth API."""
         try:
             url = f"https://api.modrinth.com/v2/project/{project_slug}"
-            req = urllib.request.Request(url, headers={"User-Agent": "ModUpdater-ConfigEditor"})
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
             with urllib.request.urlopen(req, timeout=10) as response:
                 data = json.loads(response.read())
                 icon_url = data.get('icon_url')
@@ -574,7 +582,7 @@ class HashCalculator(QThread):
     def run(self):
         """Download file and calculate SHA-256 hash."""
         try:
-            req = urllib.request.Request(self.url, headers={"User-Agent": "ModUpdater-ConfigEditor"})
+            req = urllib.request.Request(self.url, headers={"User-Agent": USER_AGENT})
             with urllib.request.urlopen(req, timeout=60) as response:
                 total_size = int(response.headers.get('content-length', 0))
                 downloaded = 0
@@ -864,8 +872,9 @@ class AddVersionDialog(QDialog):
         if not version:
             self.error_label.setText("Please enter a version number")
             return
-        if not re.match(r'^[\d.]+$', version):
-            self.error_label.setText("Version should only contain numbers and dots")
+        # Support semantic versioning: 1.0.0, 1.0.0-beta, 2.1.0-rc1, etc.
+        if not re.match(r'^[\d]+\.[\d]+\.[\d]+(-[a-zA-Z0-9]+)?$', version):
+            self.error_label.setText("Version format: X.Y.Z or X.Y.Z-tag (e.g., 1.0.0, 1.0.0-beta)")
             return
         if version in self.existing_versions:
             self.error_label.setText("This version already exists")
@@ -2032,8 +2041,29 @@ class VersionSelectionPage(QWidget):
         row, col = 0, 0
         max_cols = 5
         
-        # Sort versions
-        sorted_versions = sorted(self.versions.keys(), key=lambda v: [int(x) if x.isdigit() else 0 for x in v.split('.')], reverse=True)
+        def version_sort_key(v: str):
+            """Sort key for semantic versions like 1.0.0, 1.0.0-beta, etc."""
+            # Split into base version and pre-release tag
+            parts = v.split('-', 1)
+            base = parts[0]
+            tag = parts[1] if len(parts) > 1 else ''
+            
+            # Parse base version numbers
+            nums = []
+            for x in base.split('.'):
+                try:
+                    nums.append(int(x))
+                except ValueError:
+                    nums.append(0)
+            
+            # Pre-release versions sort before release (empty tag = release)
+            # Release versions have higher priority (1), pre-release have lower (0)
+            tag_priority = 0 if tag else 1
+            
+            return (nums, tag_priority, tag)
+        
+        # Sort versions (newest first)
+        sorted_versions = sorted(self.versions.keys(), key=version_sort_key, reverse=True)
         
         # Add version cards
         for version in sorted_versions:
