@@ -1810,7 +1810,7 @@ class VersionEditorPage(QWidget):
         
         self.mods_grid_widget = QWidget()
         self.mods_grid = QGridLayout(self.mods_grid_widget)
-        self.mods_grid.setSpacing(12)
+        self.mods_grid.setSpacing(8)  # Reduced spacing
         self.mods_scroll.setWidget(self.mods_grid_widget)
         
         left_layout.addWidget(self.mods_scroll)
@@ -1818,6 +1818,9 @@ class VersionEditorPage(QWidget):
         # Right: Editor panel
         self.mod_editor = ModEditorPanel()
         self.mod_editor.mod_changed.connect(self.on_mod_changed)
+        self.mod_editor.mod_saved.connect(self.on_mod_saved)
+        self.mod_editor.mod_deleted.connect(self.on_mod_deleted)
+        self.mod_editor.setVisible(False)  # Hidden until a mod is selected
         
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_panel)
@@ -1841,7 +1844,7 @@ class VersionEditorPage(QWidget):
         
         self.files_grid_widget = QWidget()
         self.files_grid = QGridLayout(self.files_grid_widget)
-        self.files_grid.setSpacing(12)
+        self.files_grid.setSpacing(8)  # Reduced spacing
         self.files_scroll.setWidget(self.files_grid_widget)
         
         left_layout.addWidget(self.files_scroll)
@@ -1849,6 +1852,9 @@ class VersionEditorPage(QWidget):
         # Right: Editor panel
         self.file_editor = FileEditorPanel()
         self.file_editor.file_changed.connect(self.on_file_changed)
+        self.file_editor.file_saved.connect(self.on_file_saved)
+        self.file_editor.file_deleted.connect(self.on_file_deleted)
+        self.file_editor.setVisible(False)  # Hidden until a file is selected
         
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_panel)
@@ -1878,6 +1884,9 @@ class VersionEditorPage(QWidget):
         # Right: Editor panel
         self.delete_editor = DeleteEditorPanel()
         self.delete_editor.delete_changed.connect(self.on_delete_changed)
+        self.delete_editor.delete_saved.connect(self.on_delete_entry_saved)
+        self.delete_editor.delete_entry_deleted.connect(self.on_delete_entry_deleted)
+        self.delete_editor.setVisible(False)  # Hidden until a delete entry is selected
         
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_panel)
@@ -1925,9 +1934,18 @@ class VersionEditorPage(QWidget):
         self.refresh_mods_grid()
         self.refresh_files_grid()
         self.refresh_deletes_list()
+        
+        # Clear and hide editor panels
         self.mod_editor.clear()
+        self.mod_editor.setVisible(False)
         self.file_editor.clear()
+        self.file_editor.setVisible(False)
         self.delete_editor.clear()
+        self.delete_editor.setVisible(False)
+        
+        self.selected_mod_index = -1
+        self.selected_file_index = -1
+        self.selected_delete_index = -1
         
         # Load version icon
         if version_config.icon_path and os.path.exists(version_config.icon_path):
@@ -2007,6 +2025,7 @@ class VersionEditorPage(QWidget):
             return
         self.selected_mod_index = index
         self.mod_editor.load_mod(self.version_config.mods[index])
+        self.mod_editor.setVisible(True)  # Show editor panel
         
         # Update selection visuals
         for i in range(self.mods_grid.count()):
@@ -2019,6 +2038,7 @@ class VersionEditorPage(QWidget):
             return
         self.selected_file_index = index
         self.file_editor.load_file(self.version_config.files[index])
+        self.file_editor.setVisible(True)  # Show editor panel
     
     def on_delete_selected(self, item):
         index = self.deletes_list.row(item)
@@ -2026,6 +2046,7 @@ class VersionEditorPage(QWidget):
             return
         self.selected_delete_index = index
         self.delete_editor.load_delete(self.version_config.deletes[index])
+        self.delete_editor.setVisible(True)  # Show editor panel
     
     def add_mod(self):
         if not self.version_config:
@@ -2039,6 +2060,7 @@ class VersionEditorPage(QWidget):
             self.version_config.modified = True
             self.refresh_mods_grid()
             self.select_mod(len(self.version_config.mods) - 1)
+            self.mod_editor.setVisible(True)
             self.version_modified.emit()
     
     def add_file(self):
@@ -2050,6 +2072,7 @@ class VersionEditorPage(QWidget):
         self.version_config.modified = True
         self.refresh_files_grid()
         self.select_file(len(self.version_config.files) - 1)
+        self.file_editor.setVisible(True)
         self.version_modified.emit()
     
     def add_delete(self):
@@ -2062,6 +2085,7 @@ class VersionEditorPage(QWidget):
         self.refresh_deletes_list()
         self.deletes_list.setCurrentRow(len(self.version_config.deletes) - 1)
         self.delete_editor.load_delete(delete_entry)
+        self.delete_editor.setVisible(True)
         self.version_modified.emit()
     
     def on_mod_changed(self):
@@ -2076,6 +2100,82 @@ class VersionEditorPage(QWidget):
     
     def on_delete_changed(self):
         self.version_config.modified = True
+        self.refresh_deletes_list()
+        self.version_modified.emit()
+    
+    def on_mod_saved(self):
+        """Handle when mod save button is clicked - hide editor panel."""
+        self.mod_editor.setVisible(False)
+        self.selected_mod_index = -1
+    
+    def on_mod_deleted(self, mod):
+        """Handle when mod delete is confirmed."""
+        if not self.version_config or mod not in self.version_config.mods:
+            return
+        
+        # If this is a mod from a previous version, add to deletes
+        if mod._is_from_previous and mod.install_location:
+            delete_entry = DeleteEntry({
+                'path': f"{mod.install_location}/{mod.file_name or mod.id + '.jar'}",
+                'type': 'file',
+                'reason': f"Removed mod: {mod.display_name or mod.id}",
+                '_is_unremovable': True
+            })
+            self.version_config.deletes.append(delete_entry)
+        
+        self.version_config.mods.remove(mod)
+        self.version_config.modified = True
+        self.mod_editor.clear()
+        self.mod_editor.setVisible(False)
+        self.selected_mod_index = -1
+        self.refresh_mods_grid()
+        self.refresh_deletes_list()
+        self.version_modified.emit()
+    
+    def on_file_saved(self):
+        """Handle when file save button is clicked - hide editor panel."""
+        self.file_editor.setVisible(False)
+        self.selected_file_index = -1
+    
+    def on_file_deleted(self, file_entry):
+        """Handle when file delete is confirmed."""
+        if not self.version_config or file_entry not in self.version_config.files:
+            return
+        
+        # If this is a file from a previous version, add to deletes
+        if file_entry._is_from_previous and file_entry.download_path:
+            delete_entry = DeleteEntry({
+                'path': f"{file_entry.download_path}{file_entry.file_name or file_entry.display_name}",
+                'type': 'file',
+                'reason': f"Removed file: {file_entry.display_name or file_entry.file_name}",
+                '_is_unremovable': True
+            })
+            self.version_config.deletes.append(delete_entry)
+        
+        self.version_config.files.remove(file_entry)
+        self.version_config.modified = True
+        self.file_editor.clear()
+        self.file_editor.setVisible(False)
+        self.selected_file_index = -1
+        self.refresh_files_grid()
+        self.refresh_deletes_list()
+        self.version_modified.emit()
+    
+    def on_delete_entry_saved(self):
+        """Handle when delete save button is clicked - hide editor panel."""
+        self.delete_editor.setVisible(False)
+        self.selected_delete_index = -1
+    
+    def on_delete_entry_deleted(self, delete_entry):
+        """Handle when delete entry delete is confirmed."""
+        if not self.version_config or delete_entry not in self.version_config.deletes:
+            return
+        
+        self.version_config.deletes.remove(delete_entry)
+        self.version_config.modified = True
+        self.delete_editor.clear()
+        self.delete_editor.setVisible(False)
+        self.selected_delete_index = -1
         self.refresh_deletes_list()
         self.version_modified.emit()
     
@@ -2132,7 +2232,7 @@ class VersionSelectionPage(QWidget):
         
         self.grid_widget = QWidget()
         self.grid = QGridLayout(self.grid_widget)
-        self.grid.setSpacing(16)
+        self.grid.setSpacing(8)  # Reduced spacing between version cards
         self.scroll.setWidget(self.grid_widget)
         
         layout.addWidget(self.scroll)
@@ -2208,6 +2308,7 @@ class VersionSelectionPage(QWidget):
 class SettingsPage(QWidget):
     """Settings page for app configuration."""
     settings_changed = pyqtSignal()
+    reconfigure_requested = pyqtSignal()  # Signal for reconfigure button
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2288,7 +2389,7 @@ class SettingsPage(QWidget):
         self.settings_changed.emit()
     
     def reconfigure_github(self):
-        self.settings_changed.emit()
+        self.reconfigure_requested.emit()  # Emit specific signal for reconfigure
 
 
 
@@ -2323,10 +2424,10 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(0)
         
         # Sidebar
-        sidebar = QWidget()
-        sidebar.setFixedWidth(220)
-        sidebar.setObjectName("sidebar")
-        sidebar_layout = QVBoxLayout(sidebar)
+        self.sidebar = QWidget()
+        self.sidebar.setFixedWidth(220)
+        self.sidebar.setObjectName("sidebar")
+        sidebar_layout = QVBoxLayout(self.sidebar)
         sidebar_layout.setContentsMargins(12, 16, 12, 16)
         sidebar_layout.setSpacing(8)
         
@@ -2356,7 +2457,7 @@ class MainWindow(QMainWindow):
         save_btn.clicked.connect(self.save_all)
         sidebar_layout.addWidget(save_btn)
         
-        main_layout.addWidget(sidebar)
+        main_layout.addWidget(self.sidebar)
         
         # Content stack
         self.stack = QStackedWidget()
@@ -2375,6 +2476,7 @@ class MainWindow(QMainWindow):
         # Settings Page
         self.settings_page = SettingsPage()
         self.settings_page.settings_changed.connect(self.on_settings_changed)
+        self.settings_page.reconfigure_requested.connect(self.reconfigure_github)
         self.stack.addWidget(self.settings_page)
         
         main_layout.addWidget(self.stack)
@@ -2589,12 +2691,14 @@ class MainWindow(QMainWindow):
         """Show the version selection page."""
         self.stack.setCurrentWidget(self.version_selection_page)
         self.nav_list.setCurrentRow(0)
+        self.sidebar.setVisible(True)  # Show sidebar when returning to version selection
     
     def open_version(self, version: str):
         """Open a version for editing."""
         if version in self.versions:
             self.version_editor_page.load_version(self.versions[version])
             self.stack.setCurrentWidget(self.version_editor_page)
+            self.sidebar.setVisible(False)  # Hide sidebar when editing version
     
     def on_version_modified(self):
         """Handle version modification."""
@@ -2607,6 +2711,20 @@ class MainWindow(QMainWindow):
         if new_theme != self.current_theme:
             self.apply_theme(new_theme)
             self.save_editor_config()
+    
+    def reconfigure_github(self):
+        """Open the setup dialog to reconfigure GitHub connection."""
+        existing_config = self.editor_config.get('github', {})
+        dialog = SetupDialog(self, existing_config)
+        if dialog.exec():
+            new_config = dialog.get_config()
+            self.editor_config['github'] = new_config
+            self.save_editor_config()
+            self.github_api = GitHubAPI(new_config.get('repo_url', ''), new_config.get('token', ''))
+            self.github_api.branch = new_config.get('branch', 'main')
+            self.update_connection_status()
+            self.settings_page.set_repo_url(new_config.get('repo_url', ''))
+            self.fetch_versions()
     
     def refresh_from_github(self):
         """Refresh all data from GitHub."""
