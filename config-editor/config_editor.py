@@ -2469,10 +2469,14 @@ class ModBrowserDialog(QDialog):
             self._icon_cache[source] = {}
         self._icon_cache[source][mod_id] = data
 
-        # Find and update the item
-        thread = self.sender()
-        if hasattr(thread, 'item') and thread.item:
-            self._apply_icon_to_item(thread.item, data)
+        # Find and update the item (sender may be deleted, so use try-except)
+        try:
+            thread = self.sender()
+            if thread and hasattr(thread, 'item') and thread.item:
+                self._apply_icon_to_item(thread.item, data)
+        except RuntimeError:
+            # Handle case where Qt C++ object was deleted
+            pass
 
     def _on_icon_load_complete(self, mod_id: str):
         """Handle when an icon load completes (success or failure)."""
@@ -4175,7 +4179,8 @@ class ModEditorPanel(QWidget):
                 if self.hash_calculator.isRunning():
                     self.hash_calculator.stop()
                     self.hash_calculator.wait(1000)
-            except Exception:
+            except RuntimeError:
+                # Handle case where Qt C++ object was deleted
                 pass
             self.hash_calculator = None
         self.hash_progress.setVisible(False)
@@ -4321,9 +4326,17 @@ class FileEditorPanel(QWidget):
             QMessageBox.warning(self, "No URL", "Please enter a URL first.")
             return
         
-        # Validate URL format
-        if not url.startswith(('http://', 'https://')):
-            QMessageBox.warning(self, "Invalid URL", "URL must start with http:// or https://")
+        # Validate URL format using urlparse for proper validation
+        try:
+            parsed = urllib.parse.urlparse(url)
+            if parsed.scheme not in ('http', 'https'):
+                QMessageBox.warning(self, "Invalid URL", "URL must start with http:// or https://")
+                return
+            if not parsed.netloc:
+                QMessageBox.warning(self, "Invalid URL", "URL must include a valid domain")
+                return
+        except Exception:
+            QMessageBox.warning(self, "Invalid URL", "URL format is invalid")
             return
 
         self.hash_progress.setVisible(True)
@@ -4365,7 +4378,8 @@ class FileEditorPanel(QWidget):
                 if self.hash_calculator.isRunning():
                     self.hash_calculator.stop()
                     self.hash_calculator.wait(1000)
-            except Exception:
+            except RuntimeError:
+                # Handle case where Qt C++ object was deleted
                 pass
             self.hash_calculator = None
         self.hash_progress.setVisible(False)
@@ -5404,7 +5418,8 @@ class VersionEditorPage(QWidget):
                 if thread.isRunning():
                     thread.stop()
                     thread.wait(1000)
-            except Exception:
+            except RuntimeError:
+                # Handle case where Qt C++ object was deleted
                 pass
         self._icon_load_threads.clear()
 
