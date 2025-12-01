@@ -80,6 +80,9 @@ DEFAULT_VERSION = "1.0.0"  # Default version for new mods/files
 SEARCH_PAGE_SIZE = 50  # Number of mods to load per page
 INFINITE_SCROLL_THRESHOLD = 0.9  # Load more when scrolled to 90% of list
 
+# Image scaling settings
+MAX_DESCRIPTION_IMAGE_WIDTH = 400  # Maximum width for images in mod descriptions
+
 # CurseForge API configuration
 # Using the curse.tools proxy for CurseForge API (doesn't require API key)
 CF_PROXY_BASE_URL = "https://api.curse.tools/v1/cf"
@@ -738,18 +741,23 @@ class RemoteImageTextBrowser(QTextBrowser):
         # Add max-width and height:auto to all img tags to make them responsive
         def add_img_style(match):
             img_tag = match.group(0)
+            style_to_add = 'max-width: 100%; height: auto;'
             # Check if style already exists
-            if 'style=' in img_tag.lower():
+            style_match = re.search(r'style=["\']([^"\']*)["\']', img_tag, re.IGNORECASE)
+            if style_match:
                 # Append to existing style
-                img_tag = re.sub(r'style=["\']([^"\']*)["\']', 
-                                 r'style="\1; max-width: 100%; height: auto;"', 
-                                 img_tag, flags=re.IGNORECASE)
+                existing_style = style_match.group(1).rstrip(';')
+                new_style = f'{existing_style}; {style_to_add}'
+                img_tag = img_tag[:style_match.start(1)] + new_style + img_tag[style_match.end(1):]
             else:
-                # Add new style attribute before the closing >
-                img_tag = img_tag[:-1] + ' style="max-width: 100%; height: auto;">'
+                # Add new style attribute before the closing > or />
+                if img_tag.rstrip().endswith('/>'):
+                    img_tag = img_tag.rstrip()[:-2] + f' style="{style_to_add}" />'
+                else:
+                    img_tag = img_tag.rstrip()[:-1] + f' style="{style_to_add}">'
             return img_tag
         
-        html = re.sub(r'<img[^>]+>', add_img_style, html, flags=re.IGNORECASE)
+        html = re.sub(r'<img[^>]*/?>', add_img_style, html, flags=re.IGNORECASE)
         
         # Find all image URLs in the HTML
         img_pattern = r'<img[^>]+src=["\']([^"\']+)["\']'
@@ -783,10 +791,9 @@ class RemoteImageTextBrowser(QTextBrowser):
     
     def _on_image_loaded(self, url: str, image: QImage):
         """Handle image loaded from thread."""
-        # Scale large images to fit within the browser width (max 400px wide)
-        max_width = 400
-        if image.width() > max_width:
-            image = image.scaledToWidth(max_width, Qt.TransformationMode.SmoothTransformation)
+        # Scale large images to fit within the browser width
+        if image.width() > MAX_DESCRIPTION_IMAGE_WIDTH:
+            image = image.scaledToWidth(MAX_DESCRIPTION_IMAGE_WIDTH, Qt.TransformationMode.SmoothTransformation)
         self._image_cache[url] = image
         # Add the resource to the document directly to avoid full reload
         if PYQT_VERSION == 6:
@@ -2568,8 +2575,7 @@ class VersionCard(QFrame):
                     border-radius: 10px;
                     font-weight: bold;
                     font-size: 16px;
-                    padding: 0px;
-                    padding-bottom: 2px;
+                    padding: 0 0 2px 0;
                 }}
                 QPushButton:hover {{
                     background-color: {theme['accent_hover']};
