@@ -31,6 +31,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
+from functools import partial
 import threading
 
 try:
@@ -83,11 +84,18 @@ INFINITE_SCROLL_THRESHOLD = 0.9  # Load more when scrolled to 90% of list
 # Image scaling settings
 MAX_DESCRIPTION_IMAGE_WIDTH = 400  # Maximum width for images in mod descriptions
 
+# Icon loading settings
+ICON_MAX_CONCURRENT_LOADS = 6  # Maximum number of concurrent icon downloads
+ICON_LOAD_TIMER_INTERVAL_MS = 20  # Interval for processing icon load queue (ms)
+ICON_PRELOAD_TIMER_INTERVAL_MS = 100  # Interval for background preloading (ms)
+ICON_PRELOAD_DELAY_MS = 500  # Delay before starting background preload (ms)
+
 # CurseForge API configuration
 # Using the curse.tools proxy for CurseForge API (doesn't require API key)
 CF_PROXY_BASE_URL = "https://api.curse.tools/v1/cf"
 # Direct CurseForge API key (public partner key for mod managers)
 CF_API_KEY = "$2a$10$bL4bIL5pUWqfcO7KQtnMReakwtfHbNKh6v1uTpKlzhwoueEJQnPnm"
+
 
 
 # === Custom Exceptions ===
@@ -910,8 +918,8 @@ class ModIconFetcher(QThread):
                 data = response.read()
                 if data and self._running:
                     self.icon_fetched.emit(self.item, data)
-        except:
-            pass
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError, Exception):
+            pass  # Silently ignore network errors during icon fetch
     
     def stop(self):
         self._running = False
@@ -938,8 +946,8 @@ class _BackgroundIconFetcher(QThread):
                 data = response.read()
                 if data and self._running:
                     self.icon_fetched.emit(self.mod_id, self.source, data)
-        except:
-            pass
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError, Exception):
+            pass  # Silently ignore network errors during icon fetch
     
     def stop(self):
         self._running = False
@@ -1924,7 +1932,7 @@ class ModBrowserDialog(QDialog):
         self._source_loaded_indices = {'curseforge': set(), 'modrinth': set()}
         
         # Parallel loading with concurrency control
-        self._max_concurrent_loads = 6  # Load up to 6 icons in parallel
+        self._max_concurrent_loads = ICON_MAX_CONCURRENT_LOADS
         self._active_icon_threads = []  # Currently running icon load threads
         self._icon_load_queue = []  # Priority queue: (priority, item, icon_url, mod_id, source)
         self._queued_mod_ids = set()  # Set of mod_ids already queued for O(1) duplicate checks
@@ -2114,12 +2122,12 @@ class ModBrowserDialog(QDialog):
         # Set up icon load timer for parallel loading with concurrency control
         self._icon_load_timer = QTimer()
         self._icon_load_timer.timeout.connect(self._process_icon_queue)
-        self._icon_load_timer.setInterval(20)  # Check queue every 20ms for responsive loading
+        self._icon_load_timer.setInterval(ICON_LOAD_TIMER_INTERVAL_MS)
         
         # Set up preload timer for background loading of other tab
         self._preload_timer = QTimer()
         self._preload_timer.timeout.connect(self._process_preload_queue)
-        self._preload_timer.setInterval(100)  # Slower interval for background preloading
+        self._preload_timer.setInterval(ICON_PRELOAD_TIMER_INTERVAL_MS)
     
     def _on_scroll(self, value):
         """Handle scroll event for infinite scrolling and lazy icon loading."""
@@ -2293,11 +2301,11 @@ class ModBrowserDialog(QDialog):
                 thread.source = source
                 thread.idx = idx
                 thread.icon_fetched.connect(self._on_icon_fetched_improved)
-                thread.finished.connect(lambda m=mod_id: self._on_icon_thread_finished(m))
+                thread.finished.connect(partial(self._on_icon_thread_finished, mod_id))
                 self._active_icon_threads.append(thread)
                 self.icon_threads.append(thread)
                 thread.start()
-            except Exception:
+            except (RuntimeError, OSError, Exception):
                 self._loading_mod_ids.discard(mod_id)
     
     def _on_icon_thread_finished(self, mod_id: str):
@@ -2313,11 +2321,11 @@ class ModBrowserDialog(QDialog):
         idx = getattr(thread, 'idx', -1)
         
         # Cache the icon data by mod_id
+        # Note: mod_id removal from _loading_mod_ids is handled by _on_icon_thread_finished
         if mod_id:
             if source not in self._icon_cache:
                 self._icon_cache[source] = {}
             self._icon_cache[source][mod_id] = data
-            self._loading_mod_ids.discard(mod_id)
         
         # Mark as loaded
         if idx >= 0:
@@ -2455,7 +2463,7 @@ class ModBrowserDialog(QDialog):
         self.load_popular_mods()
         
         # Schedule preloading of the other tab after a short delay
-        QTimer.singleShot(500, self._start_background_preload)
+        QTimer.singleShot(ICON_PRELOAD_DELAY_MS, self._start_background_preload)
     
     def _start_background_preload(self):
         """Start preloading the inactive tab's mods."""
@@ -2516,17 +2524,23 @@ class ModBrowserDialog(QDialog):
         try:
             thread = _BackgroundIconFetcher(mod_id, icon_url, source)
             thread.icon_fetched.connect(self._on_background_icon_fetched)
-            thread.finished.connect(lambda m=mod_id: self._loading_mod_ids.discard(m))
+            thread.finished.connect(partial(self._on_preload_thread_finished, mod_id))
             thread.start()
-        except Exception:
+        except (RuntimeError, OSError, Exception):
             self._loading_mod_ids.discard(mod_id)
     
+    def _on_preload_thread_finished(self, mod_id: str):
+        """Handle when a preload thread finishes."""
+        self._loading_mod_ids.discard(mod_id)
+    
     def _on_background_icon_fetched(self, mod_id: str, source: str, data: bytes):
-        """Handle background icon fetch completion."""
+        """Handle background icon fetch completion.
+        
+        Note: mod_id removal from _loading_mod_ids is handled by _on_preload_thread_finished
+        """
         if source not in self._icon_cache:
             self._icon_cache[source] = {}
         self._icon_cache[source][mod_id] = data
-        self._loading_mod_ids.discard(mod_id)
     
     def load_popular_mods(self):
         """Load popular mods without search query."""
