@@ -1619,6 +1619,56 @@ class ModVersionFetchThread(QThread):
         self._running = False
 
 
+class ModDescriptionFetchThread(QThread):
+    """Background thread for fetching full mod description."""
+    description_fetched = pyqtSignal(str)
+    error_occurred = pyqtSignal(str)
+    
+    def __init__(self, source: str, project_id: str):
+        super().__init__()
+        self.source = source
+        self.project_id = project_id
+        self._running = True
+    
+    def run(self):
+        try:
+            if self.source == 'curseforge':
+                description = self._fetch_curseforge_description()
+            else:
+                description = self._fetch_modrinth_description()
+            
+            if self._running and description:
+                self.description_fetched.emit(description)
+        except Exception as e:
+            if self._running:
+                self.error_occurred.emit(str(e))
+    
+    def _fetch_curseforge_description(self) -> str:
+        """Fetch full description from CurseForge."""
+        url = f"{CF_PROXY_BASE_URL}/mods/{self.project_id}/description"
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = json.loads(response.read())
+            description = data.get('data', '')
+            # Strip HTML tags for plain text display
+            import re
+            clean_desc = re.sub(r'<[^>]+>', '', description)
+            clean_desc = clean_desc.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+            return clean_desc.strip()
+    
+    def _fetch_modrinth_description(self) -> str:
+        """Fetch full description from Modrinth."""
+        url = f"https://api.modrinth.com/v2/project/{self.project_id}"
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = json.loads(response.read())
+            # Modrinth returns body (full description) as markdown
+            return data.get('body', data.get('description', ''))
+    
+    def stop(self):
+        self._running = False
+
+
 class ModBrowserDialog(QDialog):
     """Dialog for browsing and selecting mods from CurseForge/Modrinth (like Prism Launcher)."""
     
@@ -1628,6 +1678,7 @@ class ModBrowserDialog(QDialog):
         self.current_version = current_version
         self.search_thread: Optional[ModSearchThread] = None
         self.version_thread: Optional[ModVersionFetchThread] = None
+        self.description_thread: Optional[ModDescriptionFetchThread] = None  # Thread for fetching description
         self.icon_threads: List[ModIconFetcher] = []  # Track icon loading threads
         self.selected_mod = None
         self.selected_version = None
@@ -1758,10 +1809,15 @@ class ModBrowserDialog(QDialog):
         
         mod_info_layout.addWidget(header_widget)
         
-        # Scrollable description area
+        # Scrollable full description area
+        description_header = QLabel("📖 Full Description:")
+        description_header.setStyleSheet("font-weight: bold; margin-top: 8px;")
+        mod_info_layout.addWidget(description_header)
+        
         self.description_label = QLabel("")
         self.description_label.setWordWrap(True)
         self.description_label.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.description_label.setTextFormat(Qt.TextFormat.PlainText)
         
         description_scroll = QScrollArea()
         description_scroll.setWidgetResizable(True)
@@ -1780,6 +1836,7 @@ class ModBrowserDialog(QDialog):
         
         self.versions_combo = QComboBox()
         self.versions_combo.setMinimumWidth(300)
+        self.versions_combo.setMaxVisibleItems(10)  # Make dropdown scrollable
         self.versions_combo.currentIndexChanged.connect(self.on_version_combo_changed)
         version_layout.addWidget(self.versions_combo, 1)
         
@@ -2026,7 +2083,17 @@ class ModBrowserDialog(QDialog):
         self.mod_author_label.setText(mod['author'])
         self.mod_downloads_label.setText(f"{mod['downloads']:,}")
         self.mod_summary_label.setText(mod['summary'])
-        self.description_label.setText(mod.get('description', mod['summary']))
+        self.description_label.setText("Loading full description...")
+        
+        # Fetch full description
+        if self.description_thread and self.description_thread.isRunning():
+            self.description_thread.stop()
+            self.description_thread.wait()
+        
+        self.description_thread = ModDescriptionFetchThread(mod['source'], mod['id'])
+        self.description_thread.description_fetched.connect(self.on_description_fetched)
+        self.description_thread.error_occurred.connect(self.on_description_error)
+        self.description_thread.start()
         
         # Fetch versions
         self.versions_combo.clear()
@@ -2041,6 +2108,16 @@ class ModBrowserDialog(QDialog):
         self.version_thread.versions_fetched.connect(self.on_versions_fetched)
         self.version_thread.error_occurred.connect(self.on_versions_error)
         self.version_thread.start()
+    
+    def on_description_fetched(self, description: str):
+        """Handle full description fetch."""
+        self.description_label.setText(description)
+    
+    def on_description_error(self, error: str):
+        """Handle description fetch error."""
+        # Fall back to summary if description fetch fails
+        if self.selected_mod:
+            self.description_label.setText(self.selected_mod.get('summary', ''))
     
     def on_versions_fetched(self, versions: list):
         """Handle version list."""
@@ -2134,6 +2211,11 @@ class ModBrowserDialog(QDialog):
             self.version_thread.stop()
             self.version_thread.wait(1000)
         
+        # Stop description thread
+        if self.description_thread and self.description_thread.isRunning():
+            self.description_thread.stop()
+            self.description_thread.wait(1000)
+        
         # Stop icon threads
         for thread in self.icon_threads:
             if thread.isRunning():
@@ -2163,6 +2245,8 @@ class ItemCard(QFrame):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.update_style()
         
+        theme = get_current_theme()
+        
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(4)
@@ -2174,14 +2258,16 @@ class ItemCard(QFrame):
         if self.is_add_button:
             self.icon_label.setText("+")
             # Use a more visible color that works on both light and dark themes
-            self.icon_label.setStyleSheet("font-size: 36px; font-weight: bold;")
+            self.icon_label.setStyleSheet(f"font-size: 36px; font-weight: bold; background-color: transparent; color: {theme['text_primary']};")
         elif self._icon_data:
             # Load icon from bytes data
             self._load_icon_from_bytes(self._icon_data)
+            self.icon_label.setStyleSheet("background-color: transparent;")
         elif self.icon_path and os.path.exists(self.icon_path):
             pixmap = QPixmap(self.icon_path)
             if not pixmap.isNull():
                 self.icon_label.setPixmap(pixmap.scaled(56, 56, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                self.icon_label.setStyleSheet("background-color: transparent;")
             else:
                 self._set_default_icon()
         else:
@@ -2192,13 +2278,14 @@ class ItemCard(QFrame):
         self.name_label = QLabel(self.name if not self.is_add_button else "Add")
         self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.name_label.setWordWrap(True)
-        self.name_label.setStyleSheet("font-size: 11px;")
+        self.name_label.setStyleSheet(f"font-size: 11px; background-color: transparent; color: {theme['text_primary']};")
         layout.addWidget(self.name_label)
     
     def _set_default_icon(self):
         """Set the default package icon."""
+        theme = get_current_theme()
         self.icon_label.setText("📦")
-        self.icon_label.setStyleSheet("font-size: 28px;")  # Slightly bigger icon
+        self.icon_label.setStyleSheet(f"font-size: 28px; background-color: transparent; color: {theme['text_primary']};")  # Slightly bigger icon
     
     def _load_icon_from_bytes(self, data: bytes):
         """Load icon from bytes data."""
@@ -2206,6 +2293,7 @@ class ItemCard(QFrame):
             pixmap = QPixmap()
             if pixmap.loadFromData(data):
                 self.icon_label.setPixmap(pixmap.scaled(56, 56, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                self.icon_label.setStyleSheet("background-color: transparent;")
             else:
                 self._set_default_icon()
         except Exception:
@@ -2221,11 +2309,9 @@ class ItemCard(QFrame):
                     border: 2px solid {theme['accent']};
                     border-radius: 8px;
                 }}
-                ItemCard QLabel {{
-                    background-color: transparent;
-                    color: {theme['bg_primary']};
-                }}
             """)
+            # Update label colors for selected state
+            self.name_label.setStyleSheet(f"font-size: 11px; background-color: transparent; color: {theme['bg_primary']};")
         else:
             self.setStyleSheet(f"""
                 ItemCard {{
@@ -2236,11 +2322,9 @@ class ItemCard(QFrame):
                 ItemCard:hover {{
                     border-color: {theme['accent']};
                 }}
-                ItemCard QLabel {{
-                    background-color: transparent;
-                    color: {theme['text_primary']};
-                }}
             """)
+            # Update label colors for normal state
+            self.name_label.setStyleSheet(f"font-size: 11px; background-color: transparent; color: {theme['text_primary']};")
     
     def set_selected(self, selected: bool):
         self.selected = selected
@@ -2285,32 +2369,30 @@ class VersionCard(QFrame):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(2)
         
-        # Header with delete button (only for non-new versions, not the add button)
+        theme = get_current_theme()
+        
+        # Header with lock indicator (X) for locked versions (non-new versions, not the add button)
         if not self.is_add_button and not self.is_new:
             header_layout = QHBoxLayout()
             header_layout.setContentsMargins(0, 0, 0, 0)
             header_layout.addStretch()
             
-            delete_btn = QPushButton("×")
-            delete_btn.setFixedSize(20, 20)
-            delete_btn.setToolTip("Delete this version")
-            theme = get_current_theme()
-            delete_btn.setStyleSheet(f"""
-                QPushButton {{
+            # Create red X indicator for locked versions
+            lock_indicator = QLabel("✕")
+            lock_indicator.setFixedSize(20, 20)
+            lock_indicator.setToolTip("This version is locked and cannot be edited")
+            lock_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lock_indicator.setStyleSheet(f"""
+                QLabel {{
                     background-color: {theme['danger']};
                     color: white;
                     border: none;
                     border-radius: 10px;
                     font-weight: bold;
-                    font-size: 14px;
-                }}
-                QPushButton:hover {{
-                    background-color: {theme['danger']};
-                    opacity: 0.8;
+                    font-size: 12px;
                 }}
             """)
-            delete_btn.clicked.connect(self.on_delete_clicked)
-            header_layout.addWidget(delete_btn)
+            header_layout.addWidget(lock_indicator)
             layout.addLayout(header_layout)
         
         # Icon
@@ -2320,17 +2402,18 @@ class VersionCard(QFrame):
         
         if self.is_add_button:
             self.icon_label.setText("+")
-            self.icon_label.setStyleSheet("font-size: 28px; font-weight: bold;")
+            self.icon_label.setStyleSheet(f"font-size: 28px; font-weight: bold; background-color: transparent; color: {theme['text_primary']};")
         elif self.icon_path and os.path.exists(self.icon_path):
             pixmap = QPixmap(self.icon_path)
             if not pixmap.isNull():
                 self.icon_label.setPixmap(pixmap.scaled(40, 40, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                self.icon_label.setStyleSheet("background-color: transparent;")
             else:
                 self.icon_label.setText("📦")
-                self.icon_label.setStyleSheet("font-size: 20px;")
+                self.icon_label.setStyleSheet(f"font-size: 20px; background-color: transparent; color: {theme['text_primary']};")
         else:
             self.icon_label.setText("📦")
-            self.icon_label.setStyleSheet("font-size: 20px;")
+            self.icon_label.setStyleSheet(f"font-size: 20px; background-color: transparent; color: {theme['text_primary']};")
         
         layout.addWidget(self.icon_label, alignment=Qt.AlignmentFlag.AlignCenter)
         
@@ -2345,7 +2428,7 @@ class VersionCard(QFrame):
         self.name_label = QLabel(name_text)
         self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.name_label.setWordWrap(True)
-        self.name_label.setStyleSheet("font-size: 11px;")
+        self.name_label.setStyleSheet(f"font-size: 11px; background-color: transparent; color: {theme['text_primary']};")
         layout.addWidget(self.name_label)
         
         layout.addStretch()
@@ -2360,10 +2443,6 @@ class VersionCard(QFrame):
             }}
             VersionCard:hover {{
                 border-color: {theme['accent']};
-            }}
-            VersionCard QLabel {{
-                background-color: transparent;
-                color: {theme['text_primary']};
             }}
         """)
     
@@ -3234,15 +3313,27 @@ class VersionEditorPage(QWidget):
         left_layout.addWidget(self.mods_scroll)
         
         # Right: Stacked widget for editor panel and placeholder
+        # Wrap in a container with distinct styling
+        self.mod_right_container = QFrame()
+        theme = get_current_theme()
+        self.mod_right_container.setStyleSheet(f"""
+            QFrame {{
+                background-color: {theme['bg_tertiary']};
+                border: 1px solid {theme['border']};
+                border-radius: 8px;
+            }}
+        """)
+        mod_right_container_layout = QVBoxLayout(self.mod_right_container)
+        mod_right_container_layout.setContentsMargins(0, 0, 0, 0)
+        
         self.mod_right_stack = QStackedWidget()
         
         # Placeholder for when no mod is selected
         self.mod_placeholder = QWidget()
         placeholder_layout = QVBoxLayout(self.mod_placeholder)
         placeholder_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        theme = get_current_theme()
         placeholder_label = QLabel("No option selected")
-        placeholder_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 16px; font-style: italic;")
+        placeholder_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 16px; font-style: italic; background-color: transparent;")
         placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         placeholder_layout.addWidget(placeholder_label)
         self.mod_right_stack.addWidget(self.mod_placeholder)
@@ -3257,9 +3348,11 @@ class VersionEditorPage(QWidget):
         # Show placeholder by default
         self.mod_right_stack.setCurrentWidget(self.mod_placeholder)
         
+        mod_right_container_layout.addWidget(self.mod_right_stack)
+        
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_panel)
-        splitter.addWidget(self.mod_right_stack)
+        splitter.addWidget(self.mod_right_container)
         splitter.setSizes([400, 400])
         
         layout.addWidget(splitter)
@@ -3285,15 +3378,27 @@ class VersionEditorPage(QWidget):
         left_layout.addWidget(self.files_scroll)
         
         # Right: Stacked widget for editor panel and placeholder
+        # Wrap in a container with distinct styling
+        self.file_right_container = QFrame()
+        theme = get_current_theme()
+        self.file_right_container.setStyleSheet(f"""
+            QFrame {{
+                background-color: {theme['bg_tertiary']};
+                border: 1px solid {theme['border']};
+                border-radius: 8px;
+            }}
+        """)
+        file_right_container_layout = QVBoxLayout(self.file_right_container)
+        file_right_container_layout.setContentsMargins(0, 0, 0, 0)
+        
         self.file_right_stack = QStackedWidget()
         
         # Placeholder for when no file is selected
         self.file_placeholder = QWidget()
         placeholder_layout = QVBoxLayout(self.file_placeholder)
         placeholder_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        theme = get_current_theme()
         placeholder_label = QLabel("No option selected")
-        placeholder_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 16px; font-style: italic;")
+        placeholder_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 16px; font-style: italic; background-color: transparent;")
         placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         placeholder_layout.addWidget(placeholder_label)
         self.file_right_stack.addWidget(self.file_placeholder)
@@ -3308,9 +3413,11 @@ class VersionEditorPage(QWidget):
         # Show placeholder by default
         self.file_right_stack.setCurrentWidget(self.file_placeholder)
         
+        file_right_container_layout.addWidget(self.file_right_stack)
+        
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_panel)
-        splitter.addWidget(self.file_right_stack)
+        splitter.addWidget(self.file_right_container)
         splitter.setSizes([400, 400])
         
         layout.addWidget(splitter)
@@ -3909,6 +4016,21 @@ class VersionEditorPage(QWidget):
         self.version_icon_preview.clear()
         self.version_icon_preview.setText("No Icon")
         self.version_modified.emit()
+    
+    def refresh_editor_panels_style(self):
+        """Refresh the styling of editor panel containers when theme changes."""
+        theme = get_current_theme()
+        container_style = f"""
+            QFrame {{
+                background-color: {theme['bg_tertiary']};
+                border: 1px solid {theme['border']};
+                border-radius: 8px;
+            }}
+        """
+        if hasattr(self, 'mod_right_container'):
+            self.mod_right_container.setStyleSheet(container_style)
+        if hasattr(self, 'file_right_container'):
+            self.file_right_container.setStyleSheet(container_style)
 
 
 
@@ -4774,6 +4896,7 @@ class MainWindow(QMainWindow):
         if hasattr(self.version_editor_page, 'version_config') and self.version_editor_page.version_config:
             self.version_editor_page.refresh_mods_grid()
             self.version_editor_page.refresh_files_grid()
+            self.version_editor_page.refresh_editor_panels_style()
     
     def on_nav_changed(self, index: int):
         """Handle navigation list selection change."""
