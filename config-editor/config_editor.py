@@ -3002,14 +3002,6 @@ class ModBrowserDialog(QDialog):
             # No icon URL, continue to next
             QTimer.singleShot(10, lambda: self._preload_page_mods_icons(mods, source, page, index + 1))
 
-    def _on_page_mod_icon_complete(self, mod_id: str, mods: list, source: str, page: int, index: int):
-        """Handle completion of a page mod icon preload."""
-        self._loading_mod_ids.discard(mod_id)
-        # Clean up threads
-        self.icon_threads = [t for t in self.icon_threads if t.isRunning()]
-        # Continue to next mod
-        QTimer.singleShot(50, lambda: self._preload_page_mods_icons(mods, source, page, index + 1))
-
     def load_popular_mods(self):
         """Load popular mods without search query - using pagination."""
         # Reset pagination state
@@ -3362,17 +3354,29 @@ class ModBrowserDialog(QDialog):
         # Clear loading state
         self._loading_mod_ids.clear()
 
-def _thread_is_running(self, t) -> bool:
-    """Return True if QThread is running, without crashing on deleted C++ objects."""
-    try:
-        return t is not None and t.isRunning()
-    except RuntimeError:
-        return False
+    def _thread_is_running(self, t) -> bool:
+        """Return True if QThread is running, without crashing on deleted C++ objects."""
+        try:
+            return t is not None and t.isRunning()
+        except RuntimeError:
+            return False
 
-def _on_search_thread_finished(self):
-    """Reset state when the search thread finishes or is destroyed."""
-    self.search_in_progress = False
-    self.search_thread = None
+    def _on_search_thread_finished(self):
+        """Reset state when the search thread finishes or is destroyed."""
+        self.search_in_progress = False
+        self.search_thread = None
+
+    def _on_page_preload_complete(self, results: list, page: int, source: str):
+        """Handle background preload results for a specific page without touching the UI.
+
+        We only kick off icon preloading for a small subset to warm the cache.
+        """
+        if not results:
+            return
+
+        # Preload icons for a small subset from this page
+        subset = results[:PAGE_ICON_CACHE_SIZE]
+        self._preload_page_mods_icons(subset, source, page, 0)
 
 
 # === Grid Item Widget ===
