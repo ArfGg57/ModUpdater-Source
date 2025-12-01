@@ -2502,8 +2502,8 @@ class ModBrowserDialog(QDialog):
             # Count active threads
             active_count = sum(1 for t in self.icon_threads if t.isRunning())
             if active_count >= self._max_concurrent_loads:
-                # Schedule retry later
-                QTimer.singleShot(200, lambda: self._preload_icons_gradually(results, source))
+                # Schedule retry later - use default params to capture current values
+                QTimer.singleShot(200, lambda r=results, s=source: self._preload_icons_gradually(r, s))
                 return
             
             # Start preloading this icon
@@ -2523,9 +2523,8 @@ class ModBrowserDialog(QDialog):
         self._loading_mod_ids.discard(mod_id)
         # Clean up threads
         self.icon_threads = [t for t in self.icon_threads if t.isRunning()]
-        # Continue preloading
-        QTimer.singleShot(50, lambda: self._preload_icons_gradually(results, source))
-        self._loading_mod_ids.discard(mod_id)
+        # Continue preloading - use default params to capture current values
+        QTimer.singleShot(50, lambda r=results, s=source: self._preload_icons_gradually(r, s))
     
     def _on_background_icon_fetched(self, mod_id: str, source: str, data: bytes):
         """Handle background icon fetch completion."""
