@@ -883,8 +883,8 @@ class IconFetcher(QThread):
             
             if icon_data and self._running:
                 self.icon_fetched.emit(mod_id, icon_data)
-        except Exception:
-            pass
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError):
+            pass  # Silently ignore network errors
         
         self.fetch_complete.emit()
     
@@ -899,8 +899,8 @@ class IconFetcher(QThread):
                 if icon_url:
                     with urllib.request.urlopen(icon_url, timeout=10) as img_response:
                         return img_response.read()
-        except Exception:
-            pass
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError):
+            pass  # Silently ignore network errors
         return None
     
     def stop(self):
@@ -931,7 +931,7 @@ class SimpleIconFetcher(QThread):
                 data = response.read()
                 if data and self._running:
                     self.icon_fetched.emit(self.mod_id, self.source, data)
-        except Exception:
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError):
             pass  # Silently ignore network errors
         
         self.finished_loading.emit(self.mod_id)
@@ -1911,6 +1911,12 @@ class ModBrowserDialog(QDialog):
         'modrinth': {}     # mod_id -> icon_bytes
     }
     
+    # Track icons being preloaded to prevent duplicate loads
+    _preloading_icons = {
+        'curseforge': set(),
+        'modrinth': set()
+    }
+    
     # Flag to track if startup preloading has been initiated
     _startup_preload_started = False
     _startup_preload_threads = []
@@ -1943,14 +1949,24 @@ class ModBrowserDialog(QDialog):
         for mod in results:
             mod_id = mod.get('id', mod.get('slug', ''))
             icon_url = mod.get('icon_url', '')
-            if mod_id and icon_url and mod_id not in cls._icon_cache.get(source, {}):
+            # Check both cache and preloading set to prevent duplicate loads
+            if (mod_id and icon_url and 
+                mod_id not in cls._icon_cache.get(source, {}) and
+                mod_id not in cls._preloading_icons.get(source, set())):
                 cls._preload_single_icon(mod_id, icon_url, source)
     
     @classmethod
     def _preload_single_icon(cls, mod_id: str, icon_url: str, source: str):
         """Preload a single icon in the background."""
+        # Mark as preloading to prevent duplicates
+        if source not in cls._preloading_icons:
+            cls._preloading_icons[source] = set()
+        cls._preloading_icons[source].add(mod_id)
+        
         thread = SimpleIconFetcher(mod_id, icon_url, source)
         thread.icon_fetched.connect(cls._on_preload_icon_fetched)
+        thread.finished_loading.connect(
+            lambda mid=mod_id, s=source: cls._on_preload_complete(mid, s))
         thread.finished.connect(thread.deleteLater)
         cls._startup_preload_threads.append(thread)
         thread.start()
@@ -1961,6 +1977,12 @@ class ModBrowserDialog(QDialog):
         if source not in cls._icon_cache:
             cls._icon_cache[source] = {}
         cls._icon_cache[source][mod_id] = data
+    
+    @classmethod
+    def _on_preload_complete(cls, mod_id: str, source: str):
+        """Handle preload completion - remove from tracking set."""
+        if source in cls._preloading_icons:
+            cls._preloading_icons[source].discard(mod_id)
     
     def __init__(self, existing_ids: List[str], current_version: str = "1.0.0", parent=None):
         super().__init__(parent)
@@ -2393,6 +2415,7 @@ class ModBrowserDialog(QDialog):
             if thread and hasattr(thread, 'item') and thread.item:
                 self._apply_icon_to_item(thread.item, data)
         except RuntimeError:
+            # Qt C++ object was deleted before we could access it
             pass
 
     def _on_icon_load_complete(self, mod_id: str):
@@ -2638,7 +2661,7 @@ class ModBrowserDialog(QDialog):
             if pixmap.loadFromData(data):
                 icon = QIcon(pixmap)
                 item.setIcon(icon)
-        except:
+        except Exception:
             pass
 
     def load_popular_mods(self):
