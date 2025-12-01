@@ -1731,7 +1731,7 @@ class ConfirmDeleteDialog(QDialog):
 
 class ModSearchThread(QThread):
     """Background thread for searching mods from CurseForge/Modrinth."""
-    search_complete = pyqtSignal(list)
+    search_complete = pyqtSignal(list, int)  # results, total_count
     error_occurred = pyqtSignal(str)
     
     def __init__(self, source: str, query: str, version_filter: str = ""):
@@ -1745,18 +1745,18 @@ class ModSearchThread(QThread):
     def run(self):
         try:
             if self.source == 'curseforge':
-                results = self._search_curseforge()
+                results, total_count = self._search_curseforge()
             else:
-                results = self._search_modrinth()
+                results, total_count = self._search_modrinth()
             
             if self._running:
-                self.search_complete.emit(results)
+                self.search_complete.emit(results, total_count)
         except Exception as e:
             if self._running:
                 self.error_occurred.emit(str(e))
     
-    def _search_curseforge(self) -> list:
-        """Search CurseForge for mods."""
+    def _search_curseforge(self) -> tuple:
+        """Search CurseForge for mods. Returns (results, total_count)."""
         # Use curse.tools proxy API
         params = {
             'gameId': '432',  # Minecraft
@@ -1779,6 +1779,9 @@ class ModSearchThread(QThread):
         with urllib.request.urlopen(req, timeout=30) as response:
             data = json.loads(response.read())
             mods = data.get('data', [])
+            # Get total count from pagination info
+            pagination = data.get('pagination', {})
+            total_count = pagination.get('totalCount', 0)
             
             results = []
             for mod in mods:
@@ -1792,10 +1795,10 @@ class ModSearchThread(QThread):
                     'icon_url': mod.get('logo', {}).get('thumbnailUrl', '') if mod.get('logo') else '',
                     'slug': mod.get('slug', '')
                 })
-            return results
+            return results, total_count
     
-    def _search_modrinth(self) -> list:
-        """Search Modrinth for mods."""
+    def _search_modrinth(self) -> tuple:
+        """Search Modrinth for mods. Returns (results, total_count)."""
         facets = [['project_type:mod']]
         if self.version_filter:
             facets.append([f'versions:{self.version_filter}'])
@@ -1817,6 +1820,8 @@ class ModSearchThread(QThread):
         with urllib.request.urlopen(req, timeout=30) as response:
             data = json.loads(response.read())
             hits = data.get('hits', [])
+            # Get total count from API response
+            total_count = data.get('total_hits', 0)
             
             results = []
             for mod in hits:
@@ -1830,7 +1835,7 @@ class ModSearchThread(QThread):
                     'icon_url': mod.get('icon_url', ''),
                     'slug': mod.get('slug', '')
                 })
-            return results
+            return results, total_count
     
     def stop(self):
         self._running = False
@@ -2117,33 +2122,50 @@ class ModBrowserDialog(QDialog):
         self.search_status.setStyleSheet(f"font-size:11px; color:{theme['text_secondary']}; margin:0; padding:0;")
         left_layout.addWidget(self.search_status)
         
-        # Pagination controls
-        pagination_layout = QHBoxLayout()
-        pagination_layout.setSpacing(4)
-        pagination_layout.setContentsMargins(0, 4, 0, 0)
+        # Pagination controls - improved layout and styling
+        pagination_container = QWidget()
+        pagination_container.setStyleSheet(f"""
+            QWidget {{
+                background-color: {theme['bg_tertiary']};
+                border-radius: 8px;
+                padding: 4px;
+            }}
+        """)
+        pagination_layout = QHBoxLayout(pagination_container)
+        pagination_layout.setSpacing(8)
+        pagination_layout.setContentsMargins(8, 6, 8, 6)
         
         # First page button
-        self.first_page_btn = QPushButton("⏮ First")
-        self.first_page_btn.setFixedWidth(70)
+        self.first_page_btn = QPushButton("⏮")
+        self.first_page_btn.setFixedSize(36, 32)
         self.first_page_btn.setToolTip("Go to first page")
         self.first_page_btn.clicked.connect(self._go_to_first_page)
         pagination_layout.addWidget(self.first_page_btn)
         
         # Previous page button
-        self.prev_page_btn = QPushButton("◀ Prev")
-        self.prev_page_btn.setFixedWidth(70)
+        self.prev_page_btn = QPushButton("◀")
+        self.prev_page_btn.setFixedSize(36, 32)
         self.prev_page_btn.setToolTip("Go to previous page")
         self.prev_page_btn.clicked.connect(self._go_to_prev_page)
         pagination_layout.addWidget(self.prev_page_btn)
         
         pagination_layout.addStretch()
         
-        # Page indicator/selector
-        page_select_layout = QHBoxLayout()
-        page_select_layout.setSpacing(4)
+        # Page indicator/selector - styled as a group
+        page_select_widget = QWidget()
+        page_select_widget.setStyleSheet(f"""
+            QWidget {{
+                background-color: {theme['bg_secondary']};
+                border-radius: 6px;
+                padding: 2px 4px;
+            }}
+        """)
+        page_select_layout = QHBoxLayout(page_select_widget)
+        page_select_layout.setSpacing(6)
+        page_select_layout.setContentsMargins(8, 2, 8, 2)
         
-        page_label = QLabel("Page:")
-        page_label.setStyleSheet("font-weight: bold;")
+        page_label = QLabel("Page")
+        page_label.setStyleSheet(f"font-weight: 600; font-size: 12px; color: {theme['text_secondary']};")
         page_select_layout.addWidget(page_label)
         
         self.page_spin = QSpinBox()
@@ -2151,48 +2173,64 @@ class ModBrowserDialog(QDialog):
         self.page_spin.setMaximum(1)
         self.page_spin.setValue(1)
         self.page_spin.setFixedWidth(60)
+        self.page_spin.setStyleSheet(f"""
+            QSpinBox {{
+                background-color: {theme['bg_primary']};
+                border: 1px solid {theme['border']};
+                border-radius: 4px;
+                padding: 2px 4px;
+                font-weight: bold;
+            }}
+            QSpinBox:focus {{
+                border-color: {theme['accent']};
+            }}
+        """)
         self.page_spin.valueChanged.connect(self._on_page_spin_changed)
         page_select_layout.addWidget(self.page_spin)
         
         self.page_total_label = QLabel("of 1")
-        self.page_total_label.setStyleSheet(f"color: {theme['text_secondary']};")
+        self.page_total_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 12px;")
         page_select_layout.addWidget(self.page_total_label)
         
-        pagination_layout.addLayout(page_select_layout)
+        pagination_layout.addWidget(page_select_widget)
         
         pagination_layout.addStretch()
         
         # Next page button
-        self.next_page_btn = QPushButton("Next ▶")
-        self.next_page_btn.setFixedWidth(70)
+        self.next_page_btn = QPushButton("▶")
+        self.next_page_btn.setFixedSize(36, 32)
         self.next_page_btn.setToolTip("Go to next page")
         self.next_page_btn.clicked.connect(self._go_to_next_page)
         pagination_layout.addWidget(self.next_page_btn)
         
         # Last page button
-        self.last_page_btn = QPushButton("Last ⏭")
-        self.last_page_btn.setFixedWidth(70)
+        self.last_page_btn = QPushButton("⏭")
+        self.last_page_btn.setFixedSize(36, 32)
         self.last_page_btn.setToolTip("Go to last page")
         self.last_page_btn.clicked.connect(self._go_to_last_page)
         pagination_layout.addWidget(self.last_page_btn)
         
-        left_layout.addLayout(pagination_layout)
+        left_layout.addWidget(pagination_container)
         
-        # Style pagination buttons
+        # Style pagination buttons - modern compact design
         pagination_btn_style = f"""
             QPushButton {{
-                background-color: {theme['bg_tertiary']};
-                border: 1px solid {theme['border']};
-                border-radius: 4px;
-                padding: 4px 8px;
-                font-size: 12px;
+                background-color: {theme['bg_secondary']};
+                border: none;
+                border-radius: 6px;
+                padding: 4px;
+                font-size: 14px;
+                font-weight: bold;
             }}
             QPushButton:hover {{
                 background-color: {theme['accent']};
                 color: {theme['bg_primary']};
             }}
+            QPushButton:pressed {{
+                background-color: {theme['accent_hover']};
+            }}
             QPushButton:disabled {{
-                background-color: {theme['bg_secondary']};
+                background-color: transparent;
                 color: {theme['text_secondary']};
             }}
         """
@@ -2463,8 +2501,7 @@ class ModBrowserDialog(QDialog):
     # Pagination methods
     def _update_pagination_controls(self):
         """Update pagination controls based on current state."""
-        # Calculate total pages (unknown if we have infinite results from API)
-        # We'll estimate based on whether we have more results
+        # Calculate total pages based on total_results if available
         total_pages = self._estimate_total_pages()
         
         # Update page spinner
@@ -2475,7 +2512,9 @@ class ModBrowserDialog(QDialog):
         self.page_spin.blockSignals(False)
         
         # Update total pages label
-        if self.has_more_results and total_pages <= self.current_page + 1:
+        if self.total_results > 0:
+            self.page_total_label.setText(f"of {total_pages}")
+        elif self.has_more_results:
             self.page_total_label.setText(f"of {total_pages}+")
         else:
             self.page_total_label.setText(f"of {total_pages}")
@@ -2484,9 +2523,10 @@ class ModBrowserDialog(QDialog):
         self.first_page_btn.setEnabled(self.current_page > 0)
         self.prev_page_btn.setEnabled(self.current_page > 0)
         self.next_page_btn.setEnabled(self.has_more_results or self.current_page < total_pages - 1)
-        # Last button is only enabled when we know the total pages (has_more_results is False)
-        # because we can't navigate to the last page if we don't know what it is
-        self.last_page_btn.setEnabled(not self.has_more_results and self.current_page < total_pages - 1)
+        # Last button is enabled when we know the total results from API
+        # This allows navigation to the last page even when we haven't loaded all pages
+        has_known_total = self.total_results > 0
+        self.last_page_btn.setEnabled(has_known_total and self.current_page < total_pages - 1)
     
     def _estimate_total_pages(self) -> int:
         """Estimate total number of pages based on current data."""
@@ -2515,9 +2555,10 @@ class ModBrowserDialog(QDialog):
         self._navigate_to_page(self.current_page + 1)
     
     def _go_to_last_page(self):
-        """Navigate to the last known page."""
-        if self.total_results > 0:
-            last_page = (self.total_results - 1) // SEARCH_PAGE_SIZE
+        """Navigate to the last page based on total results from API."""
+        total_pages = self._estimate_total_pages()
+        if total_pages > 0 and self.current_page < total_pages - 1:
+            last_page = total_pages - 1
             self._navigate_to_page(last_page)
     
     def _on_page_spin_changed(self, value: int):
@@ -2613,10 +2654,14 @@ class ModBrowserDialog(QDialog):
         self.search_thread.error_occurred.connect(self._on_page_load_error)
         self.search_thread.start()
     
-    def _on_page_loaded(self, results: list):
+    def _on_page_loaded(self, results: list, total_count: int = 0):
         """Handle page load completion."""
         self._is_loading_page = False
         source = self._get_selected_source()
+        
+        # Store total results from API
+        if total_count > 0:
+            self.total_results = total_count
         
         # Check if there are more results
         self.has_more_results = len(results) >= SEARCH_PAGE_SIZE
@@ -2757,6 +2802,9 @@ class ModBrowserDialog(QDialog):
         
         # Schedule preloading of the other tab after a short delay
         QTimer.singleShot(ICON_PRELOAD_DELAY_MS, self._start_background_preload)
+        
+        # Schedule background preloading of icons for next pages
+        QTimer.singleShot(ICON_PRELOAD_DELAY_MS * 2, self._preload_next_pages_icons)
     
     def _start_background_preload(self):
         """Start preloading the inactive tab's mods."""
@@ -2769,11 +2817,17 @@ class ModBrowserDialog(QDialog):
         self._preload_thread.search_complete.connect(self._on_preload_complete)
         self._preload_thread.start()
     
-    def _on_preload_complete(self, results: list):
+    def _on_preload_complete(self, results: list, total_count: int = 0):
         """Handle preloaded results from background search."""
         source = self._preload_source
         if not source:
             return
+        
+        # Store total count for this source
+        if not hasattr(self, '_source_total_results'):
+            self._source_total_results = {'curseforge': 0, 'modrinth': 0}
+        if total_count > 0:
+            self._source_total_results[source] = total_count
         
         # Store results for this source (for later display)
         if not hasattr(self, '_source_results'):
@@ -2835,6 +2889,100 @@ class ModBrowserDialog(QDialog):
             self._icon_cache[source] = {}
         self._icon_cache[source][mod_id] = data
     
+    def _preload_next_pages_icons(self):
+        """Preload icons for the first 8 mods on the next MAX_CACHED_PAGES pages.
+        
+        This runs in the background after the initial page load to provide
+        instant icon display when navigating to nearby pages.
+        """
+        source = self._get_selected_source()
+        
+        # Track pages we're preloading
+        if not hasattr(self, '_preloading_pages'):
+            self._preloading_pages = set()
+        
+        # Preload pages 1 through MAX_CACHED_PAGES (page 0 is already loaded)
+        for page in range(1, MAX_CACHED_PAGES + 1):
+            if page not in self._preloading_pages:
+                self._preloading_pages.add(page)
+                # Start preload thread for this page with a staggered delay
+                QTimer.singleShot(page * 500, lambda p=page, s=source: self._preload_page_icons(p, s))
+    
+    def _preload_page_icons(self, page: int, source: str):
+        """Preload icons for a specific page in the background."""
+        if not hasattr(self, '_preload_page_threads'):
+            self._preload_page_threads = []
+        
+        # Create a search thread for this page
+        thread = ModSearchThread(source, "", "")
+        thread.offset = page * SEARCH_PAGE_SIZE
+        thread.search_complete.connect(lambda results, total, p=page, s=source: 
+                                        self._on_page_preload_complete(results, p, s))
+        self._preload_page_threads.append(thread)
+        thread.start()
+    
+    def _on_page_preload_complete(self, results: list, page: int, source: str):
+        """Handle completion of a page preload - cache icons for first 8 mods."""
+        if not results:
+            return
+        
+        # Cache the first PAGE_ICON_CACHE_SIZE icons from this page
+        mods_to_cache = results[:PAGE_ICON_CACHE_SIZE]
+        
+        # Store page info for LRU tracking (ensure attribute exists)
+        if not hasattr(self, '_page_load_order'):
+            self._page_load_order = []
+        if page not in self._page_load_order:
+            self._page_load_order.append(page)
+        
+        # Load icons for these mods gradually
+        self._preload_page_mods_icons(mods_to_cache, source, page)
+    
+    def _preload_page_mods_icons(self, mods: list, source: str, page: int, index: int = 0):
+        """Gradually preload icons for mods from a page."""
+        if index >= len(mods):
+            return
+        
+        mod = mods[index]
+        mod_id = mod.get('id', mod.get('slug', ''))
+        icon_url = mod.get('icon_url', '')
+        
+        # Check if already cached or loading
+        if source in self._icon_cache and mod_id in self._icon_cache[source]:
+            # Already cached, continue to next
+            QTimer.singleShot(10, lambda: self._preload_page_mods_icons(mods, source, page, index + 1))
+            return
+        
+        if mod_id in self._loading_mod_ids:
+            # Currently loading, continue to next
+            QTimer.singleShot(100, lambda: self._preload_page_mods_icons(mods, source, page, index + 1))
+            return
+        
+        if icon_url:
+            self._loading_mod_ids.add(mod_id)
+            try:
+                thread = SimpleIconFetcher(mod_id, icon_url, source)
+                thread.icon_fetched.connect(self._on_background_icon_fetched)
+                thread.finished_loading.connect(
+                    lambda mid=mod_id, m=mods, s=source, p=page, i=index: 
+                        self._on_page_mod_icon_complete(mid, m, s, p, i))
+                self.icon_threads.append(thread)
+                thread.start()
+            except Exception:
+                self._loading_mod_ids.discard(mod_id)
+                QTimer.singleShot(50, lambda: self._preload_page_mods_icons(mods, source, page, index + 1))
+        else:
+            # No icon URL, continue to next
+            QTimer.singleShot(10, lambda: self._preload_page_mods_icons(mods, source, page, index + 1))
+    
+    def _on_page_mod_icon_complete(self, mod_id: str, mods: list, source: str, page: int, index: int):
+        """Handle completion of a page mod icon preload."""
+        self._loading_mod_ids.discard(mod_id)
+        # Clean up threads
+        self.icon_threads = [t for t in self.icon_threads if t.isRunning()]
+        # Continue to next mod
+        QTimer.singleShot(50, lambda: self._preload_page_mods_icons(mods, source, page, index + 1))
+    
     def load_popular_mods(self):
         """Load popular mods without search query - using pagination."""
         # Reset pagination state
@@ -2865,8 +3013,11 @@ class ModBrowserDialog(QDialog):
         
         # Check if we have preloaded results for this source
         if hasattr(self, '_source_results') and source in self._source_results and self._source_results[source]:
-            # Use preloaded results
-            self._on_page_loaded(self._source_results[source])
+            # Use preloaded results and total count if available
+            total_count = 0
+            if hasattr(self, '_source_total_results') and source in self._source_total_results:
+                total_count = self._source_total_results[source]
+            self._on_page_loaded(self._source_results[source], total_count)
             return
         
         # Load first page
@@ -2939,10 +3090,10 @@ class ModBrowserDialog(QDialog):
         # Load first page with current query
         self._load_page(0)
     
-    def on_search_complete(self, results: list):
+    def on_search_complete(self, results: list, total_count: int = 0):
         """Handle search results with intelligent icon caching (legacy compatibility)."""
         # Redirect to page loaded handler
-        self._on_page_loaded(results)
+        self._on_page_loaded(results, total_count)
     
     def on_search_error(self, error: str):
         """Handle search error."""
