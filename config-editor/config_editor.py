@@ -131,17 +131,14 @@ MC_VERSION_OPTIONS = [
 
 # Sort options for mod sources
 CURSEFORGE_SORT_OPTIONS = {
-    "Relevance": "1",
     "Downloads": "6",
     "Popularity": "2",
     "Creation Date": "11",
     "Latest Update": "3",
     "Name (A-Z)": "4",
-    "Name (Z-A)": "5",
 }
 
 MODRINTH_SORT_OPTIONS = {
-    "Relevance": "relevance",
     "Downloads": "downloads",
     "Followers": "follows",
     "Date Published": "newest",
@@ -1382,15 +1379,21 @@ class LoadingDialog(QDialog):
     
     def setup_ui(self):
         self.setWindowTitle("Loading...")
-        self.setFixedSize(300, 120)
+        self.setFixedSize(300, 100)
         self.setModal(True)
+        # Remove window frame and make background transparent for true rounded corners
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        
+        # Main container with rounded corners
+        self.container = QFrame(self)
+        self.container.setGeometry(0, 0, 300, 100)
         
         self._apply_theme()
         
-        layout = QVBoxLayout(self)
-        layout.setSpacing(16)
-        layout.setContentsMargins(24, 24, 24, 24)
+        layout = QVBoxLayout(self.container)
+        layout.setSpacing(12)
+        layout.setContentsMargins(24, 20, 24, 20)
         
         # Loading text
         self.label = QLabel("Loading...")
@@ -1398,17 +1401,19 @@ class LoadingDialog(QDialog):
         self.label.setObjectName("loadingLabel")
         layout.addWidget(self.label)
         
-        # Progress bar
+        # Progress bar - improved styling
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)  # Indeterminate
         self.progress.setObjectName("loadingProgress")
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(6)
         layout.addWidget(self.progress)
     
     def _apply_theme(self):
         """Apply the current theme to the loading dialog."""
         theme = get_current_theme()
-        self.setStyleSheet(f"""
-            QDialog {{
+        self.container.setStyleSheet(f"""
+            QFrame {{
                 background-color: {theme['bg_primary']};
                 border: 2px solid {theme['accent']};
                 border-radius: 12px;
@@ -1422,13 +1427,12 @@ class LoadingDialog(QDialog):
             QProgressBar#loadingProgress {{
                 background-color: {theme['bg_secondary']};
                 border: none;
-                border-radius: 4px;
-                text-align: center;
-                height: 8px;
+                border-radius: 3px;
             }}
             QProgressBar#loadingProgress::chunk {{
-                background-color: {theme['accent']};
-                border-radius: 4px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 {theme['accent']}, stop:0.5 {theme['accent_hover']}, stop:1 {theme['accent']});
+                border-radius: 3px;
             }}
         """)
     
@@ -1542,14 +1546,19 @@ class APITokenGuideDialog(QDialog):
 class ThemeCreationDialog(QDialog):
     """Dialog for creating a new custom theme."""
     
-    def __init__(self, parent=None, base_theme_key: str = "dark"):
+    def __init__(self, parent=None, base_theme_key: str = "dark", edit_theme_key: str = None):
         super().__init__(parent)
         self.base_theme_key = base_theme_key
-        self.theme_data = dict(THEMES.get(base_theme_key, THEMES["dark"]))
+        self.edit_theme_key = edit_theme_key  # If editing existing custom theme
+        if edit_theme_key and edit_theme_key in THEMES:
+            self.theme_data = dict(THEMES[edit_theme_key])
+        else:
+            self.theme_data = dict(THEMES.get(base_theme_key, THEMES["dark"]))
         self.setup_ui()
     
     def setup_ui(self):
-        self.setWindowTitle("Create Custom Theme")
+        title = "Edit Custom Theme" if self.edit_theme_key else "Create Custom Theme"
+        self.setWindowTitle(title)
         self.setMinimumSize(600, 700)
         self.setModal(True)
         
@@ -1557,7 +1566,7 @@ class ThemeCreationDialog(QDialog):
         layout.setSpacing(16)
         layout.setContentsMargins(24, 24, 24, 24)
         
-        header = QLabel("🎨 Create Custom Theme")
+        header = QLabel(f"🎨 {title}")
         header.setStyleSheet("font-size: 18px; font-weight: bold;")
         layout.addWidget(header)
         
@@ -1566,21 +1575,26 @@ class ThemeCreationDialog(QDialog):
         name_layout.addWidget(QLabel("Theme Name:"))
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("My Custom Theme")
+        # If editing, pre-fill the name
+        if self.edit_theme_key:
+            self.name_edit.setText(self.theme_data.get('name', ''))
+            self.name_edit.setReadOnly(True)  # Can't change name when editing
         name_layout.addWidget(self.name_edit)
         layout.addLayout(name_layout)
         
-        # Base theme selection
-        base_layout = QHBoxLayout()
-        base_layout.addWidget(QLabel("Base Theme:"))
-        self.base_combo = QComboBox()
-        for key, theme in THEMES.items():
-            self.base_combo.addItem(theme['name'], key)
-        idx = self.base_combo.findData(self.base_theme_key)
-        if idx >= 0:
-            self.base_combo.setCurrentIndex(idx)
-        self.base_combo.currentIndexChanged.connect(self._on_base_changed)
-        base_layout.addWidget(self.base_combo)
-        layout.addLayout(base_layout)
+        # Base theme selection (only for new themes)
+        if not self.edit_theme_key:
+            base_layout = QHBoxLayout()
+            base_layout.addWidget(QLabel("Base Theme:"))
+            self.base_combo = QComboBox()
+            for key, theme in THEMES.items():
+                self.base_combo.addItem(theme['name'], key)
+            idx = self.base_combo.findData(self.base_theme_key)
+            if idx >= 0:
+                self.base_combo.setCurrentIndex(idx)
+            self.base_combo.currentIndexChanged.connect(self._on_base_changed)
+            base_layout.addWidget(self.base_combo)
+            layout.addLayout(base_layout)
         
         # Color editors in scroll area
         scroll = QScrollArea()
@@ -1593,6 +1607,7 @@ class ThemeCreationDialog(QDialog):
         
         # Color fields
         self.color_edits = {}
+        self.color_buttons = {}
         color_labels = {
             'bg_primary': 'Background Primary',
             'bg_secondary': 'Background Secondary',
@@ -1610,7 +1625,9 @@ class ThemeCreationDialog(QDialog):
         
         for key, label in color_labels.items():
             row = QHBoxLayout()
-            row.addWidget(QLabel(f"{label}:"))
+            lbl = QLabel(f"{label}:")
+            lbl.setMinimumWidth(140)
+            row.addWidget(lbl)
             
             edit = QLineEdit()
             edit.setPlaceholderText("#000000")
@@ -1619,6 +1636,14 @@ class ThemeCreationDialog(QDialog):
             edit.textChanged.connect(lambda text, k=key: self._on_color_changed(k, text))
             self.color_edits[key] = edit
             row.addWidget(edit)
+            
+            # Color picker button
+            pick_btn = QPushButton("🎨")
+            pick_btn.setFixedSize(28, 28)
+            pick_btn.setToolTip("Pick color")
+            pick_btn.clicked.connect(lambda checked, k=key: self._pick_color(k))
+            self.color_buttons[key] = pick_btn
+            row.addWidget(pick_btn)
             
             # Color preview
             preview = QLabel()
@@ -1651,14 +1676,29 @@ class ThemeCreationDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(cancel_btn)
         btn_layout.addStretch()
-        create_btn = QPushButton("Create Theme")
+        action_btn_text = "Save Theme" if self.edit_theme_key else "Create Theme"
+        create_btn = QPushButton(action_btn_text)
         create_btn.setObjectName("primaryButton")
         create_btn.clicked.connect(self._create_theme)
         btn_layout.addWidget(create_btn)
         layout.addLayout(btn_layout)
     
+    def _pick_color(self, key: str):
+        """Open a color picker dialog for the specified color key."""
+        from PyQt6.QtWidgets import QColorDialog
+        from PyQt6.QtGui import QColor
+        
+        current_color = self.theme_data.get(key, '#000000')
+        color = QColorDialog.getColor(QColor(current_color), self, f"Select {key} color")
+        if color.isValid():
+            hex_color = color.name().upper()
+            self.color_edits[key].setText(hex_color)
+            self._on_color_changed(key, hex_color)
+    
     def _on_base_changed(self):
         """Update colors when base theme changes."""
+        if not hasattr(self, 'base_combo'):
+            return
         key = self.base_combo.currentData()
         if key and key in THEMES:
             self.theme_data = dict(THEMES[key])
@@ -1693,20 +1733,23 @@ class ThemeCreationDialog(QDialog):
         QApplication.instance().setStyleSheet(generate_stylesheet(self.theme_data))
     
     def _create_theme(self):
-        """Create the theme and save it."""
+        """Create or update the theme and save it."""
         name = self.name_edit.text().strip()
         if not name:
             self.error_label.setText("Please enter a theme name")
             return
         
-        # Generate a unique key for the theme
-        key = re.sub(r'[^a-z0-9_]', '_', name.lower())
-        key = f"custom_{key}"
-        
-        # Check for duplicate names
-        if key in THEMES:
-            self.error_label.setText("A theme with this name already exists")
-            return
+        # For editing, use the existing key
+        if self.edit_theme_key:
+            key = self.edit_theme_key
+        else:
+            # Generate a unique key for the theme
+            key = re.sub(r'[^a-z0-9_]', '_', name.lower())
+            key = f"custom_{key}"
+            # Check for duplicate names (only for new themes)
+            if key in THEMES:
+                self.error_label.setText("A theme with this name already exists")
+                return
         
         # Validate all colors
         for color_key, edit in self.color_edits.items():
@@ -1720,7 +1763,9 @@ class ThemeCreationDialog(QDialog):
         self.accept()
     
     def get_theme_key(self) -> str:
-        """Get the key of the created theme."""
+        """Get the key of the created/edited theme."""
+        if self.edit_theme_key:
+            return self.edit_theme_key
         name = self.name_edit.text().strip()
         return f"custom_{re.sub(r'[^a-z0-9_]', '_', name.lower())}"
 
@@ -2229,8 +2274,8 @@ class ModSearchThread(QThread):
     def _search_curseforge(self) -> tuple:
         """Search CurseForge for mods. Returns (results, total_count)."""
         # Use curse.tools proxy API
-        # Default to relevance (sortField 1) if not specified
-        sort_field = self.sort_by if self.sort_by else CURSEFORGE_SORT_OPTIONS.get("Relevance", "1")
+        # Default to Downloads (sortField 6) since Relevance was removed
+        sort_field = self.sort_by if self.sort_by else CURSEFORGE_SORT_OPTIONS.get("Downloads", "6")
         params = {
             'gameId': '432',  # Minecraft
             'classId': '6',   # Mods
@@ -2286,8 +2331,8 @@ class ModSearchThread(QThread):
         if self.loader_filter:
             facets.append([f'categories:{self.loader_filter.lower()}'])
         
-        # Default to relevance if not specified
-        sort_index = self.sort_by if self.sort_by else MODRINTH_SORT_OPTIONS.get("Relevance", "relevance")
+        # Default to downloads if not specified
+        sort_index = self.sort_by if self.sort_by else MODRINTH_SORT_OPTIONS.get("Downloads", "downloads")
         params = {
             'facets': json.dumps(facets),
             'limit': str(SEARCH_PAGE_SIZE),
@@ -2489,6 +2534,13 @@ class ModBrowserDialog(QDialog):
     _startup_preload_started = False
     _startup_preload_threads = []
     
+    # Class-level session state (persists across dialog instances until program close)
+    _session_filters = {
+        'curseforge': {'version': '', 'sort': 0, 'loader': 0, 'page': 0},
+        'modrinth': {'version': '', 'sort': 0, 'loader': 0, 'page': 0}
+    }
+    _session_active_source = 'curseforge'  # Track which source tab was last active
+    
     @classmethod
     def start_startup_preload(cls):
         """Preload first page(s) icons for both sources at program startup."""
@@ -2596,15 +2648,13 @@ class ModBrowserDialog(QDialog):
         # Debounce timer for search text changes (auto-search while typing)
         self._search_debounce_timer = None
         
-        # Track filter state per session (not saved after exit)
-        self._session_filters = {
-            'curseforge': {'version': '', 'sort': 0, 'loader': 0},
-            'modrinth': {'version': '', 'sort': 0, 'loader': 0}
-        }
-        
         self.search_in_progress = False
         
         self.setup_ui()
+        
+        # Restore session state (source tab and filters)
+        self._restore_session_state()
+        
         # Load popular mods on startup
         QTimer.singleShot(100, self.load_popular_mods)
 
@@ -2681,8 +2731,16 @@ class ModBrowserDialog(QDialog):
 
         self.version_filter = QComboBox()
         self.version_filter.setEditable(True)  # Allow custom version input
-        self.version_filter.setFixedWidth(100)
+        self.version_filter.setMinimumWidth(100)  # Use minimum width instead of fixed
+        self.version_filter.setMaximumWidth(120)  # Allow some expansion for dropdown button
         self.version_filter.setPlaceholderText("Any")
+        # Style to ensure dropdown button is visible
+        self.version_filter.setStyleSheet("""
+            QComboBox::drop-down {
+                width: 24px;
+                border: none;
+            }
+        """)
         for version in MC_VERSION_OPTIONS:
             self.version_filter.addItem(version if version else "Any")
         self.version_filter.setCurrentIndex(0)
@@ -2744,7 +2802,7 @@ class ModBrowserDialog(QDialog):
         self.search_status.setStyleSheet(f"font-size:11px; color:{theme['text_secondary']}; margin:0; padding:0;")
         left_layout.addWidget(self.search_status)
 
-        # Pagination controls - improved layout and styling
+        # Pagination controls - improved layout with arrows next to page number
         pagination_container = QWidget()
         pagination_container.setStyleSheet(f"""
             QWidget {{
@@ -2754,47 +2812,46 @@ class ModBrowserDialog(QDialog):
             }}
         """)
         pagination_layout = QHBoxLayout(pagination_container)
-        pagination_layout.setSpacing(8)
+        pagination_layout.setSpacing(4)
         pagination_layout.setContentsMargins(8, 6, 8, 6)
 
-        # First page button
+        # First page button (far left)
         self.first_page_btn = QPushButton("⏮")
-        self.first_page_btn.setFixedSize(36, 32)
+        self.first_page_btn.setFixedSize(28, 26)
         self.first_page_btn.setToolTip("Go to first page")
         self.first_page_btn.clicked.connect(self._go_to_first_page)
         pagination_layout.addWidget(self.first_page_btn)
 
-        # Previous page button
-        self.prev_page_btn = QPushButton("◀")
-        self.prev_page_btn.setFixedSize(36, 32)
-        self.prev_page_btn.setToolTip("Go to previous page")
-        self.prev_page_btn.clicked.connect(self._go_to_prev_page)
-        pagination_layout.addWidget(self.prev_page_btn)
-
         pagination_layout.addStretch()
 
-        # Page indicator/selector - styled as a group
-        page_select_widget = QWidget()
-        page_select_widget.setStyleSheet(f"""
+        # Center group: prev arrow, page selector, next arrow - all together
+        center_widget = QWidget()
+        center_widget.setStyleSheet(f"""
             QWidget {{
                 background-color: {theme['bg_secondary']};
                 border-radius: 6px;
-                padding: 2px 4px;
             }}
         """)
-        page_select_layout = QHBoxLayout(page_select_widget)
-        page_select_layout.setSpacing(6)
-        page_select_layout.setContentsMargins(8, 2, 8, 2)
+        center_layout = QHBoxLayout(center_widget)
+        center_layout.setSpacing(2)
+        center_layout.setContentsMargins(4, 2, 4, 2)
+
+        # Previous page button
+        self.prev_page_btn = QPushButton("◀")
+        self.prev_page_btn.setFixedSize(28, 26)
+        self.prev_page_btn.setToolTip("Go to previous page")
+        self.prev_page_btn.clicked.connect(self._go_to_prev_page)
+        center_layout.addWidget(self.prev_page_btn)
 
         page_label = QLabel("Page")
-        page_label.setStyleSheet(f"font-weight: 600; font-size: 12px; color: {theme['text_secondary']};")
-        page_select_layout.addWidget(page_label)
+        page_label.setStyleSheet(f"font-weight: 600; font-size: 12px; color: {theme['text_secondary']}; padding: 0 4px;")
+        center_layout.addWidget(page_label)
 
         self.page_spin = QSpinBox()
         self.page_spin.setMinimum(1)
         self.page_spin.setMaximum(1)
         self.page_spin.setValue(1)
-        self.page_spin.setFixedWidth(60)
+        self.page_spin.setFixedWidth(55)
         self.page_spin.setStyleSheet(f"""
             QSpinBox {{
                 background-color: {theme['bg_primary']};
@@ -2808,26 +2865,26 @@ class ModBrowserDialog(QDialog):
             }}
         """)
         self.page_spin.valueChanged.connect(self._on_page_spin_changed)
-        page_select_layout.addWidget(self.page_spin)
+        center_layout.addWidget(self.page_spin)
 
         self.page_total_label = QLabel("of 1")
-        self.page_total_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 12px;")
-        page_select_layout.addWidget(self.page_total_label)
-
-        pagination_layout.addWidget(page_select_widget)
-
-        pagination_layout.addStretch()
+        self.page_total_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 12px; padding: 0 4px;")
+        center_layout.addWidget(self.page_total_label)
 
         # Next page button
         self.next_page_btn = QPushButton("▶")
-        self.next_page_btn.setFixedSize(36, 32)
+        self.next_page_btn.setFixedSize(28, 26)
         self.next_page_btn.setToolTip("Go to next page")
         self.next_page_btn.clicked.connect(self._go_to_next_page)
-        pagination_layout.addWidget(self.next_page_btn)
+        center_layout.addWidget(self.next_page_btn)
 
-        # Last page button
+        pagination_layout.addWidget(center_widget)
+
+        pagination_layout.addStretch()
+
+        # Last page button (far right)
         self.last_page_btn = QPushButton("⏭")
-        self.last_page_btn.setFixedSize(36, 32)
+        self.last_page_btn.setFixedSize(28, 26)
         self.last_page_btn.setToolTip("Go to last page")
         self.last_page_btn.clicked.connect(self._go_to_last_page)
         pagination_layout.addWidget(self.last_page_btn)
@@ -2839,9 +2896,9 @@ class ModBrowserDialog(QDialog):
             QPushButton {{
                 background-color: {theme['bg_secondary']};
                 border: none;
-                border-radius: 6px;
-                padding: 4px;
-                font-size: 14px;
+                border-radius: 4px;
+                padding: 2px;
+                font-size: 12px;
                 font-weight: bold;
             }}
             QPushButton:hover {{
@@ -2898,7 +2955,8 @@ class ModBrowserDialog(QDialog):
 
         self.versions_combo = QComboBox()
         self.versions_combo.setMinimumWidth(300)
-        self.versions_combo.setMaxVisibleItems(10)
+        self.versions_combo.setMaxVisibleItems(15)  # Show more items for easier scrolling
+        self.versions_combo.view().setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.versions_combo.currentIndexChanged.connect(self.on_version_combo_changed)
         version_layout.addWidget(self.versions_combo, 1)
 
@@ -2953,11 +3011,11 @@ class ModBrowserDialog(QDialog):
     
     def _on_filter_changed(self):
         """Handle filter dropdown changes - refresh the mod list immediately."""
-        # Save current filter state for this source (session only)
+        # Save current filter state for this source to class-level session storage
         source = self._get_selected_source()
-        self._session_filters[source]['version'] = self.version_filter.currentText()
-        self._session_filters[source]['sort'] = self.sort_combo.currentIndex()
-        self._session_filters[source]['loader'] = self.loader_combo.currentIndex()
+        ModBrowserDialog._session_filters[source]['version'] = self.version_filter.currentText()
+        ModBrowserDialog._session_filters[source]['sort'] = self.sort_combo.currentIndex()
+        ModBrowserDialog._session_filters[source]['loader'] = self.loader_combo.currentIndex()
         
         # Trigger search with new filters
         self.search_mods()
@@ -3084,10 +3142,52 @@ class ModBrowserDialog(QDialog):
 
     def _select_source(self, source: str):
         """Select a source and update UI."""
+        # Save current source to session state
+        ModBrowserDialog._session_active_source = source
         self.curseforge_source_btn.setChecked(source == 'curseforge')
         self.modrinth_source_btn.setChecked(source == 'modrinth')
         self._update_source_button_styles()
         self.on_source_changed()
+    
+    def _restore_session_state(self):
+        """Restore session state (source tab and filters) from class-level storage."""
+        # Restore active source tab
+        source = ModBrowserDialog._session_active_source
+        self.curseforge_source_btn.setChecked(source == 'curseforge')
+        self.modrinth_source_btn.setChecked(source == 'modrinth')
+        self._update_source_button_styles()
+        
+        # Update sort options for the current source
+        self._update_sort_options()
+        
+        # Restore filters for the current source
+        saved_filters = ModBrowserDialog._session_filters.get(source, {})
+        
+        self.version_filter.blockSignals(True)
+        self.sort_combo.blockSignals(True)
+        self.loader_combo.blockSignals(True)
+        
+        if saved_filters.get('version'):
+            idx = self.version_filter.findText(saved_filters['version'])
+            if idx >= 0:
+                self.version_filter.setCurrentIndex(idx)
+            else:
+                self.version_filter.setCurrentIndex(0)
+        else:
+            self.version_filter.setCurrentIndex(0)
+            
+        if saved_filters.get('sort', 0) < self.sort_combo.count():
+            self.sort_combo.setCurrentIndex(saved_filters.get('sort', 0))
+        if saved_filters.get('loader', 0) < self.loader_combo.count():
+            self.loader_combo.setCurrentIndex(saved_filters.get('loader', 0))
+        
+        # Restore page state
+        if saved_filters.get('page', 0) > 0:
+            self.current_page = saved_filters.get('page', 0)
+        
+        self.version_filter.blockSignals(False)
+        self.sort_combo.blockSignals(False)
+        self.loader_combo.blockSignals(False)
 
     def _update_source_button_styles(self):
         """Update source button styles to show selected state."""
@@ -3112,7 +3212,7 @@ class ModBrowserDialog(QDialog):
             for name in MODRINTH_SORT_OPTIONS.keys():
                 self.sort_combo.addItem(name)
         
-        # Default to Relevance
+        # Default to Downloads (first item)
         self.sort_combo.setCurrentIndex(0)
         self.sort_combo.blockSignals(False)
 
@@ -3122,9 +3222,9 @@ class ModBrowserDialog(QDialog):
         sort_name = self.sort_combo.currentText()
         
         if source == 'curseforge':
-            return CURSEFORGE_SORT_OPTIONS.get(sort_name, CURSEFORGE_SORT_OPTIONS.get("Relevance", "1"))
+            return CURSEFORGE_SORT_OPTIONS.get(sort_name, CURSEFORGE_SORT_OPTIONS.get("Downloads", "6"))
         else:
-            return MODRINTH_SORT_OPTIONS.get(sort_name, MODRINTH_SORT_OPTIONS.get("Relevance", "relevance"))
+            return MODRINTH_SORT_OPTIONS.get(sort_name, MODRINTH_SORT_OPTIONS.get("Downloads", "downloads"))
 
     def _preload_next_page_icons(self, page: int):
         """Preload icons for the next page in the background."""
@@ -3171,6 +3271,7 @@ class ModBrowserDialog(QDialog):
         """Update pagination controls based on current state."""
         # Calculate total pages based on total_results if available
         total_pages = self._estimate_total_pages()
+        source = self._get_selected_source()
 
         # Update page spinner
         self.page_spin.blockSignals(True)
@@ -3190,11 +3291,16 @@ class ModBrowserDialog(QDialog):
         # Enable/disable navigation buttons
         self.first_page_btn.setEnabled(self.current_page > 0)
         self.prev_page_btn.setEnabled(self.current_page > 0)
-        self.next_page_btn.setEnabled(self.has_more_results or self.current_page < total_pages - 1)
+        
+        # For CurseForge, disable next button on page 200 (index 199, max page limit)
+        at_curseforge_limit = source == 'curseforge' and self.current_page >= CURSEFORGE_MAX_PAGES - 1
+        can_go_next = (self.has_more_results or self.current_page < total_pages - 1) and not at_curseforge_limit
+        self.next_page_btn.setEnabled(can_go_next)
+        
         # Last button is enabled when we know the total results from API
         # This allows navigation to the last page even when we haven't loaded all pages
         has_known_total = self.total_results > 0
-        self.last_page_btn.setEnabled(has_known_total and self.current_page < total_pages - 1)
+        self.last_page_btn.setEnabled(has_known_total and self.current_page < total_pages - 1 and not at_curseforge_limit)
 
     def _estimate_total_pages(self) -> int:
         """Estimate total number of pages based on current data."""
@@ -3252,6 +3358,9 @@ class ModBrowserDialog(QDialog):
             'total': self.total_results,
             'has_more': self.has_more_results
         }
+        
+        # Also save page to class-level session filters
+        ModBrowserDialog._session_filters[source]['page'] = target_page
 
         self.current_page = target_page
         
@@ -3346,12 +3455,15 @@ class ModBrowserDialog(QDialog):
         self._update_pagination_controls()
 
         # Update status
-        page_start = self.current_page * SEARCH_PAGE_SIZE + 1
-        page_end = page_start + len(results) - 1
-        status_text = f"Showing {page_start}-{page_end}"
-        if self.total_results > 0:
-            status_text += f" of {self.total_results}"
-        self.search_status.setText(status_text)
+        if len(results) == 0:
+            self.search_status.setText("No results found")
+        else:
+            page_start = self.current_page * SEARCH_PAGE_SIZE + 1
+            page_end = page_start + len(results) - 1
+            status_text = f"Showing {page_start}-{page_end}"
+            if self.total_results > 0:
+                status_text += f" of {self.total_results}"
+            self.search_status.setText(status_text)
 
         # Load icons for visible items
         QTimer.singleShot(50, self._load_visible_icons)
@@ -3365,6 +3477,15 @@ class ModBrowserDialog(QDialog):
     def _display_page_results(self, results: list, source: str):
         """Display page results with cached icons applied immediately."""
         self.results_list.clear()
+        
+        # Show "No results" message if empty
+        if len(results) == 0:
+            theme = get_current_theme()
+            no_results_item = QListWidgetItem("No results found\nTry a different search or filter")
+            no_results_item.setFlags(no_results_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)  # Make not selectable
+            no_results_item.setForeground(QColor(theme['text_secondary']))
+            self.results_list.addItem(no_results_item)
+            return
         
         # Create a placeholder icon for items without cached icons
         placeholder_pixmap = self._create_placeholder_icon()
@@ -3468,12 +3589,12 @@ class ModBrowserDialog(QDialog):
         # Update sort options for the new source
         self._update_sort_options()
         
-        # Restore session filter state for this source (without triggering search)
+        # Restore session filter state for this source from class-level storage
         self.version_filter.blockSignals(True)
         self.sort_combo.blockSignals(True)
         self.loader_combo.blockSignals(True)
         
-        saved_filters = self._session_filters.get(source, {})
+        saved_filters = ModBrowserDialog._session_filters.get(source, {})
         if saved_filters.get('version'):
             idx = self.version_filter.findText(saved_filters['version'])
             if idx >= 0:
@@ -5112,20 +5233,10 @@ class VersionEditorPage(QWidget):
         layout = QHBoxLayout(self.delete_tab)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Left: List of deletes with safety mode toggle
+        # Left: List of deletes
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(16, 16, 8, 16)
-        
-        # Safety mode checkbox at the top
-        theme = get_current_theme()
-        self.safety_mode_check = QCheckBox("Safety Mode")
-        self.safety_mode_check.setChecked(True)  # Default to enabled
-        self.safety_mode_check.setToolTip("When enabled, deletes will only remove files from the specified install location.\n"
-                                           "This prevents accidental deletion of important files.")
-        self.safety_mode_check.setStyleSheet(f"font-weight: bold; color: {theme['success']};")
-        self.safety_mode_check.stateChanged.connect(self._on_safety_mode_changed)
-        left_layout.addWidget(self.safety_mode_check)
 
         self.deletes_list = QListWidget()
         self.deletes_list.itemClicked.connect(self.on_delete_selected)
@@ -5204,28 +5315,52 @@ class VersionEditorPage(QWidget):
         header.setStyleSheet("font-size: 18px; font-weight: bold;")
         layout.addWidget(header)
 
-        # Version icon
-        icon_group = QGroupBox("Version Icon (Optional)")
-        icon_layout = QHBoxLayout(icon_group)
-
         theme = get_current_theme()
+        
+        # Safety Mode section
+        safety_group = QGroupBox("Safety")
+        safety_layout = QVBoxLayout(safety_group)
+        
+        self.safety_mode_check = QCheckBox("Safety Mode")
+        self.safety_mode_check.setChecked(True)  # Default to enabled
+        self.safety_mode_check.setToolTip("When enabled, deletes will only remove files from the specified install location.\n"
+                                           "This prevents accidental deletion of important files.")
+        self.safety_mode_check.setStyleSheet(f"font-weight: bold; color: {theme['success']};")
+        self.safety_mode_check.stateChanged.connect(self._on_safety_mode_changed)
+        safety_layout.addWidget(self.safety_mode_check)
+        
+        safety_note = QLabel("Safety mode prevents accidental deletion of important files")
+        safety_note.setStyleSheet(f"font-size: 11px; color: {theme['text_secondary']};")
+        safety_layout.addWidget(safety_note)
+        
+        layout.addWidget(safety_group)
+
+        # Version icon - improved layout with icon and buttons in a row
+        icon_group = QGroupBox("Version Icon (Optional)")
+        icon_main_layout = QVBoxLayout(icon_group)
+        
+        icon_row = QHBoxLayout()
+        icon_row.setSpacing(16)
+
         self.version_icon_preview = QLabel()
         self.version_icon_preview.setFixedSize(64, 64)
         self.version_icon_preview.setStyleSheet(f"border: 2px dashed {theme['border']}; border-radius: 8px;")
         self.version_icon_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.version_icon_preview.setText("No Icon")
-        icon_layout.addWidget(self.version_icon_preview)
+        icon_row.addWidget(self.version_icon_preview)
 
         icon_btn_layout = QVBoxLayout()
+        icon_btn_layout.setSpacing(8)
         select_icon_btn = QPushButton("Select Icon...")
         select_icon_btn.clicked.connect(self.select_version_icon)
         icon_btn_layout.addWidget(select_icon_btn)
         clear_icon_btn = QPushButton("Clear")
         clear_icon_btn.clicked.connect(self.clear_version_icon)
         icon_btn_layout.addWidget(clear_icon_btn)
-        icon_btn_layout.addStretch()
-        icon_layout.addLayout(icon_btn_layout)
-        icon_layout.addStretch()
+        icon_row.addLayout(icon_btn_layout)
+        icon_row.addStretch()
+        
+        icon_main_layout.addLayout(icon_row)
 
         layout.addWidget(icon_group)
         layout.addStretch()
@@ -6313,6 +6448,220 @@ class ConfigurationPage(QWidget):
         pass  # Could add unsaved indicator
 
 
+# === Theme Page ===
+class ThemePage(QWidget):
+    """Theme page for managing application themes."""
+    theme_changed = pyqtSignal(str)  # Emits the new theme key
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setup_ui()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        
+        header = QLabel("🎨 Theme")
+        header.setObjectName("headerLabel")
+        layout.addWidget(header)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout(scroll_widget)
+        scroll_layout.setSpacing(20)
+        
+        # Theme Selection
+        theme_group = QGroupBox("Select Theme")
+        theme_layout = QVBoxLayout(theme_group)
+        
+        self.theme_combo = QComboBox()
+        self._populate_theme_combo()
+        self.theme_combo.currentIndexChanged.connect(self.on_theme_changed)
+        theme_layout.addWidget(self.theme_combo)
+        
+        scroll_layout.addWidget(theme_group)
+        
+        # Custom Theme Management
+        custom_group = QGroupBox("Custom Themes")
+        custom_layout = QVBoxLayout(custom_group)
+        
+        create_btn = QPushButton("✨ Create New Custom Theme...")
+        create_btn.setObjectName("primaryButton")
+        create_btn.clicked.connect(self._create_custom_theme)
+        custom_layout.addWidget(create_btn)
+        
+        # List of custom themes for editing/deleting
+        self.custom_themes_list = QListWidget()
+        self.custom_themes_list.setMaximumHeight(150)
+        self._populate_custom_themes_list()
+        custom_layout.addWidget(self.custom_themes_list)
+        
+        btn_layout = QHBoxLayout()
+        self.edit_theme_btn = QPushButton("✏️ Edit Selected")
+        self.edit_theme_btn.clicked.connect(self._edit_custom_theme)
+        self.edit_theme_btn.setEnabled(False)
+        btn_layout.addWidget(self.edit_theme_btn)
+        
+        self.delete_theme_btn = QPushButton("🗑️ Delete Selected")
+        self.delete_theme_btn.setObjectName("dangerButton")
+        self.delete_theme_btn.clicked.connect(self._delete_custom_theme)
+        self.delete_theme_btn.setEnabled(False)
+        btn_layout.addWidget(self.delete_theme_btn)
+        
+        btn_layout.addStretch()
+        custom_layout.addLayout(btn_layout)
+        
+        self.custom_themes_list.currentRowChanged.connect(self._on_custom_theme_selected)
+        
+        scroll_layout.addWidget(custom_group)
+        
+        # Theme preview info
+        preview_group = QGroupBox("Current Theme Preview")
+        preview_layout = QVBoxLayout(preview_group)
+        
+        theme = get_current_theme()
+        self.preview_container = QWidget()
+        preview_inner = QHBoxLayout(self.preview_container)
+        preview_inner.setSpacing(8)
+        
+        # Color swatches
+        for color_key in ['bg_primary', 'bg_secondary', 'accent', 'text_primary', 'success', 'danger']:
+            swatch = QLabel()
+            swatch.setFixedSize(32, 32)
+            swatch.setStyleSheet(f"background-color: {theme.get(color_key, '#000')}; border: 1px solid #888; border-radius: 4px;")
+            swatch.setToolTip(color_key)
+            preview_inner.addWidget(swatch)
+        
+        preview_inner.addStretch()
+        preview_layout.addWidget(self.preview_container)
+        
+        scroll_layout.addWidget(preview_group)
+        scroll_layout.addStretch()
+        
+        scroll.setWidget(scroll_widget)
+        layout.addWidget(scroll)
+    
+    def _populate_theme_combo(self):
+        """Populate the theme combo box with all themes."""
+        self.theme_combo.blockSignals(True)
+        self.theme_combo.clear()
+        for key, theme in THEMES.items():
+            self.theme_combo.addItem(theme['name'], key)
+        self.theme_combo.blockSignals(False)
+    
+    def _populate_custom_themes_list(self):
+        """Populate the list of custom themes."""
+        self.custom_themes_list.clear()
+        for key, theme in THEMES.items():
+            if key.startswith('custom_'):
+                self.custom_themes_list.addItem(theme['name'])
+                self.custom_themes_list.item(self.custom_themes_list.count() - 1).setData(Qt.ItemDataRole.UserRole, key)
+    
+    def _on_custom_theme_selected(self, row: int):
+        """Enable/disable edit and delete buttons based on selection."""
+        has_selection = row >= 0
+        self.edit_theme_btn.setEnabled(has_selection)
+        self.delete_theme_btn.setEnabled(has_selection)
+    
+    def _create_custom_theme(self):
+        """Open dialog to create a new custom theme."""
+        current_key = self.get_theme()
+        dialog = ThemeCreationDialog(self, base_theme_key=current_key)
+        if dialog.exec():
+            new_key = dialog.get_theme_key()
+            self._populate_theme_combo()
+            self._populate_custom_themes_list()
+            # Select the new theme
+            idx = self.theme_combo.findData(new_key)
+            if idx >= 0:
+                self.theme_combo.setCurrentIndex(idx)
+    
+    def _edit_custom_theme(self):
+        """Open dialog to edit the selected custom theme."""
+        item = self.custom_themes_list.currentItem()
+        if not item:
+            return
+        theme_key = item.data(Qt.ItemDataRole.UserRole)
+        if not theme_key:
+            return
+        
+        dialog = ThemeCreationDialog(self, edit_theme_key=theme_key)
+        if dialog.exec():
+            self._populate_theme_combo()
+            self._populate_custom_themes_list()
+            # Refresh theme if editing the current theme
+            if self.get_theme() == theme_key:
+                self.theme_changed.emit(theme_key)
+    
+    def _delete_custom_theme(self):
+        """Delete the selected custom theme."""
+        item = self.custom_themes_list.currentItem()
+        if not item:
+            return
+        theme_key = item.data(Qt.ItemDataRole.UserRole)
+        if not theme_key:
+            return
+        
+        # Confirm deletion
+        reply = QMessageBox.question(
+            self, "Delete Theme",
+            f"Are you sure you want to delete the theme '{item.text()}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            # Switch to default theme if deleting current
+            if self.get_theme() == theme_key:
+                self.set_theme('light')
+                self.theme_changed.emit('light')
+            
+            # Remove from THEMES dict
+            if theme_key in THEMES:
+                del THEMES[theme_key]
+            
+            # Remove from custom themes file
+            save_custom_themes()
+            
+            self._populate_theme_combo()
+            self._populate_custom_themes_list()
+    
+    def set_theme(self, theme_key: str):
+        """Set the current theme in the combo box."""
+        idx = self.theme_combo.findData(theme_key)
+        if idx >= 0:
+            self.theme_combo.blockSignals(True)
+            self.theme_combo.setCurrentIndex(idx)
+            self.theme_combo.blockSignals(False)
+            self._update_preview()
+    
+    def get_theme(self) -> str:
+        """Get the currently selected theme key."""
+        return self.theme_combo.currentData() or 'light'
+    
+    def on_theme_changed(self):
+        """Handle theme selection change."""
+        theme_key = self.get_theme()
+        self._update_preview()
+        self.theme_changed.emit(theme_key)
+    
+    def _update_preview(self):
+        """Update the theme preview swatches."""
+        theme = get_current_theme()
+        swatches = self.preview_container.findChildren(QLabel)
+        color_keys = ['bg_primary', 'bg_secondary', 'accent', 'text_primary', 'success', 'danger']
+        for swatch, color_key in zip(swatches, color_keys):
+            swatch.setStyleSheet(f"background-color: {theme.get(color_key, '#000')}; border: 1px solid #888; border-radius: 4px;")
+    
+    def refresh_themes(self):
+        """Refresh the theme lists (call after theme changes)."""
+        self._populate_theme_combo()
+        self._populate_custom_themes_list()
+
+
 # === Settings Page ===
 class SettingsPage(QWidget):
     """Settings page for app configuration."""
@@ -6338,18 +6687,6 @@ class SettingsPage(QWidget):
         scroll_widget = QWidget()
         scroll_layout = QVBoxLayout(scroll_widget)
         scroll_layout.setSpacing(20)
-        
-        # Theme Selection
-        theme_group = QGroupBox("Theme")
-        theme_layout = QFormLayout(theme_group)
-        
-        self.theme_combo = QComboBox()
-        for key, theme in THEMES.items():
-            self.theme_combo.addItem(theme['name'], key)
-        self.theme_combo.currentIndexChanged.connect(self.on_theme_changed)
-        theme_layout.addRow("Color Theme:", self.theme_combo)
-        
-        scroll_layout.addWidget(theme_group)
         
         # GitHub Settings
         github_group = QGroupBox("GitHub Repository")
@@ -6385,17 +6722,6 @@ class SettingsPage(QWidget):
     
     def set_repo_url(self, url: str):
         self.repo_url_label.setText(url if url else "Not configured")
-    
-    def set_theme(self, theme_key: str):
-        index = self.theme_combo.findData(theme_key)
-        if index >= 0:
-            self.theme_combo.setCurrentIndex(index)
-    
-    def get_theme(self) -> str:
-        return self.theme_combo.currentData()
-    
-    def on_theme_changed(self):
-        self.settings_changed.emit()
     
     def reconfigure_github(self):
         self.reconfigure_requested.emit()  # Emit specific signal for reconfigure
@@ -6459,6 +6785,7 @@ class MainWindow(QMainWindow):
         self.nav_list = QListWidget()
         self.nav_list.addItem("📦 Versions")
         self.nav_list.addItem("🔧 Configuration")
+        self.nav_list.addItem("🎨 Theme")
         self.nav_list.addItem("⚙️ Settings")
         self.nav_list.setCurrentRow(0)
         self.nav_list.currentRowChanged.connect(self.on_nav_changed)
@@ -6501,9 +6828,13 @@ class MainWindow(QMainWindow):
         self.config_page.config_changed.connect(self.on_config_changed)
         self.stack.addWidget(self.config_page)
         
+        # Theme Page
+        self.theme_page = ThemePage()
+        self.theme_page.theme_changed.connect(self.on_theme_changed)
+        self.stack.addWidget(self.theme_page)
+        
         # Settings Page
         self.settings_page = SettingsPage()
-        self.settings_page.settings_changed.connect(self.on_settings_changed)
         self.settings_page.reconfigure_requested.connect(self.reconfigure_github)
         self.stack.addWidget(self.settings_page)
         
@@ -6865,7 +7196,10 @@ class MainWindow(QMainWindow):
         """
         
         QApplication.instance().setStyleSheet(stylesheet)
-        self.settings_page.set_theme(theme_key)
+        
+        # Update theme page if it exists
+        if hasattr(self, 'theme_page'):
+            self.theme_page.set_theme(theme_key)
         
         # Refresh any visible grids to update their styling
         self.version_selection_page.refresh_grid()
@@ -6881,6 +7215,8 @@ class MainWindow(QMainWindow):
         elif index == 1:
             self.stack.setCurrentWidget(self.config_page)
         elif index == 2:
+            self.stack.setCurrentWidget(self.theme_page)
+        elif index == 3:
             self.stack.setCurrentWidget(self.settings_page)
     
     def show_version_selection(self):
@@ -7089,11 +7425,10 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"Failed to save version locally: {e}")
     
-    def on_settings_changed(self):
-        """Handle settings change."""
-        new_theme = self.settings_page.get_theme()
-        if new_theme != self.current_theme:
-            self.apply_theme(new_theme)
+    def on_theme_changed(self, theme_key: str):
+        """Handle theme change from theme page."""
+        if theme_key != self.current_theme:
+            self.apply_theme(theme_key)
             self.save_editor_config()
     
     def reconfigure_github(self):
