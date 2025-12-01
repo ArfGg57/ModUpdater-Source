@@ -2929,7 +2929,9 @@ class ModBrowserDialog(QDialog):
         # Cache the first PAGE_ICON_CACHE_SIZE icons from this page
         mods_to_cache = results[:PAGE_ICON_CACHE_SIZE]
         
-        # Store page info for LRU tracking
+        # Store page info for LRU tracking (ensure attribute exists)
+        if not hasattr(self, '_page_load_order'):
+            self._page_load_order = []
         if page not in self._page_load_order:
             self._page_load_order.append(page)
         
