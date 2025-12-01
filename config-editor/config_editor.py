@@ -1888,9 +1888,7 @@ class ModBrowserDialog(QDialog):
         self._loaded_icons = set()  # Set of item indices that have loaded icons
         self._visible_item_count = 8  # Approximate number of visible items (will be updated)
         self._icon_load_timer = None  # Timer for sequential loading
-        self._current_loading_index = 0  # Current index in the queue being loaded
         self._icon_cache = {}  # Cache: source -> {item_text -> icon_bytes}
-        self._pending_icon_items = {}  # Map item_text -> QListWidgetItem for deferred icon setting
         
         self.setup_ui()
         # Load popular mods on startup
@@ -2114,8 +2112,11 @@ class ModBrowserDialog(QDialog):
         visible_count = last_visible - first_visible + 1
         self._visible_item_count = max(visible_count, 8)  # Update visible count
         
-        # Calculate the range to load: visible + buffer (2x visible)
-        buffer_size = visible_count
+        # Calculate the range to load: visible items + buffer
+        # Buffer = visible_count items before and after visible range
+        # Total loaded = visible_count + 2 * visible_count = 3x visible (or 2x visible total with overlap)
+        # This ensures we load approximately 2x the visible count total
+        buffer_size = visible_count  # Buffer equals visible count for 2x total
         load_start = max(0, first_visible - buffer_size)
         load_end = min(self.results_list.count() - 1, last_visible + buffer_size)
         
@@ -2159,9 +2160,6 @@ class ModBrowserDialog(QDialog):
             data = self._icon_cache[source][item_key]
             self._apply_icon_to_item(item, data)
             return
-        
-        # Store reference for when icon loads
-        self._pending_icon_items[item_key] = item
         
         # Load icon
         try:
@@ -2287,7 +2285,6 @@ class ModBrowserDialog(QDialog):
         self._icon_load_queue = []
         self._queued_indices = set()
         self._loaded_icons = set()
-        self._pending_icon_items = {}
         if self._icon_load_timer:
             self._icon_load_timer.stop()
         
@@ -2332,7 +2329,6 @@ class ModBrowserDialog(QDialog):
         self._icon_load_queue = []
         self._queued_indices = set()
         self._loaded_icons = set()
-        self._pending_icon_items = {}
         if self._icon_load_timer:
             self._icon_load_timer.stop()
         
@@ -2356,7 +2352,6 @@ class ModBrowserDialog(QDialog):
         self._icon_load_queue = []
         self._queued_indices = set()
         self._loaded_icons = set()
-        self._pending_icon_items = {}
         if self._icon_load_timer:
             self._icon_load_timer.stop()
         
