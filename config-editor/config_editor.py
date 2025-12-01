@@ -777,15 +777,15 @@ class RemoteImageTextBrowser(QTextBrowser):
         
         # Start loading pending images
         self._start_image_loading()
-    
+
     def _start_image_loading(self):
         """Start loading pending images."""
         for url in list(self._pending_urls):
             if url not in self._pending_loads:
                 thread = ImageLoaderThread(url)
                 thread.image_loaded.connect(self._on_image_loaded)
-                # Use default argument to capture url value correctly
-                thread.finished.connect(lambda _, u=url: self._on_load_finished(u))
+                # Use a no-arg lambda that captures url so finished (which emits no args) works
+                thread.finished.connect(lambda url=url: self._on_load_finished(url))
                 self._pending_loads[url] = thread
                 thread.start()
     
