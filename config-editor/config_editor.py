@@ -727,14 +727,14 @@ class RemoteImageTextBrowser(QTextBrowser):
     
     def setHtml(self, html: str):
         """Override setHtml to preprocess and queue image loading."""
-        # Clear previous pending loads
+        # Clear previous pending loads and wait for them to finish
         for thread in self._pending_loads.values():
             thread.stop()
+            thread.wait(100)  # Wait up to 100ms for each thread to finish
         self._pending_loads.clear()
         self._pending_urls.clear()
         
         # Find all image URLs in the HTML
-        import re
         img_pattern = r'<img[^>]+src=["\']([^"\']+)["\']'
         urls = re.findall(img_pattern, html, re.IGNORECASE)
         
@@ -759,22 +759,22 @@ class RemoteImageTextBrowser(QTextBrowser):
             if url not in self._pending_loads:
                 thread = ImageLoaderThread(url)
                 thread.image_loaded.connect(self._on_image_loaded)
-                thread.finished.connect(lambda u=url: self._on_load_finished(u))
+                # Use default argument to capture url value correctly
+                thread.finished.connect(lambda _, u=url: self._on_load_finished(u))
                 self._pending_loads[url] = thread
                 thread.start()
     
     def _on_image_loaded(self, url: str, image: QImage):
         """Handle image loaded from thread."""
         self._image_cache[url] = image
-        # Trigger a document reload to show the newly loaded image
-        html = self.toHtml()
-        if url in html:
-            # Re-set the document to refresh images
-            cursor_pos = self.textCursor().position()
-            scroll_pos = self.verticalScrollBar().value()
-            super().setHtml(html)
-            # Restore scroll position
-            self.verticalScrollBar().setValue(scroll_pos)
+        # Add the resource to the document directly to avoid full reload
+        if PYQT_VERSION == 6:
+            resource_type = QTextDocument.ResourceType.ImageResource
+        else:
+            resource_type = QTextDocument.ImageResource
+        self.document().addResource(resource_type, QUrl(url), image)
+        # Force a repaint to show the newly loaded image
+        self.viewport().update()
     
     def _on_load_finished(self, url: str):
         """Handle load finished."""
