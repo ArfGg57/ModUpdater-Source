@@ -1842,7 +1842,6 @@ class SetupDialog(QDialog):
         if theme_key and theme_key in THEMES:
             set_current_theme(theme_key)
             QApplication.instance().setStyleSheet(generate_stylesheet(THEMES[theme_key]))
-        layout.addLayout(button_layout)
     
     def show_token_guide(self):
         """Show the API token creation guide."""
