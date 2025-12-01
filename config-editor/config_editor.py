@@ -44,8 +44,8 @@ try:
         QStyle, QSizePolicy, QGridLayout, QProgressDialog, QInputDialog,
         QMenu, QWidgetAction, QProgressBar
     )
-    from PyQt6.QtCore import Qt, QSize, pyqtSignal, QThread, QTimer, QByteArray
-    from PyQt6.QtGui import QFont, QColor, QPalette, QIcon, QAction, QPixmap, QPainter, QImage
+    from PyQt6.QtCore import Qt, QSize, pyqtSignal, QThread, QTimer, QByteArray, QUrl
+    from PyQt6.QtGui import QFont, QColor, QPalette, QIcon, QAction, QPixmap, QPainter, QImage, QTextDocument
     PYQT_VERSION = 6
 except ImportError:
     try:
@@ -59,8 +59,8 @@ except ImportError:
             QStyle, QSizePolicy, QGridLayout, QProgressDialog, QInputDialog,
             QMenu, QWidgetAction, QProgressBar
         )
-        from PyQt5.QtCore import Qt, QSize, pyqtSignal, QThread, QTimer, QByteArray
-        from PyQt5.QtGui import QFont, QColor, QPalette, QIcon, QPixmap, QPainter, QImage
+        from PyQt5.QtCore import Qt, QSize, pyqtSignal, QThread, QTimer, QByteArray, QUrl
+        from PyQt5.QtGui import QFont, QColor, QPalette, QIcon, QPixmap, QPainter, QImage, QTextDocument
         from PyQt5.QtWidgets import QAction
         PYQT_VERSION = 5
     except ImportError:
@@ -367,13 +367,14 @@ QComboBox QAbstractItemView {{
     border-radius: 6px;
     selection-background-color: {theme['accent']};
     selection-color: {theme['bg_primary']};
-    padding: 4px;
-    max-height: 300px;
+    padding: 2px;
+    margin: 0px;
 }}
 
 QComboBox QAbstractItemView::item {{
-    padding: 6px 10px;
-    min-height: 24px;
+    padding: 4px 8px;
+    min-height: 20px;
+    margin: 0px;
 }}
 
 QComboBox QAbstractItemView::item:hover {{
@@ -682,6 +683,125 @@ class GitHubAPI:
             return [b['name'] for b in branches]
         except:
             return ["main"]
+
+
+# === Image Loader Thread ===
+class ImageLoaderThread(QThread):
+    """Background thread for loading remote images."""
+    image_loaded = pyqtSignal(str, QImage)  # url, image
+    
+    def __init__(self, url: str):
+        super().__init__()
+        self.url = url
+        self._running = True
+    
+    def run(self):
+        """Fetch image from URL."""
+        if not self._running:
+            return
+        try:
+            req = urllib.request.Request(self.url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = response.read()
+                if data and self._running:
+                    image = QImage()
+                    image.loadFromData(data)
+                    if not image.isNull():
+                        self.image_loaded.emit(self.url, image)
+        except Exception as e:
+            print(f"Failed to load image from {self.url}: {e}")
+    
+    def stop(self):
+        self._running = False
+
+
+# === Custom TextBrowser with Remote Image Support ===
+class RemoteImageTextBrowser(QTextBrowser):
+    """QTextBrowser subclass that can load and display remote images."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._image_cache = {}  # url -> QImage
+        self._pending_loads = {}  # url -> ImageLoaderThread
+        self._pending_urls = set()  # URLs that need to be loaded
+    
+    def setHtml(self, html: str):
+        """Override setHtml to preprocess and queue image loading."""
+        # Clear previous pending loads
+        for thread in self._pending_loads.values():
+            thread.stop()
+        self._pending_loads.clear()
+        self._pending_urls.clear()
+        
+        # Find all image URLs in the HTML
+        import re
+        img_pattern = r'<img[^>]+src=["\']([^"\']+)["\']'
+        urls = re.findall(img_pattern, html, re.IGNORECASE)
+        
+        # Queue loading for URLs not in cache
+        for url in urls:
+            if url.startswith(('http://', 'https://')):
+                if url in self._image_cache:
+                    # Already cached, will be served by loadResource
+                    pass
+                elif url not in self._pending_loads:
+                    self._pending_urls.add(url)
+        
+        # Set the HTML first
+        super().setHtml(html)
+        
+        # Start loading pending images
+        self._start_image_loading()
+    
+    def _start_image_loading(self):
+        """Start loading pending images."""
+        for url in list(self._pending_urls):
+            if url not in self._pending_loads:
+                thread = ImageLoaderThread(url)
+                thread.image_loaded.connect(self._on_image_loaded)
+                thread.finished.connect(lambda u=url: self._on_load_finished(u))
+                self._pending_loads[url] = thread
+                thread.start()
+    
+    def _on_image_loaded(self, url: str, image: QImage):
+        """Handle image loaded from thread."""
+        self._image_cache[url] = image
+        # Trigger a document reload to show the newly loaded image
+        html = self.toHtml()
+        if url in html:
+            # Re-set the document to refresh images
+            cursor_pos = self.textCursor().position()
+            scroll_pos = self.verticalScrollBar().value()
+            super().setHtml(html)
+            # Restore scroll position
+            self.verticalScrollBar().setValue(scroll_pos)
+    
+    def _on_load_finished(self, url: str):
+        """Handle load finished."""
+        if url in self._pending_loads:
+            del self._pending_loads[url]
+        if url in self._pending_urls:
+            self._pending_urls.discard(url)
+    
+    def loadResource(self, type_: int, url: QUrl) -> object:
+        """Override to provide cached images."""
+        if PYQT_VERSION == 6:
+            image_type = QTextDocument.ResourceType.ImageResource.value
+        else:
+            image_type = QTextDocument.ImageResource
+        
+        if type_ == image_type:
+            url_str = url.toString()
+            if url_str in self._image_cache:
+                return self._image_cache[url_str]
+            # Return empty image for pending loads
+            if url_str.startswith(('http://', 'https://')):
+                if url_str not in self._pending_urls:
+                    self._pending_urls.add(url_str)
+                    self._start_image_loading()
+                return QImage()  # Return empty image while loading
+        
+        return super().loadResource(type_, url)
 
 
 # === Icon Fetcher ===
@@ -1834,25 +1954,26 @@ class ModBrowserDialog(QDialog):
         self.mod_info_group = QGroupBox("📌 Selected Mod Details")
         mod_info_layout = QVBoxLayout(self.mod_info_group)
         
-        # Header info (name, author, downloads, summary) - always visible at top
+        # Header info (name, author, downloads, summary) - compact at top
         header_widget = QFrame()
         header_widget.setStyleSheet(f"""
             QFrame {{
                 background-color: {theme['bg_tertiary']};
                 border: 1px solid {theme['border']};
                 border-radius: 8px;
-                padding: 12px;
+                padding: 8px;
             }}
             QLabel {{
                 background-color: transparent;
             }}
         """)
+        header_widget.setMaximumHeight(120)  # Limit header height to give more space to description
         header_layout = QFormLayout(header_widget)
-        header_layout.setContentsMargins(12, 12, 12, 12)
-        header_layout.setSpacing(8)
+        header_layout.setContentsMargins(8, 8, 8, 8)
+        header_layout.setSpacing(4)
         
         self.mod_name_label = QLabel("(Select a mod from the list)")
-        self.mod_name_label.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {theme['accent']};")
+        self.mod_name_label.setStyleSheet(f"font-weight: bold; font-size: 13px; color: {theme['accent']};")
         header_layout.addRow("Name:", self.mod_name_label)
         
         self.mod_author_label = QLabel("")
@@ -1863,6 +1984,7 @@ class ModBrowserDialog(QDialog):
         
         self.mod_summary_label = QLabel("")
         self.mod_summary_label.setWordWrap(True)
+        self.mod_summary_label.setMaximumHeight(40)  # Limit summary height
         header_layout.addRow("Summary:", self.mod_summary_label)
         
         mod_info_layout.addWidget(header_widget)
@@ -1872,8 +1994,8 @@ class ModBrowserDialog(QDialog):
         description_header.setStyleSheet("font-weight: bold; margin-top: 8px;")
         mod_info_layout.addWidget(description_header)
         
-        # Use QTextBrowser for rich HTML content with images
-        self.description_browser = QTextBrowser()
+        # Use RemoteImageTextBrowser for rich HTML content with images (loads remote images)
+        self.description_browser = RemoteImageTextBrowser()
         self.description_browser.setOpenExternalLinks(True)  # Allow clicking links
         self.description_browser.setMinimumHeight(150)
         theme = get_current_theme()
@@ -3406,8 +3528,8 @@ class VersionEditorPage(QWidget):
         theme = get_current_theme()
         self.mod_right_container.setStyleSheet(f"""
             QFrame {{
-                background-color: {theme['bg_tertiary']};
-                border: 2px solid {theme['border']};
+                background-color: {theme['bg_secondary']};
+                border: 1px solid {theme['border']};
                 border-radius: 8px;
                 margin: 4px;
             }}
@@ -3486,8 +3608,8 @@ class VersionEditorPage(QWidget):
         theme = get_current_theme()
         self.file_right_container.setStyleSheet(f"""
             QFrame {{
-                background-color: {theme['bg_tertiary']};
-                border: 2px solid {theme['border']};
+                background-color: {theme['bg_secondary']};
+                border: 1px solid {theme['border']};
                 border-radius: 8px;
                 margin: 4px;
             }}
@@ -3564,8 +3686,8 @@ class VersionEditorPage(QWidget):
         theme = get_current_theme()
         self.delete_right_container.setStyleSheet(f"""
             QFrame {{
-                background-color: {theme['bg_tertiary']};
-                border: 2px solid {theme['border']};
+                background-color: {theme['bg_secondary']};
+                border: 1px solid {theme['border']};
                 border-radius: 8px;
                 margin: 4px;
             }}
@@ -4169,8 +4291,8 @@ class VersionEditorPage(QWidget):
         theme = get_current_theme()
         container_style = f"""
             QFrame {{
-                background-color: {theme['bg_tertiary']};
-                border: 2px solid {theme['border']};
+                background-color: {theme['bg_secondary']};
+                border: 1px solid {theme['border']};
                 border-radius: 8px;
                 margin: 4px;
             }}
