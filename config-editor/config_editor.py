@@ -31,7 +31,6 @@ import urllib.parse
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
-from functools import partial
 import threading
 
 try:
@@ -85,10 +84,13 @@ INFINITE_SCROLL_THRESHOLD = 0.9  # Load more when scrolled to 90% of list
 MAX_DESCRIPTION_IMAGE_WIDTH = 400  # Maximum width for images in mod descriptions
 
 # Icon loading settings
-ICON_MAX_CONCURRENT_LOADS = 6  # Maximum number of concurrent icon downloads
-ICON_LOAD_TIMER_INTERVAL_MS = 20  # Interval for processing icon load queue (ms)
-ICON_PRELOAD_TIMER_INTERVAL_MS = 100  # Interval for background preloading (ms)
-ICON_PRELOAD_DELAY_MS = 500  # Delay before starting background preload (ms)
+ICON_MAX_CONCURRENT_LOADS = 4  # Maximum number of concurrent icon downloads (reduced for stability)
+ICON_LOAD_DEBOUNCE_MS = 50  # Debounce delay for scroll events (ms)
+ICON_PRELOAD_DELAY_MS = 300  # Delay before starting background preload (ms)
+
+# Placeholder icon (base64-encoded gray box with package emoji concept)
+# This is a simple 48x48 gray placeholder that indicates "loading"
+PLACEHOLDER_ICON_COLOR = "#3d3d4d"  # Subtle gray that works on dark themes
 
 # CurseForge API configuration
 # Using the curse.tools proxy for CurseForge API (doesn't require API key)
@@ -843,10 +845,40 @@ class RemoteImageTextBrowser(QTextBrowser):
         return super().loadResource(type_, url)
 
 
-# === Icon Fetcher ===
+# === Icon Loading System ===
+# Simplified icon loading with placeholder support and efficient caching
+
+def create_placeholder_pixmap(size: int = 48) -> QPixmap:
+    """Create a simple placeholder pixmap for loading state."""
+    pixmap = QPixmap(size, size)
+    pixmap.fill(QColor(PLACEHOLDER_ICON_COLOR))
+    
+    # Draw a subtle loading indicator (circle)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen_color = QColor("#5a5a6a")
+    painter.setPen(pen_color)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    margin = size // 6
+    painter.drawEllipse(margin, margin, size - 2 * margin, size - 2 * margin)
+    painter.end()
+    
+    return pixmap
+
+# Global placeholder icon (created once and reused)
+_placeholder_pixmap = None
+
+def get_placeholder_icon() -> QIcon:
+    """Get the shared placeholder icon."""
+    global _placeholder_pixmap
+    if _placeholder_pixmap is None:
+        _placeholder_pixmap = create_placeholder_pixmap(48)
+    return QIcon(_placeholder_pixmap)
+
+
 class IconFetcher(QThread):
-    """Background thread for fetching mod icons."""
-    icon_fetched = pyqtSignal(str, bytes)
+    """Background thread for fetching mod icons from source info."""
+    icon_fetched = pyqtSignal(str, bytes)  # mod_id, icon_bytes
     fetch_complete = pyqtSignal()
     
     def __init__(self, mod_info: dict):
@@ -886,7 +918,7 @@ class IconFetcher(QThread):
                 if icon_url:
                     with urllib.request.urlopen(icon_url, timeout=10) as img_response:
                         return img_response.read()
-        except:
+        except Exception:
             pass
         return None
     
@@ -894,6 +926,40 @@ class IconFetcher(QThread):
         self._running = False
 
 
+class SimpleIconFetcher(QThread):
+    """Simplified icon fetcher that emits mod_id and source for cache lookup."""
+    icon_fetched = pyqtSignal(str, str, bytes)  # mod_id, source, icon_bytes
+    finished_loading = pyqtSignal(str)  # mod_id
+    
+    def __init__(self, mod_id: str, icon_url: str, source: str):
+        super().__init__()
+        self.mod_id = mod_id
+        self.icon_url = icon_url
+        self.source = source
+        self._running = True
+    
+    def run(self):
+        """Fetch icon from URL."""
+        if not self._running or not self.icon_url:
+            self.finished_loading.emit(self.mod_id)
+            return
+        
+        try:
+            req = urllib.request.Request(self.icon_url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=8) as response:
+                data = response.read()
+                if data and self._running:
+                    self.icon_fetched.emit(self.mod_id, self.source, data)
+        except Exception:
+            pass  # Silently ignore network errors
+        
+        self.finished_loading.emit(self.mod_id)
+    
+    def stop(self):
+        self._running = False
+
+
+# Legacy classes for backward compatibility
 class ModIconFetcher(QThread):
     """Background thread for fetching mod icons from URLs (used in mod browser)."""
     icon_fetched = pyqtSignal(object, bytes)  # QListWidgetItem, icon_bytes
@@ -926,7 +992,7 @@ class ModIconFetcher(QThread):
 
 
 class _BackgroundIconFetcher(QThread):
-    """Background thread for preloading icons without a list item."""
+    """Background thread for preloading icons without a list item (legacy)."""
     icon_fetched = pyqtSignal(str, str, bytes)  # mod_id, source, icon_bytes
     
     def __init__(self, mod_id: str, icon_url: str, source: str):
@@ -1914,7 +1980,7 @@ class ModBrowserDialog(QDialog):
         self.search_thread: Optional[ModSearchThread] = None
         self.version_thread: Optional[ModVersionFetchThread] = None
         self.description_thread: Optional[ModDescriptionFetchThread] = None  # Thread for fetching description
-        self.icon_threads: List[ModIconFetcher] = []  # Track icon loading threads
+        self.icon_threads: List[QThread] = []  # Track icon loading threads
         self.selected_mod = None
         self.selected_version = None
         self.all_search_results = []  # Store all results for infinite scroll
@@ -1922,29 +1988,19 @@ class ModBrowserDialog(QDialog):
         self.is_loading_more = False
         self.has_more_results = True
         
-        # Improved icon loading system
+        # Simplified icon loading system
         # Global icon cache: source -> {mod_id -> icon_bytes}
-        # Using mod_id as key for reliable caching across searches
         self._icon_cache = {}  # Cache: source -> {mod_id -> icon_bytes}
         
-        # Per-source search results for background preloading
-        self._source_results = {'curseforge': [], 'modrinth': []}
-        self._source_loaded_indices = {'curseforge': set(), 'modrinth': set()}
-        
-        # Parallel loading with concurrency control
-        self._max_concurrent_loads = ICON_MAX_CONCURRENT_LOADS
-        self._active_icon_threads = []  # Currently running icon load threads
-        self._icon_load_queue = []  # Priority queue: (priority, item, icon_url, mod_id, source)
-        self._queued_mod_ids = set()  # Set of mod_ids already queued for O(1) duplicate checks
+        # Loading state tracking (simplified)
         self._loading_mod_ids = set()  # Set of mod_ids currently being loaded
+        self._max_concurrent_loads = ICON_MAX_CONCURRENT_LOADS
         
-        # Visible item tracking
-        self._visible_item_count = 8  # Approximate number of visible items
-        self._icon_load_timer = None  # Timer for processing icon queue
+        # Debounce timer for scroll events
+        self._scroll_debounce_timer = None
         
-        # Background preload for inactive tab
-        self._preload_timer = None  # Timer for preloading other tab
-        self._preload_source = None  # Source currently being preloaded
+        # Background preload
+        self._preload_source = None
         
         self.setup_ui()
         # Load popular mods on startup and preload both tabs
@@ -2119,15 +2175,11 @@ class ModBrowserDialog(QDialog):
         # Update source button styles (after creation)
         self._update_source_button_styles()
         
-        # Set up icon load timer for parallel loading with concurrency control
-        self._icon_load_timer = QTimer()
-        self._icon_load_timer.timeout.connect(self._process_icon_queue)
-        self._icon_load_timer.setInterval(ICON_LOAD_TIMER_INTERVAL_MS)
-        
-        # Set up preload timer for background loading of other tab
-        self._preload_timer = QTimer()
-        self._preload_timer.timeout.connect(self._process_preload_queue)
-        self._preload_timer.setInterval(ICON_PRELOAD_TIMER_INTERVAL_MS)
+        # Set up debounce timer for scroll events (simplified icon loading)
+        self._scroll_debounce_timer = QTimer()
+        self._scroll_debounce_timer.setSingleShot(True)
+        self._scroll_debounce_timer.timeout.connect(self._load_visible_icons)
+        self._scroll_debounce_timer.setInterval(ICON_LOAD_DEBOUNCE_MS)
     
     def _on_scroll(self, value):
         """Handle scroll event for infinite scrolling and lazy icon loading."""
@@ -2136,8 +2188,9 @@ class ModBrowserDialog(QDialog):
         if scrollbar.maximum() > 0 and value >= scrollbar.maximum() * INFINITE_SCROLL_THRESHOLD:
             self._load_more_results()
         
-        # Trigger lazy loading of icons for newly visible items
-        self._update_visible_icons()
+        # Debounce icon loading to avoid excessive processing during fast scrolls
+        if self._scroll_debounce_timer:
+            self._scroll_debounce_timer.start()
     
     def _get_visible_range(self) -> Tuple[int, int]:
         """Get the range of currently visible item indices using efficient indexAt() method."""
@@ -2164,177 +2217,120 @@ class ModBrowserDialog(QDialog):
         
         return (first_visible, last_visible)
     
-    def _update_visible_icons(self):
-        """Update which icons should be loaded based on visibility.
+    def _load_visible_icons(self):
+        """Load icons for currently visible items (simplified approach).
         
-        Uses a priority-based system:
-        - Visible items get priority 0 (highest)
-        - Buffer items get priority 1
-        - Items are loaded in parallel up to max_concurrent_loads
+        This replaces the complex queue-based system with a simpler approach:
+        1. Find visible items
+        2. Check cache first
+        3. Start loading for items not in cache (up to concurrency limit)
         """
         if self.results_list.count() == 0:
             return
         
         first_visible, last_visible = self._get_visible_range()
-        visible_count = last_visible - first_visible + 1
-        self._visible_item_count = max(visible_count, 8)
+        source = self._get_selected_source()
         
-        # Calculate the range to load with buffer
-        buffer_size = visible_count  # Buffer equals visible count for 2x total
+        # Calculate buffer zone
+        visible_count = last_visible - first_visible + 1
+        buffer_size = min(visible_count, 4)  # Small buffer
         load_start = max(0, first_visible - buffer_size)
         load_end = min(self.results_list.count() - 1, last_visible + buffer_size)
         
-        source = self._get_selected_source()
-        loaded_indices = self._source_loaded_indices.get(source, set())
+        # Count active threads
+        active_count = sum(1 for t in self.icon_threads if t.isRunning())
         
-        # Clear queue and rebuild with priorities - prioritize visible items
-        # Keep items that are already loading
-        new_queue = []
-        new_queued_mod_ids = set()
+        # Process items in visible range first, then buffer
+        items_to_load = []
         
-        # First add visible items (priority 0)
+        # Visible items first
         for i in range(first_visible, last_visible + 1):
             if i >= self.results_list.count():
                 break
-            item = self.results_list.item(i)
-            mod = item.data(Qt.ItemDataRole.UserRole) if item else None
-            if not mod:
-                continue
-            mod_id = mod.get('id', mod.get('slug', ''))
-            icon_url = mod.get('icon_url', '')
-            
-            if not icon_url or not mod_id:
-                continue
-            
-            # Skip if already loaded or being loaded
-            if i in loaded_indices or mod_id in self._loading_mod_ids:
-                continue
-            
-            # Check if cached
-            if source in self._icon_cache and mod_id in self._icon_cache[source]:
-                # Apply cached icon immediately
-                self._apply_icon_to_item(item, self._icon_cache[source][mod_id])
-                loaded_indices.add(i)
-                continue
-            
-            if mod_id not in new_queued_mod_ids:
-                new_queue.append((0, item, icon_url, mod_id, source, i))  # priority 0
-                new_queued_mod_ids.add(mod_id)
+            items_to_load.append(i)
         
-        # Then add buffer items (priority 1)
+        # Then buffer items
         for i in list(range(load_start, first_visible)) + list(range(last_visible + 1, load_end + 1)):
-            if i >= self.results_list.count() or i < 0:
-                continue
+            if 0 <= i < self.results_list.count():
+                items_to_load.append(i)
+        
+        for i in items_to_load:
+            if active_count >= self._max_concurrent_loads:
+                break
+            
             item = self.results_list.item(i)
-            mod = item.data(Qt.ItemDataRole.UserRole) if item else None
+            if not item:
+                continue
+                
+            mod = item.data(Qt.ItemDataRole.UserRole)
             if not mod:
                 continue
+            
             mod_id = mod.get('id', mod.get('slug', ''))
             icon_url = mod.get('icon_url', '')
             
             if not icon_url or not mod_id:
                 continue
             
-            if i in loaded_indices or mod_id in self._loading_mod_ids:
-                continue
-            
-            # Check if cached
-            if source in self._icon_cache and mod_id in self._icon_cache[source]:
-                self._apply_icon_to_item(item, self._icon_cache[source][mod_id])
-                loaded_indices.add(i)
-                continue
-            
-            if mod_id not in new_queued_mod_ids:
-                new_queue.append((1, item, icon_url, mod_id, source, i))  # priority 1
-                new_queued_mod_ids.add(mod_id)
-        
-        # Sort by priority (lower is better)
-        new_queue.sort(key=lambda x: x[0])
-        
-        self._icon_load_queue = new_queue
-        self._queued_mod_ids = new_queued_mod_ids
-        self._source_loaded_indices[source] = loaded_indices
-        
-        # Start the timer if not running and we have items to load
-        if self._icon_load_queue and not self._icon_load_timer.isActive():
-            self._icon_load_timer.start()
-    
-    def _process_icon_queue(self):
-        """Process icons in the queue with parallel loading (up to max_concurrent_loads)."""
-        # Clean up finished threads
-        self._active_icon_threads = [t for t in self._active_icon_threads if t.isRunning()]
-        
-        # If no items to load and no active threads, stop timer
-        if not self._icon_load_queue and not self._active_icon_threads:
-            self._icon_load_timer.stop()
-            return
-        
-        # Start new loads up to concurrency limit
-        while self._icon_load_queue and len(self._active_icon_threads) < self._max_concurrent_loads:
-            # Get the next item (already sorted by priority)
-            priority, item, icon_url, mod_id, source, idx = self._icon_load_queue.pop(0)
-            self._queued_mod_ids.discard(mod_id)
-            
-            # Skip if already loaded or loading
+            # Skip if already loading
             if mod_id in self._loading_mod_ids:
                 continue
             
-            loaded_indices = self._source_loaded_indices.get(source, set())
-            if idx in loaded_indices:
-                continue
-            
-            # Check cache again (may have been cached while in queue)
+            # Check cache
             if source in self._icon_cache and mod_id in self._icon_cache[source]:
                 self._apply_icon_to_item(item, self._icon_cache[source][mod_id])
-                loaded_indices.add(idx)
-                self._source_loaded_indices[source] = loaded_indices
                 continue
             
-            # Mark as loading
-            self._loading_mod_ids.add(mod_id)
-            
-            # Start icon fetch thread
-            try:
-                thread = ModIconFetcher(item, icon_url)
-                # Store additional data for callback
-                thread.mod_id = mod_id
-                thread.source = source
-                thread.idx = idx
-                thread.icon_fetched.connect(self._on_icon_fetched_improved)
-                thread.finished.connect(partial(self._on_icon_thread_finished, mod_id))
-                self._active_icon_threads.append(thread)
-                self.icon_threads.append(thread)
-                thread.start()
-            except (RuntimeError, OSError, Exception):
-                self._loading_mod_ids.discard(mod_id)
+            # Start loading
+            self._start_icon_load(item, mod_id, icon_url, source)
+            active_count += 1
     
-    def _on_icon_thread_finished(self, mod_id: str):
-        """Handle when an icon thread finishes."""
-        self._loading_mod_ids.discard(mod_id)
+    def _start_icon_load(self, item: QListWidgetItem, mod_id: str, icon_url: str, source: str):
+        """Start loading an icon in a background thread."""
+        self._loading_mod_ids.add(mod_id)
+        
+        # Set placeholder icon immediately
+        item.setIcon(get_placeholder_icon())
+        
+        try:
+            thread = SimpleIconFetcher(mod_id, icon_url, source)
+            thread.icon_fetched.connect(self._on_simple_icon_fetched)
+            thread.finished_loading.connect(self._on_icon_load_complete)
+            # Store item reference for callback
+            thread.item = item
+            self.icon_threads.append(thread)
+            thread.start()
+        except Exception:
+            self._loading_mod_ids.discard(mod_id)
     
-    def _on_icon_fetched_improved(self, item: QListWidgetItem, data: bytes):
-        """Handle icon fetched from background thread with improved caching."""
-        # Get thread info
+    def _on_simple_icon_fetched(self, mod_id: str, source: str, data: bytes):
+        """Handle icon fetched from background thread."""
+        # Cache the icon
+        if source not in self._icon_cache:
+            self._icon_cache[source] = {}
+        self._icon_cache[source][mod_id] = data
+        
+        # Find and update the item
         thread = self.sender()
-        mod_id = getattr(thread, 'mod_id', None)
-        source = getattr(thread, 'source', self._get_selected_source())
-        idx = getattr(thread, 'idx', -1)
+        if hasattr(thread, 'item') and thread.item:
+            self._apply_icon_to_item(thread.item, data)
+    
+    def _on_icon_load_complete(self, mod_id: str):
+        """Handle when an icon load completes (success or failure)."""
+        self._loading_mod_ids.discard(mod_id)
         
-        # Cache the icon data by mod_id
-        # Note: mod_id removal from _loading_mod_ids is handled by _on_icon_thread_finished
-        if mod_id:
-            if source not in self._icon_cache:
-                self._icon_cache[source] = {}
-            self._icon_cache[source][mod_id] = data
+        # Clean up old threads
+        self.icon_threads = [t for t in self.icon_threads if t.isRunning()]
         
-        # Mark as loaded
-        if idx >= 0:
-            loaded_indices = self._source_loaded_indices.get(source, set())
-            loaded_indices.add(idx)
-            self._source_loaded_indices[source] = loaded_indices
-        
-        # Apply icon to item
-        self._apply_icon_to_item(item, data)
+        # Trigger loading of more icons if scrolled
+        if self._scroll_debounce_timer and not self._scroll_debounce_timer.isActive():
+            # Load more icons after a short delay
+            QTimer.singleShot(20, self._load_visible_icons)
+    
+    # Legacy method for backward compatibility
+    def _update_visible_icons(self):
+        """Legacy method - redirects to new implementation."""
+        self._load_visible_icons()
     
     def _load_more_results(self):
         """Load more results for infinite scrolling."""
@@ -2388,8 +2384,6 @@ class ModBrowserDialog(QDialog):
             return
         
         source = self._get_selected_source()
-        loaded_indices = self._source_loaded_indices.get(source, set())
-        start_idx = self.results_list.count()
         
         # Add results to the list with cached icons applied immediately
         for i, mod in enumerate(results):
@@ -2402,16 +2396,17 @@ class ModBrowserDialog(QDialog):
             if source in self._icon_cache and mod_id in self._icon_cache[source]:
                 # Apply cached icon immediately
                 self._apply_icon_to_item(item, self._icon_cache[source][mod_id])
-                loaded_indices.add(start_idx + i)
+            else:
+                # Set placeholder icon
+                item.setIcon(get_placeholder_icon())
             
             self.results_list.addItem(item)
         
-        self._source_loaded_indices[source] = loaded_indices
         self.all_search_results.extend(results)
         self.search_status.setText(f"Found {self.results_list.count()} mods (scroll for more)")
         
         # Trigger lazy loading for visible items
-        QTimer.singleShot(10, self._update_visible_icons)
+        QTimer.singleShot(10, self._load_visible_icons)
     
     def _on_load_more_error(self, error: str):
         """Handle error when loading more results."""
@@ -2419,16 +2414,13 @@ class ModBrowserDialog(QDialog):
         self.search_status.setText(f"Error loading more: {error}")
     
     def _load_mod_icon(self, item: QListWidgetItem, icon_url: str):
-        """Queue mod icon for lazy loading (legacy method)."""
-        # This method is kept for backward compatibility
+        """Queue mod icon for lazy loading (legacy method - redirects to new system)."""
         source = self._get_selected_source()
         mod = item.data(Qt.ItemDataRole.UserRole) if item else None
         mod_id = mod.get('id', mod.get('slug', '')) if mod else None
-        idx = self.results_list.row(item)
         
-        if idx >= 0 and mod_id and mod_id not in self._queued_mod_ids and mod_id not in self._loading_mod_ids:
-            self._icon_load_queue.append((0, item, icon_url, mod_id, source, idx))
-            self._queued_mod_ids.add(mod_id)
+        if mod_id and mod_id not in self._loading_mod_ids:
+            self._start_icon_load(item, mod_id, icon_url, source)
     
     def _apply_icon_to_item(self, item: QListWidgetItem, data: bytes):
         """Apply icon data to a list item."""
@@ -2442,8 +2434,6 @@ class ModBrowserDialog(QDialog):
     
     def _on_icon_fetched(self, item: QListWidgetItem, data: bytes):
         """Handle icon fetched from background thread - called on main thread (legacy support)."""
-        # This method is kept for backward compatibility
-        # New code uses _on_icon_fetched_improved instead
         source = self._get_selected_source()
         mod = item.data(Qt.ItemDataRole.UserRole) if item else None
         mod_id = mod.get('id', mod.get('slug', '')) if mod else None
@@ -2482,62 +2472,62 @@ class ModBrowserDialog(QDialog):
         if not source:
             return
         
-        # Store results for this source
+        # Store results for this source (for later display)
+        if not hasattr(self, '_source_results'):
+            self._source_results = {'curseforge': [], 'modrinth': []}
         self._source_results[source] = results
         
-        # Cache all icons from preload in background
-        # Start preload timer to gradually load icons
-        self._preload_queue = []
+        # Preload icons gradually using SimpleIconFetcher
+        self._preload_icons_gradually(results, source)
+    
+    def _preload_icons_gradually(self, results: list, source: str):
+        """Preload icons one at a time in the background."""
+        if not results:
+            return
+        
+        # Find the next icon to preload
         for mod in results:
             mod_id = mod.get('id', mod.get('slug', ''))
             icon_url = mod.get('icon_url', '')
-            if mod_id and icon_url:
-                # Skip if already cached
-                if source in self._icon_cache and mod_id in self._icon_cache[source]:
-                    continue
-                self._preload_queue.append((mod_id, icon_url, source))
-        
-        if self._preload_queue and not self._preload_timer.isActive():
-            self._preload_timer.start()
+            
+            if not mod_id or not icon_url:
+                continue
+            
+            # Skip if already cached or loading
+            if source in self._icon_cache and mod_id in self._icon_cache[source]:
+                continue
+            if mod_id in self._loading_mod_ids:
+                continue
+            
+            # Count active threads
+            active_count = sum(1 for t in self.icon_threads if t.isRunning())
+            if active_count >= self._max_concurrent_loads:
+                # Schedule retry later - use default params to capture current values
+                QTimer.singleShot(200, lambda r=results, s=source: self._preload_icons_gradually(r, s))
+                return
+            
+            # Start preloading this icon
+            self._loading_mod_ids.add(mod_id)
+            try:
+                thread = SimpleIconFetcher(mod_id, icon_url, source)
+                thread.icon_fetched.connect(self._on_background_icon_fetched)
+                thread.finished_loading.connect(lambda mid=mod_id, r=results, s=source: self._on_preload_icon_complete(mid, r, s))
+                self.icon_threads.append(thread)
+                thread.start()
+            except Exception:
+                self._loading_mod_ids.discard(mod_id)
+            return  # Only start one at a time for preload
     
-    def _process_preload_queue(self):
-        """Process one item from the preload queue (background loading)."""
-        if not hasattr(self, '_preload_queue') or not self._preload_queue:
-            self._preload_timer.stop()
-            return
-        
-        # Don't preload if we're loading too many icons for the active tab
-        if len(self._active_icon_threads) >= self._max_concurrent_loads - 1:
-            return  # Give priority to active tab
-        
-        mod_id, icon_url, source = self._preload_queue.pop(0)
-        
-        # Skip if already cached or loading
-        if source in self._icon_cache and mod_id in self._icon_cache[source]:
-            return
-        if mod_id in self._loading_mod_ids:
-            return
-        
-        self._loading_mod_ids.add(mod_id)
-        
-        # Create a lightweight background fetch
-        try:
-            thread = _BackgroundIconFetcher(mod_id, icon_url, source)
-            thread.icon_fetched.connect(self._on_background_icon_fetched)
-            thread.finished.connect(partial(self._on_preload_thread_finished, mod_id))
-            thread.start()
-        except (RuntimeError, OSError, Exception):
-            self._loading_mod_ids.discard(mod_id)
-    
-    def _on_preload_thread_finished(self, mod_id: str):
-        """Handle when a preload thread finishes."""
+    def _on_preload_icon_complete(self, mod_id: str, results: list, source: str):
+        """Handle completion of a preload icon fetch."""
         self._loading_mod_ids.discard(mod_id)
+        # Clean up threads
+        self.icon_threads = [t for t in self.icon_threads if t.isRunning()]
+        # Continue preloading - use default params to capture current values
+        QTimer.singleShot(50, lambda r=results, s=source: self._preload_icons_gradually(r, s))
     
     def _on_background_icon_fetched(self, mod_id: str, source: str, data: bytes):
-        """Handle background icon fetch completion.
-        
-        Note: mod_id removal from _loading_mod_ids is handled by _on_preload_thread_finished
-        """
+        """Handle background icon fetch completion."""
         if source not in self._icon_cache:
             self._icon_cache[source] = {}
         self._icon_cache[source][mod_id] = data
@@ -2553,12 +2543,8 @@ class ModBrowserDialog(QDialog):
         self.is_loading_more = False
         self.has_more_results = True
         
-        # Reset lazy loading state for current source (keep cache)
-        self._icon_load_queue = []
-        self._queued_mod_ids = set()
-        # Don't clear loaded_indices - they track which list items have icons applied
-        if self._icon_load_timer:
-            self._icon_load_timer.stop()
+        # Reset loading state (keep cache)
+        self._loading_mod_ids.clear()
         
         self.results_list.clear()
         self.versions_combo.clear()
@@ -2573,7 +2559,7 @@ class ModBrowserDialog(QDialog):
             self.search_thread.wait()
         
         # Check if we have preloaded results for this source
-        if source in self._source_results and self._source_results[source]:
+        if hasattr(self, '_source_results') and source in self._source_results and self._source_results[source]:
             # Use preloaded results
             self.on_search_complete(self._source_results[source])
             return
@@ -2607,14 +2593,8 @@ class ModBrowserDialog(QDialog):
         self.current_offset = 0
         self.has_more_results = True
         
-        # Reset lazy loading queue (keep cache)
-        self._icon_load_queue = []
-        self._queued_mod_ids = set()
-        if self._icon_load_timer:
-            self._icon_load_timer.stop()
-        
-        # Clear loaded indices for new source since list is cleared
-        self._source_loaded_indices[source] = set()
+        # Reset loading state (keep cache)
+        self._loading_mod_ids.clear()
         
         # Reload mods for new source
         self.load_popular_mods()
@@ -2632,14 +2612,8 @@ class ModBrowserDialog(QDialog):
         self.is_loading_more = False
         self.has_more_results = True
         
-        # Reset lazy loading state (keep cache)
-        self._icon_load_queue = []
-        self._queued_mod_ids = set()
-        if self._icon_load_timer:
-            self._icon_load_timer.stop()
-        
-        # Clear loaded indices since list will be cleared
-        self._source_loaded_indices[source] = set()
+        # Reset loading state (keep cache)
+        self._loading_mod_ids.clear()
         
         self.results_list.clear()
         self.versions_combo.clear()
@@ -2670,11 +2644,9 @@ class ModBrowserDialog(QDialog):
         self.all_search_results = results
         
         # Store results for this source (for tab switching)
+        if not hasattr(self, '_source_results'):
+            self._source_results = {'curseforge': [], 'modrinth': []}
         self._source_results[source] = results
-        
-        # Clear loaded indices since list was cleared
-        self._source_loaded_indices[source] = set()
-        loaded_indices = self._source_loaded_indices[source]
         
         self.search_status.setText(f"Found {len(results)} mods (scroll for more)")
         
@@ -2689,14 +2661,14 @@ class ModBrowserDialog(QDialog):
             if source in self._icon_cache and mod_id in self._icon_cache[source]:
                 # Apply cached icon immediately
                 self._apply_icon_to_item(item, self._icon_cache[source][mod_id])
-                loaded_indices.add(i)
+            else:
+                # Set placeholder icon
+                item.setIcon(get_placeholder_icon())
             
             self.results_list.addItem(item)
         
-        self._source_loaded_indices[source] = loaded_indices
-        
         # Trigger lazy loading for visible items that aren't cached
-        QTimer.singleShot(10, self._update_visible_icons)
+        QTimer.singleShot(10, self._load_visible_icons)
     
     def on_search_error(self, error: str):
         """Handle search error."""
@@ -2847,9 +2819,9 @@ class ModBrowserDialog(QDialog):
     
     def _cleanup_threads(self):
         """Stop and clean up all running threads."""
-        # Stop icon load timer
-        if self._icon_load_timer:
-            self._icon_load_timer.stop()
+        # Stop scroll debounce timer
+        if self._scroll_debounce_timer:
+            self._scroll_debounce_timer.stop()
         
         # Stop search thread
         if self.search_thread and self.search_thread.isRunning():
@@ -2872,6 +2844,9 @@ class ModBrowserDialog(QDialog):
                 thread.stop()
                 thread.wait(100)  # Brief wait per thread
         self.icon_threads.clear()
+        
+        # Clear loading state
+        self._loading_mod_ids.clear()
 
 
 
