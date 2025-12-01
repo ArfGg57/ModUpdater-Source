@@ -6087,6 +6087,8 @@ class VersionSelectionPage(QWidget):
                 
                 # Only show the save reminder if the version was saved to the repo
                 if version_is_saved:
+                    # Process events to ensure grid is fully updated before showing message
+                    QApplication.processEvents()
                     QMessageBox.information(
                         self, "Version Deleted",
                         f"Version '{version}' has been deleted locally.\n\n"
@@ -6921,6 +6923,29 @@ class MainWindow(QMainWindow):
         # Remove deletes for this version
         if version in self.all_deletes:
             del self.all_deletes[version]
+        
+        # If the deleted version was the modpack_version in config.json, update it
+        if self.modpack_config and self.modpack_config.modpack_version == version:
+            # Find the new latest version from remaining versions
+            remaining_versions = list(self.versions.keys())
+            if remaining_versions:
+                # Sort to find the highest remaining version
+                def version_sort_key(v: str):
+                    parts = v.split('.')
+                    nums = []
+                    for x in parts:
+                        try:
+                            nums.append(int(x))
+                        except ValueError:
+                            nums.append(0)
+                    return tuple(nums)
+                remaining_versions.sort(key=version_sort_key, reverse=True)
+                self.modpack_config.modpack_version = remaining_versions[0]
+            else:
+                # No versions left
+                self.modpack_config.modpack_version = ""
+            # Reload the config page to reflect the change
+            self.config_page.load_config(self.modpack_config)
     
     def on_config_changed(self):
         """Handle configuration page changes."""
@@ -6995,19 +7020,18 @@ class MainWindow(QMainWindow):
         deletes_content = json.dumps(deletes_obj, indent=2)
         changes.append((deletes_file, deletes_content, self.file_shas.get('deletes.json')))
         
-        # Show progress
-        progress = QProgressDialog(f"Creating version {version}...", "Cancel", 0, len(changes), self)
+        # Show progress (without cancel button - disable close)
+        progress = QProgressDialog(f"Creating version {version}...", None, 0, len(changes), self)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
+        progress.setCancelButton(None)  # Remove cancel button
+        progress.setWindowFlags(progress.windowFlags() & ~Qt.WindowType.WindowCloseButtonHint)
         
         errors = []
         
         for i, (path, content, sha) in enumerate(changes):
             progress.setValue(i)
             QApplication.processEvents()
-            
-            if progress.wasCanceled():
-                break
             
             try:
                 result = self.github_api.create_or_update_file(
@@ -7150,17 +7174,16 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "No Changes", "No changes to save.")
             return
         
-        # Show progress
-        progress = QProgressDialog("Saving to GitHub...", "Cancel", 0, len(changes), self)
+        # Show progress (without cancel button - disable close)
+        progress = QProgressDialog("Saving to GitHub...", None, 0, len(changes), self)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
+        progress.setCancelButton(None)  # Remove cancel button
+        progress.setWindowFlags(progress.windowFlags() & ~Qt.WindowType.WindowCloseButtonHint)
         
         errors = []
         
         for i, (path, content, sha) in enumerate(changes):
-            if progress.wasCanceled():
-                break
-            
             progress.setValue(i)
             progress.setLabelText(f"Saving {path}...")
             QApplication.processEvents()
