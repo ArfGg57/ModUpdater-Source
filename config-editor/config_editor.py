@@ -4128,6 +4128,9 @@ class VersionEditorPage(QWidget):
     back_requested = pyqtSignal()
     create_requested = pyqtSignal(object)  # Emitted with version_config when Create is clicked
     
+    # Number of icons to load immediately when opening a version
+    INITIAL_ICON_LOAD_COUNT = 8
+    
     def __init__(self, parent=None):
         super().__init__(parent)
         self.version_config: Optional[VersionConfig] = None
@@ -4139,6 +4142,10 @@ class VersionEditorPage(QWidget):
         self._pending_mod: Optional[ModEntry] = None
         self._pending_file: Optional[FileEntry] = None
         self._pending_delete: Optional[DeleteEntry] = None
+        # Track which mod icons have been loaded (for lazy loading)
+        self._icons_loaded_count = 0
+        self._icon_load_threads: List[QThread] = []
+        self._remaining_icons_loaded = False  # Whether all remaining icons have been loaded
         self.setup_ui()
     
     def setup_ui(self):
@@ -4477,6 +4484,12 @@ class VersionEditorPage(QWidget):
     def load_version(self, version_config: VersionConfig):
         self.version_config = version_config
         self.version_label.setText(f"Version {version_config.version}")
+        
+        # Reset icon loading state
+        self._icons_loaded_count = 0
+        self._remaining_icons_loaded = False
+        self._cancel_icon_load_threads()
+        
         self.refresh_mods_grid()
         self.refresh_files_grid()
         self.refresh_deletes_list()
@@ -4516,6 +4529,9 @@ class VersionEditorPage(QWidget):
             pixmap = QPixmap(version_config.icon_path)
             if not pixmap.isNull():
                 self.version_icon_preview.setPixmap(pixmap.scaled(60, 60, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        
+        # Start loading the first 8 mod icons
+        QTimer.singleShot(50, self._load_initial_icons)
     
     def _set_editing_enabled(self, enabled: bool):
         """Enable or disable editing controls (for locked versions).
@@ -4756,6 +4772,9 @@ class VersionEditorPage(QWidget):
     
     def _add_mod_browse(self):
         """Add a mod by browsing CurseForge/Modrinth."""
+        # Load remaining icons now that the user is opening the mod browser
+        self._load_remaining_icons()
+        
         existing_ids = [m.id for m in self.version_config.mods]
         dialog = ModBrowserDialog(existing_ids, self.version_config.version, self)
         if dialog.exec():
@@ -5016,6 +5035,127 @@ class VersionEditorPage(QWidget):
             self.file_right_container.setStyleSheet(container_style)
         if hasattr(self, 'delete_right_container'):
             self.delete_right_container.setStyleSheet(container_style)
+    
+    # === Lazy Icon Loading Methods ===
+    
+    def _cancel_icon_load_threads(self):
+        """Cancel all running icon load threads."""
+        for thread in self._icon_load_threads:
+            if thread.isRunning():
+                thread.stop()
+        self._icon_load_threads.clear()
+    
+    def _load_initial_icons(self):
+        """Load the first INITIAL_ICON_LOAD_COUNT icons when a version is opened."""
+        if not self.version_config:
+            return
+        
+        # Get mods that need icon loading
+        mods_to_load = []
+        for i, mod in enumerate(self.version_config.mods[:self.INITIAL_ICON_LOAD_COUNT]):
+            if not getattr(mod, '_icon_data', None):
+                # Check if mod has a source that can provide an icon
+                source = mod.source
+                if source and source.get('type') in ('curseforge', 'modrinth'):
+                    mods_to_load.append((i, mod))
+        
+        # Start loading icons for these mods
+        for idx, mod in mods_to_load:
+            self._start_mod_icon_load(idx, mod)
+        
+        self._icons_loaded_count = min(self.INITIAL_ICON_LOAD_COUNT, len(self.version_config.mods))
+    
+    def _load_remaining_icons(self):
+        """Load icons for mods beyond the initial INITIAL_ICON_LOAD_COUNT.
+        
+        This is called when the ModBrowserDialog is about to open.
+        """
+        if not self.version_config or self._remaining_icons_loaded:
+            return
+        
+        self._remaining_icons_loaded = True
+        
+        # Get remaining mods that need icon loading
+        for i, mod in enumerate(self.version_config.mods[self.INITIAL_ICON_LOAD_COUNT:], start=self.INITIAL_ICON_LOAD_COUNT):
+            if not getattr(mod, '_icon_data', None):
+                # Check if mod has a source that can provide an icon
+                source = mod.source
+                if source and source.get('type') in ('curseforge', 'modrinth'):
+                    self._start_mod_icon_load(i, mod)
+    
+    def _start_mod_icon_load(self, mod_index: int, mod: ModEntry):
+        """Start loading an icon for a specific mod."""
+        source = mod.source
+        source_type = source.get('type', '')
+        
+        if source_type == 'modrinth':
+            project_slug = source.get('projectSlug', '')
+            if project_slug:
+                thread = IconFetcher({'source': source, 'id': mod.id})
+                thread.icon_fetched.connect(lambda mod_id, data, idx=mod_index: self._on_mod_icon_loaded(idx, data))
+                self._icon_load_threads.append(thread)
+                thread.start()
+        elif source_type == 'curseforge':
+            # CurseForge icons require fetching project info first
+            project_id = source.get('projectId', '')
+            if project_id:
+                thread = _CurseForgeIconFetcher(str(project_id), mod.id, mod_index)
+                thread.icon_fetched.connect(self._on_mod_icon_loaded)
+                self._icon_load_threads.append(thread)
+                thread.start()
+    
+    def _on_mod_icon_loaded(self, mod_index: int, icon_data: bytes):
+        """Handle when a mod icon has been loaded."""
+        if not self.version_config or mod_index >= len(self.version_config.mods):
+            return
+        
+        mod = self.version_config.mods[mod_index]
+        mod._icon_data = icon_data
+        
+        # Update the card in the grid if it exists
+        if mod_index < self.mods_grid.count():
+            widget = self.mods_grid.itemAt(mod_index)
+            if widget:
+                card = widget.widget()
+                if isinstance(card, ItemCard):
+                    card.set_icon_from_bytes(icon_data)
+
+
+class _CurseForgeIconFetcher(QThread):
+    """Background thread for fetching CurseForge mod icons."""
+    icon_fetched = pyqtSignal(int, bytes)  # mod_index, icon_bytes
+    
+    def __init__(self, project_id: str, mod_id: str, mod_index: int):
+        super().__init__()
+        self.project_id = project_id
+        self.mod_id = mod_id
+        self.mod_index = mod_index
+        self._running = True
+    
+    def run(self):
+        """Fetch icon from CurseForge API."""
+        if not self._running:
+            return
+        try:
+            # Use curse.tools proxy API
+            url = f"{CF_PROXY_BASE_URL}/mods/{self.project_id}"
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read())
+                mod_data = data.get('data', {})
+                logo = mod_data.get('logo', {})
+                icon_url = logo.get('thumbnailUrl', '') or logo.get('url', '')
+                
+                if icon_url and self._running:
+                    with urllib.request.urlopen(icon_url, timeout=10) as img_response:
+                        icon_data = img_response.read()
+                        if icon_data and self._running:
+                            self.icon_fetched.emit(self.mod_index, icon_data)
+        except Exception:
+            pass  # Silently fail icon loads
+    
+    def stop(self):
+        self._running = False
 
 
 
