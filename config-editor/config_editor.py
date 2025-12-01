@@ -2080,30 +2080,27 @@ class ModBrowserDialog(QDialog):
         self._update_visible_icons()
     
     def _get_visible_range(self) -> Tuple[int, int]:
-        """Get the range of currently visible item indices."""
+        """Get the range of currently visible item indices using efficient indexAt() method."""
         if self.results_list.count() == 0:
             return (0, 0)
         
         # Get the viewport rect
         viewport_rect = self.results_list.viewport().rect()
         
-        # Find first visible item
-        first_visible = 0
-        for i in range(self.results_list.count()):
-            item = self.results_list.item(i)
-            item_rect = self.results_list.visualItemRect(item)
-            if item_rect.bottom() > viewport_rect.top():
-                first_visible = i
-                break
+        # Use indexAt() for efficient lookup of first visible item
+        first_item = self.results_list.itemAt(viewport_rect.topLeft())
+        if first_item:
+            first_visible = self.results_list.row(first_item)
+        else:
+            first_visible = 0
         
-        # Find last visible item
-        last_visible = self.results_list.count() - 1
-        for i in range(self.results_list.count() - 1, -1, -1):
-            item = self.results_list.item(i)
-            item_rect = self.results_list.visualItemRect(item)
-            if item_rect.top() < viewport_rect.bottom():
-                last_visible = i
-                break
+        # Use indexAt() for efficient lookup of last visible item
+        last_item = self.results_list.itemAt(viewport_rect.bottomLeft())
+        if last_item:
+            last_visible = self.results_list.row(last_item)
+        else:
+            # If no item at bottom, use the last item in the list
+            last_visible = self.results_list.count() - 1
         
         return (first_visible, last_visible)
     
@@ -2130,10 +2127,11 @@ class ModBrowserDialog(QDialog):
                 if mod and mod.get('icon_url'):
                     items_to_load.append((i, item, mod['icon_url']))
         
-        # Add to queue in order (top to bottom)
+        # Add to queue in order (top to bottom), checking for duplicates using 3-tuples
         for idx, item, icon_url in items_to_load:
-            if (item, icon_url) not in self._icon_load_queue:
-                self._icon_load_queue.append((item, icon_url, idx))
+            queue_entry = (item, icon_url, idx)
+            if queue_entry not in self._icon_load_queue:
+                self._icon_load_queue.append(queue_entry)
         
         # Start the timer if not running and we have items to load
         if self._icon_load_queue and not self._icon_load_timer.isActive():
