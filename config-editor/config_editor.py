@@ -7452,11 +7452,11 @@ def main():
     # Show loading dialog
     loading_dialog = LoadingDialog()
     
-    # Set a maximum timeout for loading (3 seconds)
+    # Set a maximum timeout for loading (10 seconds - allows time for icons to load)
     timeout_timer = QTimer()
     timeout_timer.setSingleShot(True)
     timeout_timer.timeout.connect(loading_dialog.force_close)
-    timeout_timer.start(3000)
+    timeout_timer.start(10000)
     
     loading_dialog.start_checking()
     loading_dialog.show()
