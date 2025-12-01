@@ -737,11 +737,14 @@ class RemoteImageTextBrowser(QTextBrowser):
         self._pending_loads.clear()
         self._pending_urls.clear()
         
-        # Scale images to fit within the browser width
-        # Add max-width and height:auto to all img tags to make them responsive
+        # Scale images to fit within the browser width and ensure proper text flow
+        # Add max-width, height:auto, display:block, and position:relative to prevent 
+        # images from rendering over text
         def add_img_style(match):
             img_tag = match.group(0)
-            style_to_add = 'max-width: 100%; height: auto;'
+            # Use display:block to make images block-level elements that don't overlap text
+            # Use position:relative with z-index:1 to ensure proper layering
+            style_to_add = 'max-width: 100%; height: auto; display: block; position: relative; z-index: 1; margin: 8px 0;'
             # Check if style already exists
             style_match = re.search(r'style=["\']([^"\']*)["\']', img_tag, re.IGNORECASE)
             if style_match:
@@ -1878,6 +1881,16 @@ class ModBrowserDialog(QDialog):
         self.current_offset = 0
         self.is_loading_more = False
         self.has_more_results = True
+        
+        # Lazy loading state for icons
+        self._icon_load_queue = []  # Queue of (item, icon_url) tuples to load sequentially
+        self._loaded_icons = set()  # Set of item indices that have loaded icons
+        self._visible_item_count = 8  # Approximate number of visible items (will be updated)
+        self._icon_load_timer = None  # Timer for sequential loading
+        self._current_loading_index = 0  # Current index in the queue being loaded
+        self._icon_cache = {}  # Cache: source -> {item_text -> icon_bytes}
+        self._pending_icon_items = {}  # Map item_text -> QListWidgetItem for deferred icon setting
+        
         self.setup_ui()
         # Load popular mods on startup
         QTimer.singleShot(100, self.load_popular_mods)
@@ -2050,13 +2063,114 @@ class ModBrowserDialog(QDialog):
 
         # Update source button styles (after creation)
         self._update_source_button_styles()
+        
+        # Set up icon load timer for sequential loading
+        self._icon_load_timer = QTimer()
+        self._icon_load_timer.timeout.connect(self._process_icon_queue)
+        self._icon_load_timer.setInterval(50)  # Load one icon every 50ms for smooth rendering
     
     def _on_scroll(self, value):
-        """Handle scroll event for infinite scrolling."""
+        """Handle scroll event for infinite scrolling and lazy icon loading."""
         scrollbar = self.results_list.verticalScrollBar()
         # Load more when near the bottom
         if scrollbar.maximum() > 0 and value >= scrollbar.maximum() * INFINITE_SCROLL_THRESHOLD:
             self._load_more_results()
+        
+        # Trigger lazy loading of icons for newly visible items
+        self._update_visible_icons()
+    
+    def _get_visible_range(self) -> Tuple[int, int]:
+        """Get the range of currently visible item indices."""
+        if self.results_list.count() == 0:
+            return (0, 0)
+        
+        # Get the viewport rect
+        viewport_rect = self.results_list.viewport().rect()
+        
+        # Find first visible item
+        first_visible = 0
+        for i in range(self.results_list.count()):
+            item = self.results_list.item(i)
+            item_rect = self.results_list.visualItemRect(item)
+            if item_rect.bottom() > viewport_rect.top():
+                first_visible = i
+                break
+        
+        # Find last visible item
+        last_visible = self.results_list.count() - 1
+        for i in range(self.results_list.count() - 1, -1, -1):
+            item = self.results_list.item(i)
+            item_rect = self.results_list.visualItemRect(item)
+            if item_rect.top() < viewport_rect.bottom():
+                last_visible = i
+                break
+        
+        return (first_visible, last_visible)
+    
+    def _update_visible_icons(self):
+        """Update which icons should be loaded based on visibility."""
+        if self.results_list.count() == 0:
+            return
+        
+        first_visible, last_visible = self._get_visible_range()
+        visible_count = last_visible - first_visible + 1
+        self._visible_item_count = max(visible_count, 8)  # Update visible count
+        
+        # Calculate the range to load: visible + buffer (2x visible)
+        buffer_size = visible_count
+        load_start = max(0, first_visible - buffer_size)
+        load_end = min(self.results_list.count() - 1, last_visible + buffer_size)
+        
+        # Queue icons for items in the load range that haven't been loaded yet
+        items_to_load = []
+        for i in range(load_start, load_end + 1):
+            if i not in self._loaded_icons:
+                item = self.results_list.item(i)
+                mod = item.data(Qt.ItemDataRole.UserRole)
+                if mod and mod.get('icon_url'):
+                    items_to_load.append((i, item, mod['icon_url']))
+        
+        # Add to queue in order (top to bottom)
+        for idx, item, icon_url in items_to_load:
+            if (item, icon_url) not in self._icon_load_queue:
+                self._icon_load_queue.append((item, icon_url, idx))
+        
+        # Start the timer if not running and we have items to load
+        if self._icon_load_queue and not self._icon_load_timer.isActive():
+            self._icon_load_timer.start()
+    
+    def _process_icon_queue(self):
+        """Process the next icon in the queue (called by timer for sequential loading)."""
+        if not self._icon_load_queue:
+            self._icon_load_timer.stop()
+            return
+        
+        # Get the next item to load
+        item, icon_url, idx = self._icon_load_queue.pop(0)
+        
+        # Mark as loaded
+        self._loaded_icons.add(idx)
+        
+        # Check cache first
+        source = self._get_selected_source()
+        item_key = item.text()
+        if source in self._icon_cache and item_key in self._icon_cache[source]:
+            # Use cached icon
+            data = self._icon_cache[source][item_key]
+            self._apply_icon_to_item(item, data)
+            return
+        
+        # Store reference for when icon loads
+        self._pending_icon_items[item_key] = item
+        
+        # Load icon
+        try:
+            thread = ModIconFetcher(item, icon_url)
+            thread.icon_fetched.connect(self._on_icon_fetched)
+            self.icon_threads.append(thread)
+            thread.start()
+        except:
+            pass
     
     def _load_more_results(self):
         """Load more results for infinite scrolling."""
@@ -2109,18 +2223,18 @@ class ModBrowserDialog(QDialog):
             self.search_status.setText(f"Found {self.results_list.count()} mods (no more results)")
             return
         
-        # Add results to the list
+        # Add results to the list (icons will be lazy loaded when visible)
         for mod in results:
             item = QListWidgetItem()
             item.setText(f"{mod['name']}\nby {mod['author']} • {mod['downloads']:,} downloads")
             item.setData(Qt.ItemDataRole.UserRole, mod)
-            # Load icon if available
-            if mod.get('icon_url'):
-                self._load_mod_icon(item, mod['icon_url'])
             self.results_list.addItem(item)
         
         self.all_search_results.extend(results)
         self.search_status.setText(f"Found {self.results_list.count()} mods (scroll for more)")
+        
+        # Trigger lazy loading for visible items
+        QTimer.singleShot(10, self._update_visible_icons)
     
     def _on_load_more_error(self, error: str):
         """Handle error when loading more results."""
@@ -2128,17 +2242,20 @@ class ModBrowserDialog(QDialog):
         self.search_status.setText(f"Error loading more: {error}")
     
     def _load_mod_icon(self, item: QListWidgetItem, icon_url: str):
-        """Load mod icon from URL using Qt thread-safe approach."""
-        try:
-            thread = ModIconFetcher(item, icon_url)
-            thread.icon_fetched.connect(self._on_icon_fetched)
-            self.icon_threads.append(thread)
-            thread.start()
-        except:
-            pass
+        """Queue mod icon for lazy loading."""
+        # Get item index
+        idx = -1
+        for i in range(self.results_list.count()):
+            if self.results_list.item(i) == item:
+                idx = i
+                break
+        
+        if idx >= 0 and idx not in self._loaded_icons:
+            if (item, icon_url, idx) not in self._icon_load_queue:
+                self._icon_load_queue.append((item, icon_url, idx))
     
-    def _on_icon_fetched(self, item: QListWidgetItem, data: bytes):
-        """Handle icon fetched from background thread - called on main thread."""
+    def _apply_icon_to_item(self, item: QListWidgetItem, data: bytes):
+        """Apply icon data to a list item."""
         try:
             pixmap = QPixmap()
             if pixmap.loadFromData(data):
@@ -2146,6 +2263,18 @@ class ModBrowserDialog(QDialog):
                 item.setIcon(icon)
         except:
             pass
+    
+    def _on_icon_fetched(self, item: QListWidgetItem, data: bytes):
+        """Handle icon fetched from background thread - called on main thread."""
+        # Cache the icon data
+        source = self._get_selected_source()
+        item_key = item.text()
+        if source not in self._icon_cache:
+            self._icon_cache[source] = {}
+        self._icon_cache[source][item_key] = data
+        
+        # Apply icon to item
+        self._apply_icon_to_item(item, data)
     
     def load_popular_mods(self):
         """Load popular mods without search query."""
@@ -2157,6 +2286,13 @@ class ModBrowserDialog(QDialog):
         self.current_offset = 0
         self.is_loading_more = False
         self.has_more_results = True
+        
+        # Reset lazy loading state (but keep cache)
+        self._icon_load_queue = []
+        self._loaded_icons = set()
+        self._pending_icon_items = {}
+        if self._icon_load_timer:
+            self._icon_load_timer.stop()
         
         self.results_list.clear()
         self.versions_combo.clear()
@@ -2177,7 +2313,20 @@ class ModBrowserDialog(QDialog):
         self.search_thread.start()
     
     def on_source_changed(self):
-        """Clear results when source changes and reload popular mods."""
+        """Clear results when source changes and reload popular mods.
+        
+        When switching tabs, visible icons are preserved via cache but non-visible ones
+        are unrendered to improve performance.
+        """
+        # Store which items were visible before clearing (for cache)
+        visible_items_text = set()
+        if self.results_list.count() > 0:
+            first_vis, last_vis = self._get_visible_range()
+            for i in range(first_vis, min(last_vis + 1, self.results_list.count())):
+                item = self.results_list.item(i)
+                if item:
+                    visible_items_text.add(item.text())
+        
         self.results_list.clear()
         self.versions_combo.clear()
         self.selected_mod = None
@@ -2185,10 +2334,19 @@ class ModBrowserDialog(QDialog):
         self.add_btn.setEnabled(False)
         self.mod_info_header.setText("Select a mod to view its description")
         self.description_browser.setHtml("")
+        
         # Reset infinite scroll
         self.all_search_results = []
         self.current_offset = 0
         self.has_more_results = True
+        
+        # Reset lazy loading state (but keep icon cache for both sources)
+        self._icon_load_queue = []
+        self._loaded_icons = set()
+        self._pending_icon_items = {}
+        if self._icon_load_timer:
+            self._icon_load_timer.stop()
+        
         # Reload popular mods for new source
         self.load_popular_mods()
     
@@ -2204,6 +2362,13 @@ class ModBrowserDialog(QDialog):
         self.current_offset = 0
         self.is_loading_more = False
         self.has_more_results = True
+        
+        # Reset lazy loading state (but keep cache)
+        self._icon_load_queue = []
+        self._loaded_icons = set()
+        self._pending_icon_items = {}
+        if self._icon_load_timer:
+            self._icon_load_timer.stop()
         
         self.results_list.clear()
         self.versions_combo.clear()
@@ -2233,14 +2398,15 @@ class ModBrowserDialog(QDialog):
         self.all_search_results = results
         self.search_status.setText(f"Found {len(results)} mods (scroll for more)")
         
+        # Add items without icons first (icons will be lazy loaded)
         for mod in results:
             item = QListWidgetItem()
             item.setText(f"{mod['name']}\nby {mod['author']} • {mod['downloads']:,} downloads")
             item.setData(Qt.ItemDataRole.UserRole, mod)
-            # Load icon if available
-            if mod.get('icon_url'):
-                self._load_mod_icon(item, mod['icon_url'])
             self.results_list.addItem(item)
+        
+        # Trigger lazy loading for visible items
+        QTimer.singleShot(10, self._update_visible_icons)
     
     def on_search_error(self, error: str):
         """Handle search error."""
@@ -2258,19 +2424,8 @@ class ModBrowserDialog(QDialog):
         
         # Update mod info header with name, author, downloads info
         self.mod_info_header.setText(f"{mod['name']} by {mod['author']} • {mod['downloads']:,} downloads")
-        self.description_browser.setHtml("<i>Loading full description...</i>")
         
-        # Fetch full description
-        if self.description_thread and self.description_thread.isRunning():
-            self.description_thread.stop()
-            self.description_thread.wait(1000)  # Wait up to 1 second
-        
-        self.description_thread = ModDescriptionFetchThread(mod['source'], mod['id'])
-        self.description_thread.description_fetched.connect(self.on_description_fetched)
-        self.description_thread.error_occurred.connect(self.on_description_error)
-        self.description_thread.start()
-        
-        # Fetch versions
+        # Fetch versions FIRST (before description) for faster usability
         self.versions_combo.clear()
         self.versions_combo.addItem("Loading versions...")
         
@@ -2283,6 +2438,19 @@ class ModBrowserDialog(QDialog):
         self.version_thread.versions_fetched.connect(self.on_versions_fetched)
         self.version_thread.error_occurred.connect(self.on_versions_error)
         self.version_thread.start()
+        
+        # Show loading message for description (loaded after versions)
+        self.description_browser.setHtml("<i>Loading description...</i>")
+        
+        # Fetch full description AFTER starting version fetch
+        if self.description_thread and self.description_thread.isRunning():
+            self.description_thread.stop()
+            self.description_thread.wait(1000)  # Wait up to 1 second
+        
+        self.description_thread = ModDescriptionFetchThread(mod['source'], mod['id'])
+        self.description_thread.description_fetched.connect(self.on_description_fetched)
+        self.description_thread.error_occurred.connect(self.on_description_error)
+        self.description_thread.start()
     
     def on_description_fetched(self, description: str):
         """Handle full description fetch."""
@@ -2389,6 +2557,10 @@ class ModBrowserDialog(QDialog):
     
     def _cleanup_threads(self):
         """Stop and clean up all running threads."""
+        # Stop icon load timer
+        if self._icon_load_timer:
+            self._icon_load_timer.stop()
+        
         # Stop search thread
         if self.search_thread and self.search_thread.isRunning():
             self.search_thread.stop()
@@ -4431,25 +4603,6 @@ class VersionSelectionPage(QWidget):
 
     def on_delete_version(self, version: str):
         """Handle version delete request."""
-        # Prevent deleting the latest version
-        def version_sort_key(v: str):
-            parts = v.split('-', 1)
-            base = parts[0]
-            tag = parts[1] if len(parts) > 1 else ''
-            nums = []
-            for x in base.split('.'):
-                try:
-                    nums.append(int(x))
-                except ValueError:
-                    nums.append(0)
-            tag_priority = 0 if tag else 1
-            return (nums, tag_priority, tag)
-        if self.versions:
-            latest_version = max(self.versions.keys(), key=version_sort_key)
-            if version == latest_version:
-                QMessageBox.warning(self, "Cannot Delete Latest Version",
-                                    "The latest version cannot be deleted.")
-                return
         # Show confirmation dialog
         dialog = ConfirmDeleteDialog(version, "version", self)
         if dialog.exec():
