@@ -1883,7 +1883,8 @@ class ModBrowserDialog(QDialog):
         self.has_more_results = True
         
         # Lazy loading state for icons
-        self._icon_load_queue = []  # Queue of (item, icon_url) tuples to load sequentially
+        self._icon_load_queue = []  # Queue of (item, icon_url, idx) tuples to load sequentially
+        self._queued_indices = set()  # Set of indices already in queue for O(1) duplicate checks
         self._loaded_icons = set()  # Set of item indices that have loaded icons
         self._visible_item_count = 8  # Approximate number of visible items (will be updated)
         self._icon_load_timer = None  # Timer for sequential loading
@@ -2127,11 +2128,11 @@ class ModBrowserDialog(QDialog):
                 if mod and mod.get('icon_url'):
                     items_to_load.append((i, item, mod['icon_url']))
         
-        # Add to queue in order (top to bottom), checking for duplicates using 3-tuples
+        # Add to queue in order (top to bottom), using set for O(1) duplicate checks
         for idx, item, icon_url in items_to_load:
-            queue_entry = (item, icon_url, idx)
-            if queue_entry not in self._icon_load_queue:
-                self._icon_load_queue.append(queue_entry)
+            if idx not in self._queued_indices:
+                self._icon_load_queue.append((item, icon_url, idx))
+                self._queued_indices.add(idx)
         
         # Start the timer if not running and we have items to load
         if self._icon_load_queue and not self._icon_load_timer.isActive():
@@ -2146,8 +2147,9 @@ class ModBrowserDialog(QDialog):
         # Get the next item to load
         item, icon_url, idx = self._icon_load_queue.pop(0)
         
-        # Mark as loaded
+        # Mark as loaded and remove from queued set
         self._loaded_icons.add(idx)
+        self._queued_indices.discard(idx)
         
         # Check cache first
         source = self._get_selected_source()
@@ -2241,16 +2243,12 @@ class ModBrowserDialog(QDialog):
     
     def _load_mod_icon(self, item: QListWidgetItem, icon_url: str):
         """Queue mod icon for lazy loading."""
-        # Get item index
-        idx = -1
-        for i in range(self.results_list.count()):
-            if self.results_list.item(i) == item:
-                idx = i
-                break
+        # Get item index using efficient row() method
+        idx = self.results_list.row(item)
         
-        if idx >= 0 and idx not in self._loaded_icons:
-            if (item, icon_url, idx) not in self._icon_load_queue:
-                self._icon_load_queue.append((item, icon_url, idx))
+        if idx >= 0 and idx not in self._loaded_icons and idx not in self._queued_indices:
+            self._icon_load_queue.append((item, icon_url, idx))
+            self._queued_indices.add(idx)
     
     def _apply_icon_to_item(self, item: QListWidgetItem, data: bytes):
         """Apply icon data to a list item."""
@@ -2287,6 +2285,7 @@ class ModBrowserDialog(QDialog):
         
         # Reset lazy loading state (but keep cache)
         self._icon_load_queue = []
+        self._queued_indices = set()
         self._loaded_icons = set()
         self._pending_icon_items = {}
         if self._icon_load_timer:
@@ -2316,15 +2315,6 @@ class ModBrowserDialog(QDialog):
         When switching tabs, visible icons are preserved via cache but non-visible ones
         are unrendered to improve performance.
         """
-        # Store which items were visible before clearing (for cache)
-        visible_items_text = set()
-        if self.results_list.count() > 0:
-            first_vis, last_vis = self._get_visible_range()
-            for i in range(first_vis, min(last_vis + 1, self.results_list.count())):
-                item = self.results_list.item(i)
-                if item:
-                    visible_items_text.add(item.text())
-        
         self.results_list.clear()
         self.versions_combo.clear()
         self.selected_mod = None
@@ -2340,6 +2330,7 @@ class ModBrowserDialog(QDialog):
         
         # Reset lazy loading state (but keep icon cache for both sources)
         self._icon_load_queue = []
+        self._queued_indices = set()
         self._loaded_icons = set()
         self._pending_icon_items = {}
         if self._icon_load_timer:
@@ -2363,6 +2354,7 @@ class ModBrowserDialog(QDialog):
         
         # Reset lazy loading state (but keep cache)
         self._icon_load_queue = []
+        self._queued_indices = set()
         self._loaded_icons = set()
         self._pending_icon_items = {}
         if self._icon_load_timer:
