@@ -2188,9 +2188,51 @@ class ModBrowserDialog(QDialog):
         if scrollbar.maximum() > 0 and value >= scrollbar.maximum() * INFINITE_SCROLL_THRESHOLD:
             self._load_more_results()
         
+        # Cancel icon loads for items that are no longer visible
+        # This prevents lag when scrolling quickly
+        self._cancel_nonvisible_icon_loads()
+        
         # Debounce icon loading to avoid excessive processing during fast scrolls
         if self._scroll_debounce_timer:
             self._scroll_debounce_timer.start()
+    
+    def _cancel_nonvisible_icon_loads(self):
+        """Cancel icon loads for items that are no longer visible.
+        
+        This is called during scrolling to prevent lag from loading icons
+        for items the user has scrolled past. Only icons for items within
+        the visible range (plus a small buffer) are kept loading.
+        """
+        if not self.icon_threads:
+            return
+        
+        first_visible, last_visible = self._get_visible_range()
+        
+        # Add buffer zone to avoid cancelling too aggressively
+        visible_count = max(1, last_visible - first_visible + 1)
+        buffer_size = min(visible_count * 2, 10)  # Reasonable buffer
+        keep_start = max(0, first_visible - buffer_size)
+        keep_end = min(self.results_list.count() - 1, last_visible + buffer_size) if self.results_list.count() > 0 else 0
+        
+        # Cancel threads for items outside the keep range
+        threads_to_keep = []
+        for thread in self.icon_threads:
+            if not thread.isRunning():
+                continue
+            
+            # Check if this thread has an associated item index
+            item_idx = getattr(thread, 'item_idx', -1)
+            mod_id = getattr(thread, 'mod_id', None)
+            
+            # If item is outside visible range, cancel the thread
+            if item_idx >= 0 and (item_idx < keep_start or item_idx > keep_end):
+                thread.stop()
+                if mod_id:
+                    self._loading_mod_ids.discard(mod_id)
+            else:
+                threads_to_keep.append(thread)
+        
+        self.icon_threads = threads_to_keep
     
     def _get_visible_range(self) -> Tuple[int, int]:
         """Get the range of currently visible item indices using efficient indexAt() method."""
@@ -2281,12 +2323,20 @@ class ModBrowserDialog(QDialog):
                 self._apply_icon_to_item(item, self._icon_cache[source][mod_id])
                 continue
             
-            # Start loading
-            self._start_icon_load(item, mod_id, icon_url, source)
+            # Start loading - pass item index for visibility tracking
+            self._start_icon_load(item, mod_id, icon_url, source, item_idx=i)
             active_count += 1
     
-    def _start_icon_load(self, item: QListWidgetItem, mod_id: str, icon_url: str, source: str):
-        """Start loading an icon in a background thread."""
+    def _start_icon_load(self, item: QListWidgetItem, mod_id: str, icon_url: str, source: str, item_idx: int = -1):
+        """Start loading an icon in a background thread.
+        
+        Args:
+            item: The QListWidgetItem to update with the icon
+            mod_id: The mod identifier for caching
+            icon_url: URL to fetch the icon from
+            source: Source platform (curseforge/modrinth)
+            item_idx: Index of the item in the list (for visibility tracking)
+        """
         self._loading_mod_ids.add(mod_id)
         
         # Set placeholder icon immediately
@@ -2296,8 +2346,9 @@ class ModBrowserDialog(QDialog):
             thread = SimpleIconFetcher(mod_id, icon_url, source)
             thread.icon_fetched.connect(self._on_simple_icon_fetched)
             thread.finished_loading.connect(self._on_icon_load_complete)
-            # Store item reference for callback
+            # Store item reference and index for callback and cancellation
             thread.item = item
+            thread.item_idx = item_idx
             self.icon_threads.append(thread)
             thread.start()
         except Exception:
@@ -2319,13 +2370,16 @@ class ModBrowserDialog(QDialog):
         """Handle when an icon load completes (success or failure)."""
         self._loading_mod_ids.discard(mod_id)
         
-        # Clean up old threads
+        # Clean up finished threads
         self.icon_threads = [t for t in self.icon_threads if t.isRunning()]
         
-        # Trigger loading of more icons if scrolled
-        if self._scroll_debounce_timer and not self._scroll_debounce_timer.isActive():
-            # Load more icons after a short delay
-            QTimer.singleShot(20, self._load_visible_icons)
+        # Only trigger loading more icons if we have few active loads
+        # This prevents excessive cascade when many icons complete at once
+        active_count = len(self.icon_threads)
+        if active_count < self._max_concurrent_loads // 2:
+            # Load more icons after a short delay, but only if not scrolling
+            if self._scroll_debounce_timer and not self._scroll_debounce_timer.isActive():
+                QTimer.singleShot(50, self._load_visible_icons)
     
     # Legacy method for backward compatibility
     def _update_visible_icons(self):
