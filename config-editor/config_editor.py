@@ -22,6 +22,7 @@ import sys
 import json
 import os
 import re
+import html
 import base64
 import hashlib
 import urllib.request
@@ -1637,7 +1638,7 @@ class ModDescriptionFetchThread(QThread):
             else:
                 description = self._fetch_modrinth_description()
             
-            if self._running and description:
+            if self._running and description is not None:
                 self.description_fetched.emit(description)
         except Exception as e:
             if self._running:
@@ -1651,9 +1652,9 @@ class ModDescriptionFetchThread(QThread):
             data = json.loads(response.read())
             description = data.get('data', '')
             # Strip HTML tags for plain text display
-            import re
             clean_desc = re.sub(r'<[^>]+>', '', description)
-            clean_desc = clean_desc.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+            # Decode HTML entities
+            clean_desc = html.unescape(clean_desc)
             return clean_desc.strip()
     
     def _fetch_modrinth_description(self) -> str:
@@ -2088,7 +2089,7 @@ class ModBrowserDialog(QDialog):
         # Fetch full description
         if self.description_thread and self.description_thread.isRunning():
             self.description_thread.stop()
-            self.description_thread.wait()
+            self.description_thread.wait(1000)  # Wait up to 1 second
         
         self.description_thread = ModDescriptionFetchThread(mod['source'], mod['id'])
         self.description_thread.description_fetched.connect(self.on_description_fetched)
@@ -2116,8 +2117,10 @@ class ModBrowserDialog(QDialog):
     def on_description_error(self, error: str):
         """Handle description fetch error."""
         # Fall back to summary if description fetch fails
-        if self.selected_mod:
+        if self.selected_mod is not None and isinstance(self.selected_mod, dict):
             self.description_label.setText(self.selected_mod.get('summary', ''))
+        else:
+            self.description_label.setText('')
     
     def on_versions_fetched(self, versions: list):
         """Handle version list."""
