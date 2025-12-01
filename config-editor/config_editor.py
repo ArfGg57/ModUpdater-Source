@@ -1378,39 +1378,71 @@ class ModBrowserDialog(QDialog):
         QTimer.singleShot(100, self.load_popular_mods)
     
     def setup_ui(self):
-        self.setWindowTitle("Browse Mods")
-        self.setMinimumSize(900, 600)
+        self.setWindowTitle("Browse Mods - CurseForge / Modrinth")
+        self.setMinimumSize(950, 650)
         self.setModal(True)
         
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
         layout.setContentsMargins(16, 16, 16, 16)
         
-        # Source selection and search
-        top_layout = QHBoxLayout()
+        # Header with instructions
+        header_layout = QVBoxLayout()
+        title = QLabel("🔍 Find and Add Mods")
+        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        header_layout.addWidget(title)
         
-        self.source_combo = QComboBox()
-        self.source_combo.addItem("🔥 CurseForge", "curseforge")
-        self.source_combo.addItem("📦 Modrinth", "modrinth")
-        self.source_combo.currentIndexChanged.connect(self.on_source_changed)
-        top_layout.addWidget(self.source_combo)
+        instructions = QLabel("1. Select a source → 2. Search or browse popular mods → 3. Select a mod → 4. Choose a file version → 5. Click Add")
+        instructions.setStyleSheet("color: #a6adc8; font-size: 12px; padding: 4px 0;")
+        header_layout.addWidget(instructions)
+        layout.addLayout(header_layout)
         
-        self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Search mods... (leave empty for most popular)")
-        self.search_edit.returnPressed.connect(self.search_mods)
-        top_layout.addWidget(self.search_edit, 1)
+        # Source selection tabs (more intuitive than dropdown)
+        source_layout = QHBoxLayout()
         
+        source_label = QLabel("Source:")
+        source_label.setStyleSheet("font-weight: bold;")
+        source_layout.addWidget(source_label)
+        
+        self.curseforge_source_btn = QPushButton("🔥 CurseForge")
+        self.curseforge_source_btn.setCheckable(True)
+        self.curseforge_source_btn.setChecked(True)
+        self.curseforge_source_btn.setMinimumWidth(120)
+        self.curseforge_source_btn.clicked.connect(lambda: self._select_source('curseforge'))
+        source_layout.addWidget(self.curseforge_source_btn)
+        
+        self.modrinth_source_btn = QPushButton("📦 Modrinth")
+        self.modrinth_source_btn.setCheckable(True)
+        self.modrinth_source_btn.setMinimumWidth(120)
+        self.modrinth_source_btn.clicked.connect(lambda: self._select_source('modrinth'))
+        source_layout.addWidget(self.modrinth_source_btn)
+        
+        source_layout.addStretch()
+        
+        # MC Version filter
         self.version_filter = QLineEdit()
         self.version_filter.setPlaceholderText("MC Version (e.g., 1.12.2)")
         self.version_filter.setFixedWidth(150)
-        top_layout.addWidget(self.version_filter)
+        self.version_filter.returnPressed.connect(self.search_mods)
+        source_layout.addWidget(QLabel("MC Version:"))
+        source_layout.addWidget(self.version_filter)
+        
+        layout.addLayout(source_layout)
+        
+        # Search bar
+        search_layout = QHBoxLayout()
+        
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("🔍 Search mods... (press Enter or leave empty for most popular)")
+        self.search_edit.returnPressed.connect(self.search_mods)
+        search_layout.addWidget(self.search_edit, 1)
         
         search_btn = QPushButton("Search")
         search_btn.setObjectName("primaryButton")
         search_btn.clicked.connect(self.search_mods)
-        top_layout.addWidget(search_btn)
+        search_layout.addWidget(search_btn)
         
-        layout.addLayout(top_layout)
+        layout.addLayout(search_layout)
         
         # Main content area with splitter
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -1420,14 +1452,17 @@ class ModBrowserDialog(QDialog):
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
         
-        self.results_header = QLabel("Popular Mods:")
+        self.results_header = QLabel("📋 Popular Mods (sorted by downloads):")
+        self.results_header.setStyleSheet("font-weight: bold; padding: 4px 0;")
         left_layout.addWidget(self.results_header)
         
         self.results_list = QListWidget()
         self.results_list.itemClicked.connect(self.on_mod_selected)
+        self.results_list.setAlternatingRowColors(True)
         left_layout.addWidget(self.results_list)
         
         self.search_status = QLabel("")
+        self.search_status.setStyleSheet("font-size: 11px; color: #a6adc8;")
         left_layout.addWidget(self.search_status)
         
         splitter.addWidget(left_panel)
@@ -1438,10 +1473,10 @@ class ModBrowserDialog(QDialog):
         right_layout.setContentsMargins(0, 0, 0, 0)
         
         # Mod info
-        self.mod_info_group = QGroupBox("Mod Details")
+        self.mod_info_group = QGroupBox("📌 Selected Mod Details")
         mod_info_layout = QFormLayout(self.mod_info_group)
         
-        self.mod_name_label = QLabel("")
+        self.mod_name_label = QLabel("(Select a mod from the list)")
         self.mod_name_label.setStyleSheet("font-weight: bold; font-size: 14px;")
         mod_info_layout.addRow("Name:", self.mod_name_label)
         
@@ -1458,10 +1493,13 @@ class ModBrowserDialog(QDialog):
         right_layout.addWidget(self.mod_info_group)
         
         # Version selection
-        right_layout.addWidget(QLabel("Available Files (most recent selected):"))
+        versions_label = QLabel("📁 Available Files (most recent auto-selected):")
+        versions_label.setStyleSheet("font-weight: bold; padding: 4px 0;")
+        right_layout.addWidget(versions_label)
         
         self.versions_list = QListWidget()
         self.versions_list.itemClicked.connect(self.on_version_selected)
+        self.versions_list.setAlternatingRowColors(True)
         right_layout.addWidget(self.versions_list)
         
         splitter.addWidget(right_panel)
@@ -1478,17 +1516,47 @@ class ModBrowserDialog(QDialog):
         
         button_layout.addStretch()
         
-        self.add_btn = QPushButton("Add Mod")
+        # Status indicator
+        self.selection_status = QLabel("Select a mod and file version to continue")
+        self.selection_status.setStyleSheet("color: #f9e2af; font-style: italic;")
+        button_layout.addWidget(self.selection_status)
+        
+        button_layout.addStretch()
+        
+        self.add_btn = QPushButton("✓ Add Mod")
         self.add_btn.setObjectName("primaryButton")
         self.add_btn.clicked.connect(self.add_selected_mod)
         self.add_btn.setEnabled(False)
+        self.add_btn.setMinimumWidth(100)
         button_layout.addWidget(self.add_btn)
         
         layout.addLayout(button_layout)
+        
+        # Update source button styles
+        self._update_source_button_styles()
+    
+    def _get_selected_source(self) -> str:
+        """Get the currently selected source."""
+        return 'curseforge' if self.curseforge_source_btn.isChecked() else 'modrinth'
+    
+    def _select_source(self, source: str):
+        """Select a source and update UI."""
+        self.curseforge_source_btn.setChecked(source == 'curseforge')
+        self.modrinth_source_btn.setChecked(source == 'modrinth')
+        self._update_source_button_styles()
+        self.on_source_changed()
+    
+    def _update_source_button_styles(self):
+        """Update source button styles to show selected state."""
+        selected_style = "background-color: rgba(137, 180, 250, 0.3); border: 2px solid #89b4fa; font-weight: bold;"
+        normal_style = ""
+        
+        self.curseforge_source_btn.setStyleSheet(selected_style if self.curseforge_source_btn.isChecked() else normal_style)
+        self.modrinth_source_btn.setStyleSheet(selected_style if self.modrinth_source_btn.isChecked() else normal_style)
     
     def load_popular_mods(self):
         """Load popular mods without search query."""
-        source = self.source_combo.currentData()
+        source = self._get_selected_source()
         version_filter = self.version_filter.text().strip()
         
         self.results_list.clear()
@@ -1497,7 +1565,8 @@ class ModBrowserDialog(QDialog):
         self.selected_version = None
         self.add_btn.setEnabled(False)
         self.search_status.setText("Loading popular mods...")
-        self.results_header.setText("Popular Mods:")
+        self.results_header.setText(f"📋 Popular Mods from {source.capitalize()} (sorted by downloads):")
+        self.selection_status.setText("Select a mod and file version to continue")
         
         if self.search_thread and self.search_thread.isRunning():
             self.search_thread.stop()
@@ -1516,6 +1585,10 @@ class ModBrowserDialog(QDialog):
         self.selected_mod = None
         self.selected_version = None
         self.add_btn.setEnabled(False)
+        self.mod_name_label.setText("(Select a mod from the list)")
+        self.mod_author_label.setText("")
+        self.mod_downloads_label.setText("")
+        self.mod_summary_label.setText("")
         # Reload popular mods for new source
         self.load_popular_mods()
     
@@ -1523,7 +1596,7 @@ class ModBrowserDialog(QDialog):
         """Search for mods on the selected platform."""
         query = self.search_edit.text().strip()
         
-        source = self.source_combo.currentData()
+        source = self._get_selected_source()
         version_filter = self.version_filter.text().strip()
         
         self.results_list.clear()
@@ -1531,13 +1604,14 @@ class ModBrowserDialog(QDialog):
         self.selected_mod = None
         self.selected_version = None
         self.add_btn.setEnabled(False)
+        self.selection_status.setText("Select a mod and file version to continue")
         
         if query:
             self.search_status.setText("Searching...")
-            self.results_header.setText("Search Results:")
+            self.results_header.setText(f"🔍 Search Results for '{query}':")
         else:
             self.search_status.setText("Loading popular mods...")
-            self.results_header.setText("Popular Mods:")
+            self.results_header.setText(f"📋 Popular Mods from {source.capitalize()}:")
         
         if self.search_thread and self.search_thread.isRunning():
             self.search_thread.stop()
@@ -1613,11 +1687,15 @@ class ModBrowserDialog(QDialog):
                 if version:
                     self.selected_version = version
                     self.add_btn.setEnabled(True)
+                    self.selection_status.setText("✓ Ready to add! Click 'Add Mod' to continue")
+                    self.selection_status.setStyleSheet("color: #a6e3a1; font-style: normal; font-weight: bold;")
     
     def on_versions_error(self, error: str):
         """Handle version fetch error."""
         self.versions_list.clear()
         self.versions_list.addItem(f"Error: {error}")
+        self.selection_status.setText("⚠ Failed to load file versions")
+        self.selection_status.setStyleSheet("color: #f38ba8; font-style: italic;")
     
     def on_version_selected(self, item: QListWidgetItem):
         """Handle version selection."""
@@ -1625,6 +1703,8 @@ class ModBrowserDialog(QDialog):
         if version:
             self.selected_version = version
             self.add_btn.setEnabled(True)
+            self.selection_status.setText("✓ Ready to add! Click 'Add Mod' to continue")
+            self.selection_status.setStyleSheet("color: #a6e3a1; font-style: normal; font-weight: bold;")
     
     def add_selected_mod(self):
         """Add the selected mod."""
@@ -2410,6 +2490,10 @@ class VersionEditorPage(QWidget):
         self.selected_file_index = -1
         self.selected_delete_index = -1
         self.icon_cache = {}
+        # Pending items - items being edited but not yet added to the list
+        self._pending_mod: Optional[ModEntry] = None
+        self._pending_file: Optional[FileEntry] = None
+        self._pending_delete: Optional[DeleteEntry] = None
         self.setup_ui()
     
     def setup_ui(self):
@@ -2849,12 +2933,12 @@ class VersionEditorPage(QWidget):
         if dialog.exec():
             mod = dialog.get_mod()
             mod.since = self.version_config.version  # Set since to current version
-            self.version_config.mods.append(mod)
-            self.version_config.modified = True
-            self.refresh_mods_grid()
-            self.select_mod(len(self.version_config.mods) - 1)
+            mod._is_pending = True  # Mark as pending until saved
+            # Show in editor but don't add to list yet
+            self._pending_mod = mod
+            self.mod_editor.load_mod(mod)
             self.mod_editor.setVisible(True)
-            self.version_modified.emit()
+            # Connect save to add the pending mod
     
     def _add_mod_browse(self):
         """Add a mod by browsing CurseForge/Modrinth."""
@@ -2867,37 +2951,31 @@ class VersionEditorPage(QWidget):
                 if mod.id in existing_ids:
                     QMessageBox.warning(self, "Duplicate", f"A mod with ID '{mod.id}' already exists.")
                     return
-                self.version_config.mods.append(mod)
-                self.version_config.modified = True
-                self.refresh_mods_grid()
-                self.select_mod(len(self.version_config.mods) - 1)
+                mod._is_pending = True  # Mark as pending until saved
+                # Show in editor but don't add to list yet
+                self._pending_mod = mod
+                self.mod_editor.load_mod(mod)
                 self.mod_editor.setVisible(True)
-                self.version_modified.emit()
     
     def add_file(self):
         if not self.version_config:
             return
         
         file_entry = FileEntry()
-        self.version_config.files.append(file_entry)
-        self.version_config.modified = True
-        self.refresh_files_grid()
-        self.select_file(len(self.version_config.files) - 1)
+        file_entry._is_pending = True  # Mark as pending until saved
+        self._pending_file = file_entry
+        self.file_editor.load_file(file_entry)
         self.file_editor.setVisible(True)
-        self.version_modified.emit()
     
     def add_delete(self):
         if not self.version_config:
             return
         
         delete_entry = DeleteEntry()
-        self.version_config.deletes.append(delete_entry)
-        self.version_config.modified = True
-        self.refresh_deletes_list()
-        self.deletes_list.setCurrentRow(len(self.version_config.deletes) - 1)
+        delete_entry._is_pending = True  # Mark as pending until saved
+        self._pending_delete = delete_entry
         self.delete_editor.load_delete(delete_entry)
         self.delete_editor.setVisible(True)
-        self.version_modified.emit()
     
     def on_mod_changed(self):
         self.version_config.modified = True
@@ -2915,12 +2993,31 @@ class VersionEditorPage(QWidget):
         self.version_modified.emit()
     
     def on_mod_saved(self):
-        """Handle when mod save button is clicked - hide editor panel."""
+        """Handle when mod save button is clicked - add pending mod and hide editor panel."""
+        # Check if we have a pending mod to add
+        if hasattr(self, '_pending_mod') and self._pending_mod is not None:
+            mod = self._pending_mod
+            mod._is_pending = False
+            mod.since = self.version_config.version
+            self.version_config.mods.append(mod)
+            self.version_config.modified = True
+            self._pending_mod = None
+            self.refresh_mods_grid()
+            self.version_modified.emit()
+        
         self.mod_editor.setVisible(False)
         self.selected_mod_index = -1
     
     def on_mod_deleted(self, mod):
         """Handle when mod delete is confirmed."""
+        # Check if this is a pending mod being cancelled
+        if hasattr(self, '_pending_mod') and self._pending_mod == mod:
+            self._pending_mod = None
+            self.mod_editor.clear()
+            self.mod_editor.setVisible(False)
+            self.selected_mod_index = -1
+            return
+        
         if not self.version_config or mod not in self.version_config.mods:
             return
         
@@ -2944,12 +3041,31 @@ class VersionEditorPage(QWidget):
         self.version_modified.emit()
     
     def on_file_saved(self):
-        """Handle when file save button is clicked - hide editor panel."""
+        """Handle when file save button is clicked - add pending file and hide editor panel."""
+        # Check if we have a pending file to add
+        if hasattr(self, '_pending_file') and self._pending_file is not None:
+            file_entry = self._pending_file
+            file_entry._is_pending = False
+            file_entry.since = self.version_config.version
+            self.version_config.files.append(file_entry)
+            self.version_config.modified = True
+            self._pending_file = None
+            self.refresh_files_grid()
+            self.version_modified.emit()
+        
         self.file_editor.setVisible(False)
         self.selected_file_index = -1
     
     def on_file_deleted(self, file_entry):
         """Handle when file delete is confirmed."""
+        # Check if this is a pending file being cancelled
+        if hasattr(self, '_pending_file') and self._pending_file == file_entry:
+            self._pending_file = None
+            self.file_editor.clear()
+            self.file_editor.setVisible(False)
+            self.selected_file_index = -1
+            return
+        
         if not self.version_config or file_entry not in self.version_config.files:
             return
         
@@ -2973,12 +3089,31 @@ class VersionEditorPage(QWidget):
         self.version_modified.emit()
     
     def on_delete_entry_saved(self):
-        """Handle when delete save button is clicked - hide editor panel."""
+        """Handle when delete save button is clicked - add pending delete and hide editor panel."""
+        # Check if we have a pending delete to add
+        if hasattr(self, '_pending_delete') and self._pending_delete is not None:
+            delete_entry = self._pending_delete
+            delete_entry._is_pending = False
+            delete_entry.version = self.version_config.version
+            self.version_config.deletes.append(delete_entry)
+            self.version_config.modified = True
+            self._pending_delete = None
+            self.refresh_deletes_list()
+            self.version_modified.emit()
+        
         self.delete_editor.setVisible(False)
         self.selected_delete_index = -1
     
     def on_delete_entry_deleted(self, delete_entry):
         """Handle when delete entry delete is confirmed."""
+        # Check if this is a pending delete being cancelled
+        if hasattr(self, '_pending_delete') and self._pending_delete == delete_entry:
+            self._pending_delete = None
+            self.delete_editor.clear()
+            self.delete_editor.setVisible(False)
+            self.selected_delete_index = -1
+            return
+        
         if not self.version_config or delete_entry not in self.version_config.deletes:
             return
         
