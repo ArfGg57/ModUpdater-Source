@@ -780,8 +780,8 @@ class RemoteImageTextBrowser(QTextBrowser):
         """Handle load finished."""
         if url in self._pending_loads:
             del self._pending_loads[url]
-        if url in self._pending_urls:
-            self._pending_urls.discard(url)
+        # discard() is safe even if url is not in the set
+        self._pending_urls.discard(url)
     
     def loadResource(self, type_: int, url: QUrl) -> object:
         """Override to provide cached images."""
