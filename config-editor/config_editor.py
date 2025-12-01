@@ -37,7 +37,7 @@ try:
     from PyQt6.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QListWidget, QListWidgetItem, QStackedWidget, QLabel, QPushButton,
-        QLineEdit, QTextEdit, QSpinBox, QCheckBox, QComboBox, QGroupBox,
+        QLineEdit, QTextEdit, QTextBrowser, QSpinBox, QCheckBox, QComboBox, QGroupBox,
         QFormLayout, QFileDialog, QMessageBox, QScrollArea, QFrame,
         QSplitter, QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView,
         QDialog, QDialogButtonBox, QTreeWidget, QTreeWidgetItem, QToolButton,
@@ -52,7 +52,7 @@ except ImportError:
         from PyQt5.QtWidgets import (
             QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
             QListWidget, QListWidgetItem, QStackedWidget, QLabel, QPushButton,
-            QLineEdit, QTextEdit, QSpinBox, QCheckBox, QComboBox, QGroupBox,
+            QLineEdit, QTextEdit, QTextBrowser, QSpinBox, QCheckBox, QComboBox, QGroupBox,
             QFormLayout, QFileDialog, QMessageBox, QScrollArea, QFrame,
             QSplitter, QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView,
             QDialog, QDialogButtonBox, QTreeWidget, QTreeWidgetItem, QToolButton,
@@ -361,6 +361,30 @@ QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{
     border-color: {theme['accent']};
 }}
 
+QComboBox QAbstractItemView {{
+    background-color: {theme['bg_secondary']};
+    border: 1px solid {theme['border']};
+    border-radius: 6px;
+    selection-background-color: {theme['accent']};
+    selection-color: {theme['bg_primary']};
+    padding: 4px;
+    max-height: 300px;
+}}
+
+QComboBox QAbstractItemView::item {{
+    padding: 6px 10px;
+    min-height: 24px;
+}}
+
+QComboBox QAbstractItemView::item:hover {{
+    background-color: {theme['bg_tertiary']};
+}}
+
+QComboBox::drop-down {{
+    border: none;
+    width: 24px;
+}}
+
 QLineEdit:disabled {{
     background-color: {theme['bg_tertiary']};
     color: {theme['text_secondary']};
@@ -490,6 +514,11 @@ QCheckBox::indicator {{
 QCheckBox::indicator:checked {{
     background-color: {theme['accent']};
     border-color: {theme['accent']};
+}}
+
+QCheckBox {{
+    background-color: transparent;
+    spacing: 8px;
 }}
 
 QToolTip {{
@@ -1651,11 +1680,25 @@ class ModDescriptionFetchThread(QThread):
         with urllib.request.urlopen(req, timeout=30) as response:
             data = json.loads(response.read())
             description = data.get('data', '')
-            # Strip HTML tags for plain text display
-            clean_desc = re.sub(r'<[^>]+>', '', description)
-            # Decode HTML entities
-            clean_desc = html.unescape(clean_desc)
-            return clean_desc.strip()
+            # Sanitize HTML by removing potentially dangerous tags/attributes
+            # Allow only safe HTML tags for display
+            description = self._sanitize_html(description)
+            return description
+    
+    def _sanitize_html(self, html_content: str) -> str:
+        """Sanitize HTML content by removing script tags and event handlers."""
+        if not html_content:
+            return html_content
+        # Remove script tags completely - match opening tag, content, and closing tag
+        # Using a more robust pattern that handles whitespace and attributes in closing tags
+        html_content = re.sub(r'<script\b[^>]*>[\s\S]*?<\s*/\s*script[^>]*>', '', html_content, flags=re.IGNORECASE)
+        # Also remove any remaining standalone script tags
+        html_content = re.sub(r'<\s*/?script\b[^>]*>', '', html_content, flags=re.IGNORECASE)
+        # Remove event handlers (onclick, onload, etc.)
+        html_content = re.sub(r'\s+on\w+\s*=\s*["\'][^"\']*["\']', '', html_content, flags=re.IGNORECASE)
+        # Remove javascript: URLs
+        html_content = re.sub(r'href\s*=\s*["\']javascript:[^"\']*["\']', '', html_content, flags=re.IGNORECASE)
+        return html_content
     
     def _fetch_modrinth_description(self) -> str:
         """Fetch full description from Modrinth."""
@@ -1770,6 +1813,8 @@ class ModBrowserDialog(QDialog):
         self.results_list.setAlternatingRowColors(True)
         self.results_list.setIconSize(QSize(40, 40))  # Larger icons
         self.results_list.setSpacing(4)  # More spacing between items
+        self.results_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)  # Remove horizontal scrollbar
+        self.results_list.setWordWrap(True)  # Enable word wrap for long text
         # Connect scroll event for infinite scroll
         self.results_list.verticalScrollBar().valueChanged.connect(self._on_scroll)
         left_layout.addWidget(self.results_list)
@@ -1790,12 +1835,24 @@ class ModBrowserDialog(QDialog):
         mod_info_layout = QVBoxLayout(self.mod_info_group)
         
         # Header info (name, author, downloads, summary) - always visible at top
-        header_widget = QWidget()
+        header_widget = QFrame()
+        header_widget.setStyleSheet(f"""
+            QFrame {{
+                background-color: {theme['bg_tertiary']};
+                border: 1px solid {theme['border']};
+                border-radius: 8px;
+                padding: 12px;
+            }}
+            QLabel {{
+                background-color: transparent;
+            }}
+        """)
         header_layout = QFormLayout(header_widget)
-        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setContentsMargins(12, 12, 12, 12)
+        header_layout.setSpacing(8)
         
         self.mod_name_label = QLabel("(Select a mod from the list)")
-        self.mod_name_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        self.mod_name_label.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {theme['accent']};")
         header_layout.addRow("Name:", self.mod_name_label)
         
         self.mod_author_label = QLabel("")
@@ -1815,17 +1872,20 @@ class ModBrowserDialog(QDialog):
         description_header.setStyleSheet("font-weight: bold; margin-top: 8px;")
         mod_info_layout.addWidget(description_header)
         
-        self.description_label = QLabel("")
-        self.description_label.setWordWrap(True)
-        self.description_label.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.description_label.setTextFormat(Qt.TextFormat.PlainText)
-        
-        description_scroll = QScrollArea()
-        description_scroll.setWidgetResizable(True)
-        description_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        description_scroll.setWidget(self.description_label)
-        description_scroll.setMinimumHeight(150)
-        mod_info_layout.addWidget(description_scroll, 1)
+        # Use QTextBrowser for rich HTML content with images
+        self.description_browser = QTextBrowser()
+        self.description_browser.setOpenExternalLinks(True)  # Allow clicking links
+        self.description_browser.setMinimumHeight(150)
+        theme = get_current_theme()
+        self.description_browser.setStyleSheet(f"""
+            QTextBrowser {{
+                background-color: {theme['bg_secondary']};
+                border: 1px solid {theme['border']};
+                border-radius: 6px;
+                padding: 8px;
+            }}
+        """)
+        mod_info_layout.addWidget(self.description_browser, 1)
         
         right_layout.addWidget(self.mod_info_group, 1)
         
@@ -2007,7 +2067,7 @@ class ModBrowserDialog(QDialog):
         self.mod_author_label.setText("")
         self.mod_downloads_label.setText("")
         self.mod_summary_label.setText("")
-        self.description_label.setText("")
+        self.description_browser.setHtml("")
         # Reset infinite scroll
         self.all_search_results = []
         self.current_offset = 0
@@ -2084,7 +2144,7 @@ class ModBrowserDialog(QDialog):
         self.mod_author_label.setText(mod['author'])
         self.mod_downloads_label.setText(f"{mod['downloads']:,}")
         self.mod_summary_label.setText(mod['summary'])
-        self.description_label.setText("Loading full description...")
+        self.description_browser.setHtml("<i>Loading full description...</i>")
         
         # Fetch full description
         if self.description_thread and self.description_thread.isRunning():
@@ -2112,15 +2172,26 @@ class ModBrowserDialog(QDialog):
     
     def on_description_fetched(self, description: str):
         """Handle full description fetch."""
-        self.description_label.setText(description)
+        # Check if description is HTML by looking for common HTML tags
+        # CurseForge returns HTML, Modrinth returns Markdown
+        html_pattern = r'<\s*(p|div|span|br|img|a|h[1-6]|ul|ol|li|strong|em|b|i)\b'
+        is_html = bool(re.search(html_pattern, description, re.IGNORECASE))
+        
+        if is_html:
+            self.description_browser.setHtml(description)
+        else:
+            # Convert markdown-style text to basic HTML
+            # Replace newlines with <br> for better display
+            html_desc = description.replace('\n', '<br>')
+            self.description_browser.setHtml(html_desc)
     
     def on_description_error(self, error: str):
         """Handle description fetch error."""
         # Fall back to summary if description fetch fails
         if self.selected_mod is not None and isinstance(self.selected_mod, dict):
-            self.description_label.setText(self.selected_mod.get('summary', ''))
+            self.description_browser.setHtml(self.selected_mod.get('summary', ''))
         else:
-            self.description_label.setText('')
+            self.description_browser.setHtml('')
     
     def on_versions_fetched(self, versions: list):
         """Handle version list."""
@@ -2379,19 +2450,19 @@ class VersionCard(QFrame):
         
         theme = get_current_theme()
         
-        # Header with lock indicator (X) for locked versions (non-new versions, not the add button)
-        if not self.is_add_button and not self.is_new:
+        # Header with delete button for all versions (not the add button)
+        if not self.is_add_button:
             header_layout = QHBoxLayout()
             header_layout.setContentsMargins(0, 0, 0, 0)
             header_layout.addStretch()
             
-            # Create red X indicator for locked versions
-            lock_indicator = QLabel("✕")
-            lock_indicator.setFixedSize(20, 20)
-            lock_indicator.setToolTip("This version is locked and cannot be edited")
-            lock_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lock_indicator.setStyleSheet(f"""
-                QLabel {{
+            # Create clickable delete button
+            self.delete_button = QPushButton("✕")
+            self.delete_button.setFixedSize(20, 20)
+            self.delete_button.setToolTip("Delete this version")
+            self.delete_button.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.delete_button.setStyleSheet(f"""
+                QPushButton {{
                     background-color: {theme['danger']};
                     color: white;
                     border: none;
@@ -2399,8 +2470,12 @@ class VersionCard(QFrame):
                     font-weight: bold;
                     font-size: 12px;
                 }}
+                QPushButton:hover {{
+                    background-color: {theme['accent_hover']};
+                }}
             """)
-            header_layout.addWidget(lock_indicator)
+            self.delete_button.clicked.connect(self.on_delete_clicked)
+            header_layout.addWidget(self.delete_button)
             layout.addLayout(header_layout)
         
         # Icon
@@ -2727,6 +2802,11 @@ class ModEditorPanel(QWidget):
             self.fetch_source_icon()
         
         self.blockSignals(False)
+        
+        # Auto-fill hash if from curseforge/modrinth and no hash is set
+        # Use short delay to allow UI to update first before starting the hash calculation
+        if (source_type in ['curseforge', 'modrinth']) and not mod.hash:
+            QTimer.singleShot(100, self.auto_fill_hash)
     
     def _update_icon_preview(self):
         """Update the icon preview label."""
@@ -3327,12 +3407,26 @@ class VersionEditorPage(QWidget):
         self.mod_right_container.setStyleSheet(f"""
             QFrame {{
                 background-color: {theme['bg_tertiary']};
-                border: 1px solid {theme['border']};
+                border: 2px solid {theme['border']};
                 border-radius: 8px;
+                margin: 4px;
+            }}
+            QScrollBar:vertical {{
+                background-color: {theme['bg_secondary']};
+                width: 12px;
+                border-radius: 6px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: {theme['border']};
+                border-radius: 4px;
+                min-height: 30px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: {theme['accent']};
             }}
         """)
         mod_right_container_layout = QVBoxLayout(self.mod_right_container)
-        mod_right_container_layout.setContentsMargins(0, 0, 0, 0)
+        mod_right_container_layout.setContentsMargins(8, 8, 8, 8)
         
         self.mod_right_stack = QStackedWidget()
         
@@ -3340,8 +3434,9 @@ class VersionEditorPage(QWidget):
         self.mod_placeholder = QWidget()
         placeholder_layout = QVBoxLayout(self.mod_placeholder)
         placeholder_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder_layout.setContentsMargins(20, 20, 20, 20)
         placeholder_label = QLabel("No option selected")
-        placeholder_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 16px; font-style: italic; background-color: transparent;")
+        placeholder_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 16px; font-style: italic; background-color: transparent; padding: 16px;")
         placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         placeholder_layout.addWidget(placeholder_label)
         self.mod_right_stack.addWidget(self.mod_placeholder)
@@ -3392,12 +3487,26 @@ class VersionEditorPage(QWidget):
         self.file_right_container.setStyleSheet(f"""
             QFrame {{
                 background-color: {theme['bg_tertiary']};
-                border: 1px solid {theme['border']};
+                border: 2px solid {theme['border']};
                 border-radius: 8px;
+                margin: 4px;
+            }}
+            QScrollBar:vertical {{
+                background-color: {theme['bg_secondary']};
+                width: 12px;
+                border-radius: 6px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: {theme['border']};
+                border-radius: 4px;
+                min-height: 30px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: {theme['accent']};
             }}
         """)
         file_right_container_layout = QVBoxLayout(self.file_right_container)
-        file_right_container_layout.setContentsMargins(0, 0, 0, 0)
+        file_right_container_layout.setContentsMargins(8, 8, 8, 8)
         
         self.file_right_stack = QStackedWidget()
         
@@ -3405,8 +3514,9 @@ class VersionEditorPage(QWidget):
         self.file_placeholder = QWidget()
         placeholder_layout = QVBoxLayout(self.file_placeholder)
         placeholder_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder_layout.setContentsMargins(20, 20, 20, 20)
         placeholder_label = QLabel("No option selected")
-        placeholder_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 16px; font-style: italic; background-color: transparent;")
+        placeholder_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 16px; font-style: italic; background-color: transparent; padding: 16px;")
         placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         placeholder_layout.addWidget(placeholder_label)
         self.file_right_stack.addWidget(self.file_placeholder)
@@ -3449,15 +3559,42 @@ class VersionEditorPage(QWidget):
         left_layout.addWidget(add_delete_btn)
         
         # Right: Stacked widget for editor panel and placeholder
+        # Wrap in a container with distinct styling
+        self.delete_right_container = QFrame()
+        theme = get_current_theme()
+        self.delete_right_container.setStyleSheet(f"""
+            QFrame {{
+                background-color: {theme['bg_tertiary']};
+                border: 2px solid {theme['border']};
+                border-radius: 8px;
+                margin: 4px;
+            }}
+            QScrollBar:vertical {{
+                background-color: {theme['bg_secondary']};
+                width: 12px;
+                border-radius: 6px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: {theme['border']};
+                border-radius: 4px;
+                min-height: 30px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: {theme['accent']};
+            }}
+        """)
+        delete_right_container_layout = QVBoxLayout(self.delete_right_container)
+        delete_right_container_layout.setContentsMargins(8, 8, 8, 8)
+        
         self.delete_right_stack = QStackedWidget()
         
         # Placeholder for when no delete entry is selected
         self.delete_placeholder = QWidget()
         placeholder_layout = QVBoxLayout(self.delete_placeholder)
         placeholder_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        theme = get_current_theme()
+        placeholder_layout.setContentsMargins(20, 20, 20, 20)
         placeholder_label = QLabel("No option selected")
-        placeholder_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 16px; font-style: italic;")
+        placeholder_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 16px; font-style: italic; background-color: transparent; padding: 16px;")
         placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         placeholder_layout.addWidget(placeholder_label)
         self.delete_right_stack.addWidget(self.delete_placeholder)
@@ -3472,9 +3609,11 @@ class VersionEditorPage(QWidget):
         # Show placeholder by default
         self.delete_right_stack.setCurrentWidget(self.delete_placeholder)
         
+        delete_right_container_layout.addWidget(self.delete_right_stack)
+        
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_panel)
-        splitter.addWidget(self.delete_right_stack)
+        splitter.addWidget(self.delete_right_container)
         splitter.setSizes([300, 400])
         
         layout.addWidget(splitter)
@@ -4031,14 +4170,30 @@ class VersionEditorPage(QWidget):
         container_style = f"""
             QFrame {{
                 background-color: {theme['bg_tertiary']};
-                border: 1px solid {theme['border']};
+                border: 2px solid {theme['border']};
                 border-radius: 8px;
+                margin: 4px;
+            }}
+            QScrollBar:vertical {{
+                background-color: {theme['bg_secondary']};
+                width: 12px;
+                border-radius: 6px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: {theme['border']};
+                border-radius: 4px;
+                min-height: 30px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: {theme['accent']};
             }}
         """
         if hasattr(self, 'mod_right_container'):
             self.mod_right_container.setStyleSheet(container_style)
         if hasattr(self, 'file_right_container'):
             self.file_right_container.setStyleSheet(container_style)
+        if hasattr(self, 'delete_right_container'):
+            self.delete_right_container.setStyleSheet(container_style)
 
 
 
