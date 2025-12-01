@@ -87,6 +87,7 @@ MAX_DESCRIPTION_IMAGE_WIDTH = 400  # Maximum width for images in mod description
 ICON_MAX_CONCURRENT_LOADS = 4  # Maximum number of concurrent icon downloads (reduced for stability)
 ICON_LOAD_DEBOUNCE_MS = 50  # Debounce delay for scroll events (ms)
 ICON_PRELOAD_DELAY_MS = 300  # Delay before starting background preload (ms)
+ICON_CASCADE_THRESHOLD_DIVISOR = 2  # Divisor for max concurrent loads to determine cascade trigger threshold
 
 # Placeholder icon (base64-encoded gray box with package emoji concept)
 # This is a simple 48x48 gray placeholder that indicates "loading"
@@ -2221,14 +2222,15 @@ class ModBrowserDialog(QDialog):
                 continue
             
             # Check if this thread has an associated item index
+            # item_idx is dynamically added, mod_id is part of SimpleIconFetcher class
             item_idx = getattr(thread, 'item_idx', -1)
-            mod_id = getattr(thread, 'mod_id', None)
             
             # If item is outside visible range, cancel the thread
             if item_idx >= 0 and (item_idx < keep_start or item_idx > keep_end):
                 thread.stop()
-                if mod_id:
-                    self._loading_mod_ids.discard(mod_id)
+                # mod_id is an attribute of SimpleIconFetcher
+                if hasattr(thread, 'mod_id') and thread.mod_id:
+                    self._loading_mod_ids.discard(thread.mod_id)
             else:
                 threads_to_keep.append(thread)
         
@@ -2376,10 +2378,11 @@ class ModBrowserDialog(QDialog):
         # Only trigger loading more icons if we have few active loads
         # This prevents excessive cascade when many icons complete at once
         active_count = len(self.icon_threads)
-        if active_count < self._max_concurrent_loads // 2:
+        cascade_threshold = self._max_concurrent_loads // ICON_CASCADE_THRESHOLD_DIVISOR
+        if active_count < cascade_threshold:
             # Load more icons after a short delay, but only if not scrolling
             if self._scroll_debounce_timer and not self._scroll_debounce_timer.isActive():
-                QTimer.singleShot(50, self._load_visible_icons)
+                QTimer.singleShot(ICON_LOAD_DEBOUNCE_MS, self._load_visible_icons)
     
     # Legacy method for backward compatibility
     def _update_visible_icons(self):
