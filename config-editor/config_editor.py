@@ -118,7 +118,7 @@ MODRINTH_SORT_OPTIONS = {
 
 # Mod loader options
 MOD_LOADER_OPTIONS = {
-    "Both": "",
+    "Any": "",
     "Forge": "forge",
     "Fabric": "fabric",
     "NeoForge": "neoforge",
@@ -1217,7 +1217,7 @@ class LoadingDialog(QDialog):
         layout.setContentsMargins(24, 24, 24, 24)
         
         # Loading text
-        self.label = QLabel("Loading mod icons...")
+        self.label = QLabel("Loading...")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {theme['text_primary']};")
         layout.addWidget(self.label)
