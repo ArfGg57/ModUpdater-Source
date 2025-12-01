@@ -2019,56 +2019,3443 @@ class ModBrowserDialog(QDialog):
         # Global icon cache: source -> {mod_id -> icon_bytes}
         self._icon_cache = {}  # Cache: source -> {mod_id -> icon_bytes}
         
-        # Thread-safety helpers
-        self._thread_guard_timer = QTimer(self)
-        self._thread_guard_timer.setSingleShot(True)
+        # Page-based icon caching: keeps track of icons loaded per page
+        # Structure: {page_number: [list of mod_ids cached from that page]}
+        self._page_icon_cache = {}  # page -> list of mod_ids for that page's cache
+        self._page_load_order = []  # Order in which pages were loaded (for LRU eviction)
 
-    def _safe_is_running(self, thread: Optional[QThread]) -> bool:
-        """Return True if the QThread is alive; guard against deleted C++ wrapper errors."""
-        if not thread:
-            return False
-        try:
-            return thread.isRunning()
-        except RuntimeError:
-            # Wrapped C/C++ object may already be deleted
-            return False
+        # Loading state tracking (simplified)
+        self._loading_mod_ids = set()  # Set of mod_ids currently being loaded
+        self._max_concurrent_loads = ICON_MAX_CONCURRENT_LOADS
 
-    def _stop_thread_safe(self, thread_attr: str, wait_ms: int = 1000):
-        """Safely stop and clear a QThread attribute on this object.
-        thread_attr: name of attribute holding the thread (e.g., 'search_thread')
+        # Debounce timer for scroll events
+        self._scroll_debounce_timer = None
+
+        # Background preload
+        self._preload_source = None
+
+        self.setup_ui()
+        # Load popular mods on startup and preload both tabs
+        QTimer.singleShot(100, self._load_and_preload_both_tabs)
+
+    def setup_ui(self):
+        """Set up the UI for the mod browser dialog with pagination controls."""
+        self.setWindowTitle("Browse Mods - CurseForge / Modrinth")
+        self.setMinimumSize(1220, 820)
+        self.setModal(True)
+
+        # Main vertical layout with very tight spacing/margins to remove blank space
+        layout = QVBoxLayout(self)
+        layout.setSpacing(4)
+        layout.setContentsMargins(2, 2, 2, 2)
+        self.setContentsMargins(0, 0, 0, 0)
+
+        # Title (remove extra padding)
+        title = QLabel("🔍 Find and Add Mods")
+        title.setStyleSheet("font-size:16px; font-weight:600; margin:0; padding:0;")
+        layout.addWidget(title, alignment=Qt.AlignmentFlag.AlignLeft)
+
+        # Theme for later styling
+        theme = get_current_theme()
+
+        # Source selection row
+        source_layout = QHBoxLayout()
+        source_layout.setSpacing(6)
+        source_layout.setContentsMargins(0, 0, 0, 0)
+
+        source_label = QLabel("Source:")
+        source_label.setStyleSheet("font-weight: bold; margin:0; padding:0;")
+        source_layout.addWidget(source_label)
+
+        self.curseforge_source_btn = QPushButton("🔥 CurseForge")
+        self.curseforge_source_btn.setCheckable(True)
+        self.curseforge_source_btn.setChecked(True)
+        self.curseforge_source_btn.setMinimumWidth(120)
+        self.curseforge_source_btn.clicked.connect(lambda: self._select_source('curseforge'))
+        source_layout.addWidget(self.curseforge_source_btn)
+
+        self.modrinth_source_btn = QPushButton("📦 Modrinth")
+        self.modrinth_source_btn.setCheckable(True)
+        self.modrinth_source_btn.setMinimumWidth(120)
+        self.modrinth_source_btn.clicked.connect(lambda: self._select_source('modrinth'))
+        source_layout.addWidget(self.modrinth_source_btn)
+
+        source_layout.addStretch()
+        layout.addLayout(source_layout)
+
+        # Search bar row
+        search_layout = QHBoxLayout()
+        search_layout.setSpacing(6)
+        search_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("🔍 Search mods... (leave empty for most popular)")
+        self.search_edit.returnPressed.connect(self.search_mods)
+        search_layout.addWidget(self.search_edit, 1)
+
+        version_lbl = QLabel("MC Version:")
+        version_lbl.setStyleSheet("margin:0; padding:0;")
+        search_layout.addWidget(version_lbl)
+
+        self.version_filter = QLineEdit()
+        self.version_filter.setPlaceholderText("e.g., 1.12.2")
+        self.version_filter.setFixedWidth(100)
+        self.version_filter.returnPressed.connect(self.search_mods)
+        search_layout.addWidget(self.version_filter)
+
+        search_btn = QPushButton("Search")
+        search_btn.setObjectName("primaryButton")
+        search_btn.clicked.connect(self.search_mods)
+        search_layout.addWidget(search_btn)
+
+        layout.addLayout(search_layout)
+
+        # Splitter for results / description
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # Left panel (results)
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(4)
+
+        self.results_header = QLabel("📋 Popular Mods (sorted by downloads):")
+        self.results_header.setStyleSheet("font-weight: bold; margin:0; padding:0;")
+        left_layout.addWidget(self.results_header)
+
+        self.results_list = QListWidget()
+        self.results_list.itemClicked.connect(self.on_mod_selected)
+        self.results_list.setAlternatingRowColors(True)
+        self.results_list.setIconSize(QSize(40, 40))
+        self.results_list.setSpacing(4)
+        self.results_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.results_list.setWordWrap(True)
+        self.results_list.verticalScrollBar().valueChanged.connect(self._on_scroll)
+        left_layout.addWidget(self.results_list)
+
+        self.search_status = QLabel("")
+        self.search_status.setStyleSheet(f"font-size:11px; color:{theme['text_secondary']}; margin:0; padding:0;")
+        left_layout.addWidget(self.search_status)
+
+        # Pagination controls - improved layout and styling
+        pagination_container = QWidget()
+        pagination_container.setStyleSheet(f"""
+            QWidget {{
+                background-color: {theme['bg_tertiary']};
+                border-radius: 8px;
+                padding: 4px;
+            }}
+        """)
+        pagination_layout = QHBoxLayout(pagination_container)
+        pagination_layout.setSpacing(8)
+        pagination_layout.setContentsMargins(8, 6, 8, 6)
+
+        # First page button
+        self.first_page_btn = QPushButton("⏮")
+        self.first_page_btn.setFixedSize(36, 32)
+        self.first_page_btn.setToolTip("Go to first page")
+        self.first_page_btn.clicked.connect(self._go_to_first_page)
+        pagination_layout.addWidget(self.first_page_btn)
+
+        # Previous page button
+        self.prev_page_btn = QPushButton("◀")
+        self.prev_page_btn.setFixedSize(36, 32)
+        self.prev_page_btn.setToolTip("Go to previous page")
+        self.prev_page_btn.clicked.connect(self._go_to_prev_page)
+        pagination_layout.addWidget(self.prev_page_btn)
+
+        pagination_layout.addStretch()
+
+        # Page indicator/selector - styled as a group
+        page_select_widget = QWidget()
+        page_select_widget.setStyleSheet(f"""
+            QWidget {{
+                background-color: {theme['bg_secondary']};
+                border-radius: 6px;
+                padding: 2px 4px;
+            }}
+        """)
+        page_select_layout = QHBoxLayout(page_select_widget)
+        page_select_layout.setSpacing(6)
+        page_select_layout.setContentsMargins(8, 2, 8, 2)
+
+        page_label = QLabel("Page")
+        page_label.setStyleSheet(f"font-weight: 600; font-size: 12px; color: {theme['text_secondary']};")
+        page_select_layout.addWidget(page_label)
+
+        self.page_spin = QSpinBox()
+        self.page_spin.setMinimum(1)
+        self.page_spin.setMaximum(1)
+        self.page_spin.setValue(1)
+        self.page_spin.setFixedWidth(60)
+        self.page_spin.setStyleSheet(f"""
+            QSpinBox {{
+                background-color: {theme['bg_primary']};
+                border: 1px solid {theme['border']};
+                border-radius: 4px;
+                padding: 2px 4px;
+                font-weight: bold;
+            }}
+            QSpinBox:focus {{
+                border-color: {theme['accent']};
+            }}
+        """)
+        self.page_spin.valueChanged.connect(self._on_page_spin_changed)
+        page_select_layout.addWidget(self.page_spin)
+
+        self.page_total_label = QLabel("of 1")
+        self.page_total_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 12px;")
+        page_select_layout.addWidget(self.page_total_label)
+
+        pagination_layout.addWidget(page_select_widget)
+
+        pagination_layout.addStretch()
+
+        # Next page button
+        self.next_page_btn = QPushButton("▶")
+        self.next_page_btn.setFixedSize(36, 32)
+        self.next_page_btn.setToolTip("Go to next page")
+        self.next_page_btn.clicked.connect(self._go_to_next_page)
+        pagination_layout.addWidget(self.next_page_btn)
+
+        # Last page button
+        self.last_page_btn = QPushButton("⏭")
+        self.last_page_btn.setFixedSize(36, 32)
+        self.last_page_btn.setToolTip("Go to last page")
+        self.last_page_btn.clicked.connect(self._go_to_last_page)
+        pagination_layout.addWidget(self.last_page_btn)
+
+        left_layout.addWidget(pagination_container)
+
+        # Style pagination buttons - modern compact design
+        pagination_btn_style = f"""
+            QPushButton {{
+                background-color: {theme['bg_secondary']};
+                border: none;
+                border-radius: 6px;
+                padding: 4px;
+                font-size: 14px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {theme['accent']};
+                color: {theme['bg_primary']};
+            }}
+            QPushButton:pressed {{
+                background-color: {theme['accent_hover']};
+            }}
+            QPushButton:disabled {{
+                background-color: transparent;
+                color: {theme['text_secondary']};
+            }}
         """
-        t = getattr(self, thread_attr, None)
-        if not t:
-            setattr(self, thread_attr, None)
+        self.first_page_btn.setStyleSheet(pagination_btn_style)
+        self.prev_page_btn.setStyleSheet(pagination_btn_style)
+        self.next_page_btn.setStyleSheet(pagination_btn_style)
+        self.last_page_btn.setStyleSheet(pagination_btn_style)
+
+        splitter.addWidget(left_panel)
+
+        # Right panel (description + versions)
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(4)
+
+        self.mod_info_header = QLabel("Select a mod to view its description")
+        self.mod_info_header.setStyleSheet(f"font-weight:bold; font-size:14px; color:{theme['accent']}; margin:0; padding:0;")
+        self.mod_info_header.setWordWrap(True)
+        right_layout.addWidget(self.mod_info_header)
+
+        self.description_browser = RemoteImageTextBrowser()
+        self.description_browser.setOpenExternalLinks(True)
+        self.description_browser.setMinimumHeight(200)
+        self.description_browser.setStyleSheet(f"""
+            QTextBrowser {{
+                background-color: {theme['bg_secondary']};
+                border: 1px solid {theme['border']};
+                border-radius: 6px;
+                padding:6px;
+                margin:0;
+            }}
+        """)
+        right_layout.addWidget(self.description_browser, 1)
+
+        version_layout = QHBoxLayout()
+        version_layout.setSpacing(6)
+        version_layout.setContentsMargins(0, 0, 0, 0)
+
+        versions_label = QLabel("📁 Selected File:")
+        versions_label.setStyleSheet("font-weight: bold; margin:0; padding:0;")
+        version_layout.addWidget(versions_label)
+
+        self.versions_combo = QComboBox()
+        self.versions_combo.setMinimumWidth(300)
+        self.versions_combo.setMaxVisibleItems(10)
+        self.versions_combo.currentIndexChanged.connect(self.on_version_combo_changed)
+        version_layout.addWidget(self.versions_combo, 1)
+
+        right_layout.addLayout(version_layout)
+
+        splitter.addWidget(right_panel)
+        splitter.setSizes([400, 550])
+        layout.addWidget(splitter, 1)
+
+        # Bottom buttons
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(6)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_btn)
+
+        button_layout.addStretch()
+
+        self.add_btn = QPushButton("✓ Add Mod")
+        self.add_btn.setObjectName("primaryButton")
+        self.add_btn.clicked.connect(self.add_selected_mod)
+        self.add_btn.setEnabled(False)
+        self.add_btn.setMinimumWidth(120)
+        button_layout.addWidget(self.add_btn)
+
+        layout.addLayout(button_layout)
+
+        # Update source button styles (after creation)
+        self._update_source_button_styles()
+
+        # Initialize pagination state
+        self._update_pagination_controls()
+
+        # Set up debounce timer for scroll events (simplified icon loading)
+        self._scroll_debounce_timer = QTimer()
+        self._scroll_debounce_timer.setSingleShot(True)
+        self._scroll_debounce_timer.timeout.connect(self._load_visible_icons)
+        self._scroll_debounce_timer.setInterval(ICON_LOAD_DEBOUNCE_MS)
+
+    def _on_scroll(self, value):
+        """Handle scroll event for lazy icon loading."""
+        # Debounce icon loading to avoid excessive processing during fast scrolls
+        if self._scroll_debounce_timer:
+            self._scroll_debounce_timer.start()
+
+    def _get_visible_range(self) -> Tuple[int, int]:
+        """Get the range of currently visible item indices using efficient indexAt() method."""
+        if self.results_list.count() == 0:
+            return (0, 0)
+
+        # Get the viewport rect
+        viewport_rect = self.results_list.viewport().rect()
+
+        # Use indexAt() for efficient lookup of first visible item
+        first_item = self.results_list.itemAt(viewport_rect.topLeft())
+        if first_item:
+            first_visible = self.results_list.row(first_item)
+        else:
+            first_visible = 0
+
+        # Use indexAt() for efficient lookup of last visible item
+        last_item = self.results_list.itemAt(viewport_rect.bottomLeft())
+        if last_item:
+            last_visible = self.results_list.row(last_item)
+        else:
+            # If no item at bottom, use the last item in the list
+            last_visible = self.results_list.count() - 1
+
+        return (first_visible, last_visible)
+
+    def _load_visible_icons(self):
+        """Load icons for currently visible items (simplified approach).
+
+        This replaces the complex queue-based system with a simpler approach:
+        1. Find visible items
+        2. Check cache first
+        3. Start loading for items not in cache (up to concurrency limit)
+        """
+        if self.results_list.count() == 0:
             return
+
+        first_visible, last_visible = self._get_visible_range()
+        source = self._get_selected_source()
+
+        # Calculate buffer zone
+        visible_count = last_visible - first_visible + 1
+        buffer_size = min(visible_count, 4)  # Small buffer
+        load_start = max(0, first_visible - buffer_size)
+        load_end = min(self.results_list.count() - 1, last_visible + buffer_size)
+
+        # Count active threads
+        active_count = sum(1 for t in self.icon_threads if t.isRunning())
+
+        # Process items in visible range first, then buffer
+        items_to_load = []
+
+        # Visible items first
+        for i in range(first_visible, last_visible + 1):
+            if i >= self.results_list.count():
+                break
+            items_to_load.append(i)
+
+        # Then buffer items
+        for i in list(range(load_start, first_visible)) + list(range(last_visible + 1, load_end + 1)):
+            if 0 <= i < self.results_list.count():
+                items_to_load.append(i)
+
+        for i in items_to_load:
+            if active_count >= self._max_concurrent_loads:
+                break
+
+            item = self.results_list.item(i)
+            if not item:
+                continue
+
+            mod = item.data(Qt.ItemDataRole.UserRole)
+            if not mod:
+                continue
+
+            mod_id = mod.get('id', mod.get('slug', ''))
+            icon_url = mod.get('icon_url', '')
+
+            if not icon_url or not mod_id:
+                continue
+
+            # Skip if already loading
+            if mod_id in self._loading_mod_ids:
+                continue
+
+            # Check cache
+            if source in self._icon_cache and mod_id in self._icon_cache[source]:
+                self._apply_icon_to_item(item, self._icon_cache[source][mod_id])
+                continue
+
+            # Start loading - pass item index for visibility tracking
+            self._start_icon_load(item, mod_id, icon_url, source, item_idx=i)
+            active_count += 1
+
+    def _start_icon_load(self, item: QListWidgetItem, mod_id: str, icon_url: str, source: str, item_idx: int = -1):
+        """Start loading an icon in a background thread.
+
+        Args:
+            item: The QListWidgetItem to update with the icon
+            mod_id: The mod identifier for caching
+            icon_url: URL to fetch the icon from
+            source: Source platform (curseforge/modrinth)
+            item_idx: Index of the item in the list (for visibility tracking)
+        """
+        self._loading_mod_ids.add(mod_id)
+
+        # Set placeholder icon immediately
+        item.setIcon(get_placeholder_icon())
+
         try:
-            if self._safe_is_running(t):
-                # cooperative stop if available
-                if hasattr(t, 'stop'):
-                    try:
-                        t.stop()
-                    except Exception:
-                        pass
-                try:
-                    t.wait(wait_ms)
-                except Exception:
-                    pass
-        except RuntimeError:
-            # already deleted
-            pass
-        finally:
+            thread = SimpleIconFetcher(mod_id, icon_url, source)
+            thread.icon_fetched.connect(self._on_simple_icon_fetched)
+            thread.finished_loading.connect(self._on_icon_load_complete)
+            thread.finished.connect(thread.deleteLater)
+            # Store item reference and index for callback and cancellation
+            thread.item = item
+            thread.item_idx = item_idx
+            self.icon_threads.append(thread)
+            thread.start()
+        except Exception:
+            self._loading_mod_ids.discard(mod_id)
+
+    def _on_simple_icon_fetched(self, mod_id: str, source: str, data: bytes):
+        """Handle icon fetched from background thread."""
+        # Cache the icon
+        if source not in self._icon_cache:
+            self._icon_cache[source] = {}
+        self._icon_cache[source][mod_id] = data
+
+        # Find and update the item
+        thread = self.sender()
+        if hasattr(thread, 'item') and thread.item:
+            self._apply_icon_to_item(thread.item, data)
+
+    def _on_icon_load_complete(self, mod_id: str):
+        """Handle when an icon load completes (success or failure)."""
+        self._loading_mod_ids.discard(mod_id)
+
+        # Clean up finished threads
+        self.icon_threads = [t for t in self.icon_threads if t.isRunning()]
+
+        # Only trigger loading more icons if we have few active loads
+        # This prevents excessive cascade when many icons complete at once
+        active_count = len(self.icon_threads)
+        cascade_threshold = self._max_concurrent_loads // ICON_CASCADE_THRESHOLD_DIVISOR
+        if active_count < cascade_threshold:
+            # Load more icons after a short delay, but only if not scrolling
+            if self._scroll_debounce_timer and not self._scroll_debounce_timer.isActive():
+                QTimer.singleShot(ICON_LOAD_DEBOUNCE_MS, self._load_visible_icons)
+
+    # Legacy method for backward compatibility
+    def _update_visible_icons(self):
+        """Legacy method - redirects to new implementation."""
+        self._load_visible_icons()
+
+    def _get_selected_source(self) -> str:
+        """Get the currently selected source."""
+        return 'curseforge' if self.curseforge_source_btn.isChecked() else 'modrinth'
+
+    def _select_source(self, source: str):
+        """Select a source and update UI."""
+        self.curseforge_source_btn.setChecked(source == 'curseforge')
+        self.modrinth_source_btn.setChecked(source == 'modrinth')
+        self._update_source_button_styles()
+        self.on_source_changed()
+
+    def _update_source_button_styles(self):
+        """Update source button styles to show selected state."""
+        # Use theme colors directly for proper theming
+        theme = get_current_theme()
+        selected_style = f"background-color: {theme['accent']}; border: 2px solid {theme['accent']}; font-weight: bold; color: {theme['bg_primary']};"
+        normal_style = ""
+
+        self.curseforge_source_btn.setStyleSheet(selected_style if self.curseforge_source_btn.isChecked() else normal_style)
+        self.modrinth_source_btn.setStyleSheet(selected_style if self.modrinth_source_btn.isChecked() else normal_style)
+
+    # Pagination methods
+    def _update_pagination_controls(self):
+        """Update pagination controls based on current state."""
+        # Calculate total pages based on total_results if available
+        total_pages = self._estimate_total_pages()
+
+        # Update page spinner
+        self.page_spin.blockSignals(True)
+        self.page_spin.setMinimum(1)
+        self.page_spin.setMaximum(max(1, total_pages))
+        self.page_spin.setValue(self.current_page + 1)  # Display is 1-based
+        self.page_spin.blockSignals(False)
+
+        # Update total pages label
+        if self.total_results > 0:
+            self.page_total_label.setText(f"of {total_pages}")
+        elif self.has_more_results:
+            self.page_total_label.setText(f"of {total_pages}+")
+        else:
+            self.page_total_label.setText(f"of {total_pages}")
+
+        # Enable/disable navigation buttons
+        self.first_page_btn.setEnabled(self.current_page > 0)
+        self.prev_page_btn.setEnabled(self.current_page > 0)
+        self.next_page_btn.setEnabled(self.has_more_results or self.current_page < total_pages - 1)
+        # Last button is enabled when we know the total results from API
+        # This allows navigation to the last page even when we haven't loaded all pages
+        has_known_total = self.total_results > 0
+        self.last_page_btn.setEnabled(has_known_total and self.current_page < total_pages - 1)
+
+    def _estimate_total_pages(self) -> int:
+        """Estimate total number of pages based on current data."""
+        if self.total_results > 0:
+            return (self.total_results + SEARCH_PAGE_SIZE - 1) // SEARCH_PAGE_SIZE
+        elif len(self.all_search_results) > 0:
+            # If we have results but no total, estimate from current count
+            pages_loaded = self.current_page + 1
+            if self.has_more_results:
+                return pages_loaded + 1  # At least one more page
+            return pages_loaded
+        return 1  # Minimum 1 page
+
+    def _go_to_first_page(self):
+        """Navigate to the first page."""
+        if self.current_page != 0:
+            self._navigate_to_page(0)
+
+    def _go_to_prev_page(self):
+        """Navigate to the previous page."""
+        if self.current_page > 0:
+            self._navigate_to_page(self.current_page - 1)
+
+    def _go_to_next_page(self):
+        """Navigate to the next page."""
+        self._navigate_to_page(self.current_page + 1)
+
+    def _go_to_last_page(self):
+        """Navigate to the last page based on total results from API."""
+        total_pages = self._estimate_total_pages()
+        if total_pages > 0 and self.current_page < total_pages - 1:
+            last_page = total_pages - 1
+            self._navigate_to_page(last_page)
+
+    def _on_page_spin_changed(self, value: int):
+        """Handle page spinner value change."""
+        target_page = value - 1  # Convert from 1-based to 0-based
+        if target_page != self.current_page:
+            self._navigate_to_page(target_page)
+
+    def _navigate_to_page(self, target_page: int):
+        """Navigate to a specific page."""
+        if self._is_loading_page:
+            return
+
+        # Save icons from current page to cache before navigating away
+        self._cache_current_page_icons()
+
+        self.current_page = target_page
+        self._load_page(target_page)
+
+    def _cache_current_page_icons(self):
+        """Cache top icons from current page before navigating away."""
+        source = self._get_selected_source()
+
+        # Get the first PAGE_ICON_CACHE_SIZE mod IDs from current page
+        cached_ids = []
+        for i in range(min(PAGE_ICON_CACHE_SIZE, self.results_list.count())):
+            item = self.results_list.item(i)
+            if item:
+                mod = item.data(Qt.ItemDataRole.UserRole)
+                if mod:
+                    mod_id = mod.get('id', mod.get('slug', ''))
+                    if mod_id and source in self._icon_cache and mod_id in self._icon_cache[source]:
+                        cached_ids.append(mod_id)
+
+        # Store in page cache
+        if cached_ids:
+            self._page_icon_cache[self.current_page] = cached_ids
+
+            # Update LRU order
+            if self.current_page in self._page_load_order:
+                self._page_load_order.remove(self.current_page)
+            self._page_load_order.append(self.current_page)
+
+            # Evict oldest pages if we have too many cached
+            while len(self._page_load_order) > MAX_CACHED_PAGES:
+                oldest_page = self._page_load_order.pop(0)
+                if oldest_page in self._page_icon_cache:
+                    # Remove icons for evicted page from cache (except if also in other pages)
+                    evicted_ids = self._page_icon_cache.pop(oldest_page, [])
+                    # Check if icons are used by other cached pages
+                    all_cached_ids = set()
+                    for page_ids in self._page_icon_cache.values():
+                        all_cached_ids.update(page_ids)
+
+                    # Remove icons not used by other pages
+                    if source in self._icon_cache:
+                        for evict_id in evicted_ids:
+                            if evict_id not in all_cached_ids:
+                                self._icon_cache[source].pop(evict_id, None)
+
+    def _load_page(self, page: int):
+        """Load a specific page of results."""
+        if self._is_loading_page:
+            return
+
+        self._is_loading_page = True
+
+        # Cancel any pending icon loads
+        self._cancel_all_icon_loads()
+
+        source = self._get_selected_source()
+        query = self.search_edit.text().strip()
+        version_filter = self.version_filter.text().strip()
+
+        # Clear current results
+        self.results_list.clear()
+        self.selected_mod = None
+        self.selected_version = None
+        self.versions_combo.clear()
+        self.add_btn.setEnabled(False)
+
+        self.search_status.setText(f"Loading page {page + 1}...")
+
+        # Stop any running search thread
+        if self.search_thread and self.search_thread.isRunning():
+            self.search_thread.stop()
+            self.search_thread.wait()
+
+        # Create search thread with offset for the target page
+        self.search_thread = ModSearchThread(source, query, version_filter)
+        self.search_thread.offset = page * SEARCH_PAGE_SIZE
+        self.search_thread.search_complete.connect(self._on_page_loaded)
+        self.search_thread.error_occurred.connect(self._on_page_load_error)
+        self.search_thread.finished.connect(self.search_thread.deleteLater)
+        self.search_thread.start()
+
+    def _on_page_loaded(self, results: list, total_count: int = 0):
+        """Handle page load completion."""
+        self._is_loading_page = False
+        source = self._get_selected_source()
+
+        # Store total results from API
+        if total_count > 0:
+            self.total_results = total_count
+
+        # Check if there are more results
+        self.has_more_results = len(results) >= SEARCH_PAGE_SIZE
+
+        # Store results
+        self.all_search_results = results
+
+        # Display results with icons
+        self._display_page_results(results, source)
+
+        # Update pagination
+        self._update_pagination_controls()
+
+        # Update status
+        page_start = self.current_page * SEARCH_PAGE_SIZE + 1
+        page_end = page_start + len(results) - 1
+        status_text = f"Showing {page_start}-{page_end}"
+        if self.total_results > 0:
+            status_text += f" of {self.total_results}"
+        self.search_status.setText(status_text)
+
+        # Start loading icons from top to bottom
+        QTimer.singleShot(ICON_LOAD_INITIAL_DELAY_MS, self._load_page_icons_sequential)
+
+    def _on_page_load_error(self, error: str):
+        """Handle page load error."""
+        self._is_loading_page = False
+        self.search_status.setText(f"Error: {error}")
+        self._update_pagination_controls()
+
+    def _display_page_results(self, results: list, source: str):
+        """Display page results with cached icons applied immediately."""
+        self.results_list.clear()
+
+        for i, mod in enumerate(results):
+            item = QListWidgetItem()
+            item.setText(f"{mod['name']}\nby {mod['author']} • {mod['downloads']:,} downloads")
+            item.setData(Qt.ItemDataRole.UserRole, mod)
+
+            # Check if icon is already cached
+            mod_id = mod.get('id', mod.get('slug', ''))
+            if source in self._icon_cache and mod_id in self._icon_cache[source]:
+                # Apply cached icon immediately
+                self._apply_icon_to_item(item, self._icon_cache[source][mod_id])
+            else:
+                # Set placeholder icon
+                item.setIcon(get_placeholder_icon())
+
+            self.results_list.addItem(item)
+
+    def _load_page_icons_sequential(self):
+        """Load icons for current page from top to bottom."""
+        if self.results_list.count() == 0:
+            return
+
+        source = self._get_selected_source()
+
+        # Find the first item without a loaded icon
+        for i in range(self.results_list.count()):
+            item = self.results_list.item(i)
+            if not item:
+                continue
+
+            mod = item.data(Qt.ItemDataRole.UserRole)
+            if not mod:
+                continue
+
+            mod_id = mod.get('id', mod.get('slug', ''))
+            icon_url = mod.get('icon_url', '')
+
+            if not icon_url or not mod_id:
+                continue
+
+            # Skip if already cached
+            if source in self._icon_cache and mod_id in self._icon_cache[source]:
+                continue
+
+            # Skip if already loading
+            if mod_id in self._loading_mod_ids:
+                continue
+
+            # Count active threads
+            active_count = sum(1 for t in self.icon_threads if t.isRunning())
+            if active_count >= self._max_concurrent_loads:
+                # Schedule retry later
+                QTimer.singleShot(ICON_LOAD_RETRY_DELAY_MS, self._load_page_icons_sequential)
+                return
+
+            # Start loading this icon
+            self._start_icon_load(item, mod_id, icon_url, source, item_idx=i)
+
+    def _cancel_all_icon_loads(self):
+        """Cancel all pending icon load threads and wait for them to finish."""
+        for thread in self.icon_threads:
             try:
-                # ensure deletion queued
-                t.deleteLater()
+                if thread.isRunning():
+                    thread.stop()
+                    thread.wait(500)  # Wait up to 500ms for each thread
             except Exception:
                 pass
-            setattr(self, thread_attr, None)
+        self.icon_threads.clear()
+        self._loading_mod_ids.clear()
 
-        # Update navigation and pagination state
+    def _load_mod_icon(self, item: QListWidgetItem, icon_url: str):
+        """Queue mod icon for lazy loading (legacy method - redirects to new system)."""
+        source = self._get_selected_source()
+        mod = item.data(Qt.ItemDataRole.UserRole) if item else None
+        mod_id = mod.get('id', mod.get('slug', '')) if mod else None
+
+        if mod_id and mod_id not in self._loading_mod_ids:
+            self._start_icon_load(item, mod_id, icon_url, source)
+
+    def _apply_icon_to_item(self, item: QListWidgetItem, data: bytes):
+        """Apply icon data to a list item."""
+        try:
+            pixmap = QPixmap()
+            if pixmap.loadFromData(data):
+                icon = QIcon(pixmap)
+                item.setIcon(icon)
+        except:
+            pass
+
+    def _on_icon_fetched(self, item: QListWidgetItem, data: bytes):
+        """Handle icon fetched from background thread - called on main thread (legacy support)."""
+        source = self._get_selected_source()
+        mod = item.data(Qt.ItemDataRole.UserRole) if item else None
+        mod_id = mod.get('id', mod.get('slug', '')) if mod else None
+
+        # Cache by mod_id for reliable caching
+        if mod_id:
+            if source not in self._icon_cache:
+                self._icon_cache[source] = {}
+            self._icon_cache[source][mod_id] = data
+
+        # Apply icon to item
+        self._apply_icon_to_item(item, data)
+
+    def _load_and_preload_both_tabs(self):
+        """Load the active tab and preload the other tab's mods in background."""
+        # First load the active tab
+        self.load_popular_mods()
+
+        # Schedule preloading of the other tab after a short delay
+        QTimer.singleShot(ICON_PRELOAD_DELAY_MS, self._start_background_preload)
+
+        # Schedule background preloading of icons for next pages
+        QTimer.singleShot(ICON_PRELOAD_DELAY_MS * 2, self._preload_next_pages_icons)
+
+    def _start_background_preload(self):
+        """Start preloading the inactive tab's mods."""
+        current_source = self._get_selected_source()
+        other_source = 'modrinth' if current_source == 'curseforge' else 'curseforge'
+
+        # Start a background search for the other source
+        self._preload_source = other_source
+        self._preload_thread = ModSearchThread(other_source, "", "")
+        self._preload_thread.search_complete.connect(self._on_preload_complete)
+        self._preload_thread.finished.connect(self._preload_thread.deleteLater)
+        self._preload_thread.start()
+
+    def _on_preload_complete(self, results: list, total_count: int = 0):
+        """Handle preloaded results from background search."""
+        source = self._preload_source
+        if not source:
+            return
+
+        # Store total count for this source
+        if not hasattr(self, '_source_total_results'):
+            self._source_total_results = {'curseforge': 0, 'modrinth': 0}
+        if total_count > 0:
+            self._source_total_results[source] = total_count
+
+        # Store results for this source (for later display)
+        if not hasattr(self, '_source_results'):
+            self._source_results = {'curseforge': [], 'modrinth': []}
+        self._source_results[source] = results
+
+        # Preload icons gradually using SimpleIconFetcher
+        self._preload_icons_gradually(results, source)
+
+    def _preload_icons_gradually(self, results: list, source: str):
+        """Preload icons one at a time in the background."""
+        if not results:
+            return
+
+        # Find the next icon to preload
+        for mod in results:
+            mod_id = mod.get('id', mod.get('slug', ''))
+            icon_url = mod.get('icon_url', '')
+
+            if not mod_id or not icon_url:
+                continue
+
+            # Skip if already cached or loading
+            if source in self._icon_cache and mod_id in self._icon_cache[source]:
+                continue
+            if mod_id in self._loading_mod_ids:
+                continue
+
+            # Count active threads
+            active_count = sum(1 for t in self.icon_threads if t.isRunning())
+            if active_count >= self._max_concurrent_loads:
+                # Schedule retry later - use default params to capture current values
+                QTimer.singleShot(200, lambda r=results, s=source: self._preload_icons_gradually(r, s))
+                return
+
+            # Start preloading this icon
+            self._loading_mod_ids.add(mod_id)
+            try:
+                thread = SimpleIconFetcher(mod_id, icon_url, source)
+                thread.icon_fetched.connect(self._on_background_icon_fetched)
+                thread.finished_loading.connect(lambda mid=mod_id, r=results, s=source: self._on_preload_icon_complete(mid, r, s))
+                thread.finished.connect(thread.deleteLater)
+                self.icon_threads.append(thread)
+                thread.start()
+            except Exception:
+                self._loading_mod_ids.discard(mod_id)
+            return  # Only start one at a time for preload
+
+    def _on_preload_icon_complete(self, mod_id: str, results: list, source: str):
+        """Handle completion of a preload icon fetch."""
+        self._loading_mod_ids.discard(mod_id)
+        # Clean up threads
+        self.icon_threads = [t for t in self.icon_threads if t.isRunning()]
+        # Continue preloading - use default params to capture current values
+        QTimer.singleShot(50, lambda r=results, s=source: self._preload_icons_gradually(r, s))
+
+    def _on_background_icon_fetched(self, mod_id: str, source: str, data: bytes):
+        """Handle background icon fetch completion."""
+        if source not in self._icon_cache:
+            self._icon_cache[source] = {}
+        self._icon_cache[source][mod_id] = data
+
+    def _preload_next_pages_icons(self):
+        """Preload icons for the first 8 mods on the next MAX_CACHED_PAGES pages.
+
+        This runs in the background after the initial page load to provide
+        instant icon display when navigating to nearby pages.
+        """
+        source = self._get_selected_source()
+
+        # Track pages we're preloading
+        if not hasattr(self, '_preloading_pages'):
+            self._preloading_pages = set()
+
+        # Preload pages 1 through MAX_CACHED_PAGES (page 0 is already loaded)
+        for page in range(1, MAX_CACHED_PAGES + 1):
+            if page not in self._preloading_pages:
+                self._preloading_pages.add(page)
+                # Start preload thread for this page with a staggered delay
+                QTimer.singleShot(page * 500, lambda p=page, s=source: self._preload_page_icons(p, s))
+
+    def _preload_page_icons(self, page: int, source: str):
+        """Preload icons for a specific page in the background."""
+        if not hasattr(self, '_preload_page_threads'):
+            self._preload_page_threads = []
+
+        # Create a search thread for this page
+        thread = ModSearchThread(source, "", "")
+        thread.offset = page * SEARCH_PAGE_SIZE
+        thread.search_complete.connect(lambda results, total, p=page, s=source:
+                                        self._on_page_preload_complete(results, p, s))
+        thread.finished.connect(thread.deleteLater)
+        self._preload_page_threads.append(thread)
+        thread.start()
+
+    def _on_page_preload_complete(self, results: list, page: int, source: str):
+        """Handle completion of a page preload - cache icons for first 8 mods."""
+        if not results:
+            return
+
+        # Cache the first PAGE_ICON_CACHE_SIZE icons from this page
+        mods_to_cache = results[:PAGE_ICON_CACHE_SIZE]
+
+        # Store page info for LRU tracking (ensure attribute exists)
+        if not hasattr(self, '_page_load_order'):
+            self._page_load_order = []
+        if page not in self._page_load_order:
+            self._page_load_order.append(page)
+
+        # Load icons for these mods gradually
+        self._preload_page_mods_icons(mods_to_cache, source, page)
+
+    def _preload_page_mods_icons(self, mods: list, source: str, page: int, index: int = 0):
+        """Gradually preload icons for mods from a page."""
+        if index >= len(mods):
+            return
+
+        mod = mods[index]
+        mod_id = mod.get('id', mod.get('slug', ''))
+        icon_url = mod.get('icon_url', '')
+
+        # Check if already cached or loading
+        if source in self._icon_cache and mod_id in self._icon_cache[source]:
+            # Already cached, continue to next
+            QTimer.singleShot(10, lambda: self._preload_page_mods_icons(mods, source, page, index + 1))
+            return
+
+        if mod_id in self._loading_mod_ids:
+            # Currently loading, continue to next
+            QTimer.singleShot(100, lambda: self._preload_page_mods_icons(mods, source, page, index + 1))
+            return
+
+        if icon_url:
+            self._loading_mod_ids.add(mod_id)
+            try:
+                thread = SimpleIconFetcher(mod_id, icon_url, source)
+                thread.icon_fetched.connect(self._on_background_icon_fetched)
+                thread.finished_loading.connect(
+                    lambda mid=mod_id, m=mods, s=source, p=page, i=index:
+                        self._on_page_mod_icon_complete(mid, m, s, p, i))
+                thread.finished.connect(thread.deleteLater)
+                self.icon_threads.append(thread)
+                thread.start()
+            except Exception:
+                self._loading_mod_ids.discard(mod_id)
+                QTimer.singleShot(50, lambda: self._preload_page_mods_icons(mods, source, page, index + 1))
+        else:
+            # No icon URL, continue to next
+            QTimer.singleShot(10, lambda: self._preload_page_mods_icons(mods, source, page, index + 1))
+
+    def _on_page_mod_icon_complete(self, mod_id: str, mods: list, source: str, page: int, index: int):
+        """Handle completion of a page mod icon preload."""
+        self._loading_mod_ids.discard(mod_id)
+        # Clean up threads
+        self.icon_threads = [t for t in self.icon_threads if t.isRunning()]
+        # Continue to next mod
+        QTimer.singleShot(50, lambda: self._preload_page_mods_icons(mods, source, page, index + 1))
+
+    def load_popular_mods(self):
+        """Load popular mods without search query - using pagination."""
+        # Reset pagination state
         self.current_page = 0
         self.total_results = 0
         self.has_more_results = True
         self.all_search_results = []
+
+        # Cancel any pending icon loads from previous source/page
+        self._cancel_all_icon_loads()
+
+        self.results_list.clear()
+        self.versions_combo.clear()
+        self.selected_mod = None
+        self.selected_version = None
+        self.add_btn.setEnabled(False)
+        self.search_status.setText("Loading mods...")
+        self.results_header.setText(f"📋 Popular Mods (sorted by downloads):")
+
+        # Update pagination controls
+        self._update_pagination_controls()
+
+        if self.search_thread and self.search_thread.isRunning():
+            self.search_thread.stop()
+            self.search_thread.wait()
+
+        source = self._get_selected_source()
+
+        # Check if we have preloaded results for this source
+        if hasattr(self, '_source_results') and source in self._source_results and self._source_results[source]:
+            # Use preloaded results and total count if available
+            total_count = 0
+            if hasattr(self, '_source_total_results') and source in self._source_total_results:
+                total_count = self._source_total_results[source]
+            self._on_page_loaded(self._source_results[source], total_count)
+            return
+
+        # Load first page
+        self._load_page(0)
+
+    def on_source_changed(self):
+        """Handle source tab change with improved icon caching.
+
+        When switching tabs:
+        - Preserves icon cache for both sources
+        - Applies cached icons immediately for better UX
+        - Only loads icons that aren't already cached
+        """
+        # Reset pagination state
+        self.current_page = 0
+        self.total_results = 0
+        self.has_more_results = True
+        self.all_search_results = []
+
+        self.results_list.clear()
+        self.versions_combo.clear()
+        self.selected_mod = None
+        self.selected_version = None
+        self.add_btn.setEnabled(False)
+        self.mod_info_header.setText("Select a mod to view its description")
+        self.description_browser.setHtml("")
+
+        # Reset loading state (keep cache)
+        self._loading_mod_ids.clear()
+
+        # Update pagination controls
+        self._update_pagination_controls()
+
+        # Reload mods for new source
+        self.load_popular_mods()
+
+    def search_mods(self):
+        """Search for mods on the selected platform using pagination."""
+        query = self.search_edit.text().strip()
+
+        # Reset pagination state
+        self.current_page = 0
+        self.total_results = 0
+        self.has_more_results = True
+        self.all_search_results = []
+
+        # Cancel any pending icon loads
+        self._cancel_all_icon_loads()
+
+        self.results_list.clear()
+        self.versions_combo.clear()
+        self.selected_mod = None
+        self.selected_version = None
+        self.add_btn.setEnabled(False)
+
+        if query:
+            self.search_status.setText("Searching...")
+            self.results_header.setText(f"🔍 Search Results for '{query}':")
+        else:
+            self.search_status.setText("Loading mods...")
+            self.results_header.setText(f"📋 Popular Mods (sorted by downloads):")
+
+        # Update pagination controls
+        self._update_pagination_controls()
+
+        if self.search_thread and self.search_thread.isRunning():
+            self.search_thread.stop()
+            self.search_thread.wait()
+
+        # Load first page with current query
+        self._load_page(0)
+
+    def on_search_complete(self, results: list, total_count: int = 0):
+        """Handle search results with intelligent icon caching (legacy compatibility)."""
+        # Redirect to page loaded handler
+        self._on_page_loaded(results, total_count)
+
+    def on_search_error(self, error: str):
+        """Handle search error."""
+        self.search_status.setText(f"Error: {error}")
+
+    def on_mod_selected(self, item: QListWidgetItem):
+        """Handle mod selection."""
+        mod = item.data(Qt.ItemDataRole.UserRole)
+        if not mod:
+            return
+
+        self.selected_mod = mod
+        self.selected_version = None
+        self.add_btn.setEnabled(False)
+
+        # Update mod info header with name, author, downloads info
+        self.mod_info_header.setText(f"{mod['name']} by {mod['author']} • {mod['downloads']:,} downloads")
+
+        # Fetch versions FIRST (before description) for faster usability
+        self.versions_combo.clear()
+        self.versions_combo.addItem("Loading versions...")
+
+        if self.version_thread and self.version_thread.isRunning():
+            self.version_thread.stop()
+            self.version_thread.wait()
+
+        game_version = self.version_filter.text().strip()
+        self.version_thread = ModVersionFetchThread(mod['source'], mod['id'], game_version)
+        self.version_thread.versions_fetched.connect(self.on_versions_fetched)
+        self.version_thread.error_occurred.connect(self.on_versions_error)
+        self.version_thread.finished.connect(self.version_thread.deleteLater)
+        self.version_thread.start()
+
+        # Show loading message for description (loaded after versions)
+        self.description_browser.setHtml("<i>Loading description...</i>")
+
+        # Fetch full description AFTER starting version fetch
+        if self.description_thread and self.description_thread.isRunning():
+            self.description_thread.stop()
+            self.description_thread.wait(1000)  # Wait up to 1 second
+
+        self.description_thread = ModDescriptionFetchThread(mod['source'], mod['id'])
+        self.description_thread.description_fetched.connect(self.on_description_fetched)
+        self.description_thread.error_occurred.connect(self.on_description_error)
+        self.description_thread.finished.connect(self.description_thread.deleteLater)
+        self.description_thread.start()
+
+    def on_description_fetched(self, description: str):
+        """Handle full description fetch."""
+        # Check if description is HTML by looking for common HTML tags
+        # CurseForge returns HTML, Modrinth returns Markdown
+        html_pattern = r'<\s*(p|div|span|br|img|a|h[1-6]|ul|ol|li|strong|em|b|i)\b'
+        is_html = bool(re.search(html_pattern, description, re.IGNORECASE))
+
+        if is_html:
+            self.description_browser.setHtml(description)
+        else:
+            # Convert markdown-style text to basic HTML
+            # Replace newlines with <br> for better display
+            html_desc = description.replace('\n', '<br>')
+            self.description_browser.setHtml(html_desc)
+
+    def on_description_error(self, error: str):
+        """Handle description fetch error."""
+        # Fall back to summary if description fetch fails
+        if self.selected_mod is not None and isinstance(self.selected_mod, dict):
+            self.description_browser.setHtml(self.selected_mod.get('summary', ''))
+        else:
+            self.description_browser.setHtml('')
+
+    def on_versions_fetched(self, versions: list):
+        """Handle version list."""
+        self.versions_combo.clear()
+
+        for v in versions:
+            game_vers = ', '.join(v['game_versions'][:3])
+            if len(v['game_versions']) > 3:
+                game_vers += '...'
+            self.versions_combo.addItem(f"[{v['release_type']}] {v['name']} ({game_vers})", v)
+
+        # Auto-select the first (most recent) version
+        if self.versions_combo.count() > 0:
+            self.versions_combo.setCurrentIndex(0)
+            version = self.versions_combo.currentData()
+            if version:
+                self.selected_version = version
+                self.add_btn.setEnabled(True)
+
+    def on_versions_error(self, error: str):
+        """Handle version fetch error."""
+        self.versions_combo.clear()
+        self.versions_combo.addItem(f"Error: {error}")
+
+    def on_version_combo_changed(self, index: int):
+        """Handle version combo box selection change."""
+        if index < 0:
+            return
+        version = self.versions_combo.currentData()
+        if version:
+            self.selected_version = version
+            self.add_btn.setEnabled(True)
+
+    def add_selected_mod(self):
+        """Add the selected mod."""
+        if not self.selected_mod or not self.selected_version:
+            return
+        self.accept()
+
+    def get_mod(self) -> Optional[ModEntry]:
+        """Get the selected mod as a ModEntry."""
+        if not self.selected_mod or not self.selected_version:
+            return None
+
+        mod = ModEntry()
+        # Leave display_name blank - user should set info_name manually if needed
+        mod.display_name = ''
+        mod.id = self.selected_mod['slug'] or self.selected_mod['id']
+        # Leave file_name blank by default - don't autofill
+        mod.file_name = ''
+        mod.since = self.current_version
+
+        # Store icon URL for later fetching
+        mod._icon_url = self.selected_mod.get('icon_url', '')
+
+        if self.selected_mod['source'] == 'curseforge':
+            try:
+                project_id = int(self.selected_mod['id'])
+                file_id = int(self.selected_version['file_id'])
+            except (ValueError, TypeError):
+                project_id = 0
+                file_id = 0
+            mod.source = {
+                'type': 'curseforge',
+                'projectId': project_id,
+                'fileId': file_id
+            }
+        else:
+            mod.source = {
+                'type': 'modrinth',
+                'projectSlug': self.selected_mod['slug'],
+                'versionId': str(self.selected_version['file_id'])
+            }
+
+        return mod
+
+    def closeEvent(self, event):
+        """Clean up threads when dialog is closed."""
+        self._cleanup_threads()
+        super().closeEvent(event)
+
+    def _cleanup_threads(self):
+        """Stop and clean up all running threads."""
+        # Stop scroll debounce timer
+        if self._scroll_debounce_timer:
+            self._scroll_debounce_timer.stop()
+
+        # Stop search thread
+        if self.search_thread and self.search_thread.isRunning():
+            try:
+                self.search_thread.stop()
+                self.search_thread.wait(1000)  # Wait up to 1 second
+            except Exception:
+                pass
+
+        # Stop version thread
+        if self.version_thread and self.version_thread.isRunning():
+            try:
+                self.version_thread.stop()
+                self.version_thread.wait(1000)
+            except Exception:
+                pass
+
+        # Stop description thread
+        if self.description_thread and self.description_thread.isRunning():
+            try:
+                self.description_thread.stop()
+                self.description_thread.wait(1000)
+            except Exception:
+                pass
+
+        # Stop preload thread
+        if hasattr(self, '_preload_thread') and self._preload_thread:
+            try:
+                if self._preload_thread.isRunning():
+                    self._preload_thread.stop()
+                    self._preload_thread.wait(1000)
+            except Exception:
+                pass
+
+        # Stop preload page threads
+        if hasattr(self, '_preload_page_threads'):
+            for thread in self._preload_page_threads:
+                try:
+                    if thread.isRunning():
+                        thread.stop()
+                        thread.wait(500)
+                except Exception:
+                    pass
+            self._preload_page_threads.clear()
+
+        # Stop icon threads
+        for thread in self.icon_threads:
+            try:
+                if thread.isRunning():
+                    thread.stop()
+                    thread.wait(100)  # Brief wait per thread
+            except Exception:
+                pass
+        self.icon_threads.clear()
+
+        # Shutdown description browser image threads
+        if hasattr(self, 'description_browser'):
+            try:
+                self.description_browser.shutdown()
+            except Exception:
+                pass
+
+        # Clear loading state
+        self._loading_mod_ids.clear()
+
+
+
+# === Grid Item Widget ===
+class ItemCard(QFrame):
+    """Clickable card widget for grid display."""
+    clicked = pyqtSignal()
+    double_clicked = pyqtSignal()
+
+    def __init__(self, name: str, icon_path: str = "", is_add_button: bool = False, icon_data: bytes = None, parent=None):
+        super().__init__(parent)
+        self.name = name
+        self.icon_path = icon_path
+        self.is_add_button = is_add_button
+        self.selected = False
+        self._icon_data = icon_data
+        self.setup_ui()
+
+    def setup_ui(self):
+        self.setFixedSize(120, 120)  # Made slightly bigger
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Do not call update_style() here because some widgets (like name_label) are not created yet.
+
+        theme = get_current_theme()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
+
+        self.icon_label = QLabel()
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.icon_label.setFixedSize(56, 56)  # Made icon slightly bigger
+
+        if self.is_add_button:
+            self.icon_label.setText("+")
+            # Use a more visible color that works on both light and dark themes
+            self.icon_label.setStyleSheet(f"font-size: 36px; font-weight: bold; background-color: transparent; color: {theme['text_primary']};")
+        elif self._icon_data:
+            # Load icon from bytes data
+            self._load_icon_from_bytes(self._icon_data)
+            self.icon_label.setStyleSheet("background-color: transparent;")
+        elif self.icon_path and os.path.exists(self.icon_path):
+            pixmap = QPixmap(self.icon_path)
+            if not pixmap.isNull():
+                self.icon_label.setPixmap(pixmap.scaled(56, 56, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                self.icon_label.setStyleSheet("background-color: transparent;")
+            else:
+                self._set_default_icon()
+        else:
+            self._set_default_icon()
+
+        layout.addWidget(self.icon_label, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self.name_label = QLabel(self.name if not self.is_add_button else "Add")
+        self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.name_label.setWordWrap(True)
+        self.name_label.setStyleSheet(f"font-size: 11px; background-color: transparent; color: {theme['text_primary']};")
+        layout.addWidget(self.name_label)
+
+        # Now that the UI elements are created, set the initial style.
+        self.update_style()
+
+    def _set_default_icon(self):
+        """Set the default package icon."""
+        theme = get_current_theme()
+        self.icon_label.setText("📦")
+        self.icon_label.setStyleSheet(f"font-size: 28px; background-color: transparent; color: {theme['text_primary']};")  # Slightly bigger icon
+
+    def _load_icon_from_bytes(self, data: bytes):
+        """Load icon from bytes data."""
+        try:
+            pixmap = QPixmap()
+            if pixmap.loadFromData(data):
+                self.icon_label.setPixmap(pixmap.scaled(56, 56, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                self.icon_label.setStyleSheet("background-color: transparent;")
+            else:
+                self._set_default_icon()
+        except Exception:
+            self._set_default_icon()
+
+    def update_style(self):
+        # Use theme colors directly for proper theming
+        theme = get_current_theme()
+        if self.selected:
+            self.setStyleSheet(f"""
+                ItemCard {{
+                    background-color: {theme['accent']};
+                    border: 2px solid {theme['accent']};
+                    border-radius: 8px;
+                }}
+            """)
+            # Update label colors for selected state, if label exists
+            if hasattr(self, "name_label"):
+                self.name_label.setStyleSheet(f"font-size: 11px; background-color: transparent; color: {theme['bg_primary']};")
+        else:
+            self.setStyleSheet(f"""
+                ItemCard {{
+                    background-color: {theme['bg_secondary']};
+                    border: 2px solid {theme['border']};
+                    border-radius: 8px;
+                }}
+                ItemCard:hover {{
+                    border-color: {theme['accent']};
+                }}
+            """)
+            # Update label colors for normal state, if label exists
+            if hasattr(self, "name_label"):
+                self.name_label.setStyleSheet(f"font-size: 11px; background-color: transparent; color: {theme['text_primary']};")
+
+    def set_selected(self, selected: bool):
+        self.selected = selected
+        self.update_style()
+
+    def set_icon(self, pixmap: QPixmap):
+        if not pixmap.isNull():
+            self.icon_label.setPixmap(pixmap.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+
+    def set_icon_from_bytes(self, data: bytes):
+        """Set icon from bytes data."""
+        self._load_icon_from_bytes(data)
+
+    def mousePressEvent(self, event):
+        self.clicked.emit()
+
+    def mouseDoubleClickEvent(self, event):
+        self.double_clicked.emit()
+
+
+# === Version Card Widget ===
+class VersionCard(QFrame):
+    """Card widget for displaying versions with optional delete button."""
+    clicked = pyqtSignal(str)
+    delete_clicked = pyqtSignal(str)
+
+    def __init__(self, version: str, is_latest: bool = False, is_new: bool = True, icon_path: str = "", is_add_button: bool = False, parent=None):
+        super().__init__(parent)
+        self.version = version
+        self.is_latest = is_latest
+        self.is_new = is_new
+        self.icon_path = icon_path
+        self.is_add_button = is_add_button
+        self.setup_ui()
+
+    def setup_ui(self):
+        self.setFixedSize(110, 120)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.update_style()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(2)
+
+        theme = get_current_theme()
+
+        # Header with delete button for all versions (not the add button)
+        if not self.is_add_button:
+            header_layout = QHBoxLayout()
+            header_layout.setContentsMargins(0, 0, 0, 0)
+            header_layout.addStretch()
+
+            # Create clickable delete button with visible X
+            self.delete_button = QPushButton("×")
+            self.delete_button.setFixedSize(20, 20)
+            self.delete_button.setToolTip("Delete this version")
+            self.delete_button.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.delete_button.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {theme['danger']};
+                    color: white;
+                    border: none;
+                    border-radius: 10px;
+                    font-weight: bold;
+                    font-size: 16px;
+                    padding: 0 0 2px 0;
+                }}
+                QPushButton:hover {{
+                    background-color: {theme['accent_hover']};
+                }}
+            """)
+            self.delete_button.clicked.connect(self.on_delete_clicked)
+            header_layout.addWidget(self.delete_button)
+            layout.addLayout(header_layout)
+
+        # Icon
+        self.icon_label = QLabel()
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.icon_label.setFixedSize(40, 40)
+
+        if self.is_add_button:
+            self.icon_label.setText("+")
+            self.icon_label.setStyleSheet(f"font-size: 28px; font-weight: bold; background-color: transparent; color: {theme['text_primary']};")
+        elif self.icon_path and os.path.exists(self.icon_path):
+            pixmap = QPixmap(self.icon_path)
+            if not pixmap.isNull():
+                self.icon_label.setPixmap(pixmap.scaled(40, 40, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                self.icon_label.setStyleSheet("background-color: transparent;")
+            else:
+                self.icon_label.setText("📦")
+                self.icon_label.setStyleSheet(f"font-size: 20px; background-color: transparent; color: {theme['text_primary']};")
+        else:
+            self.icon_label.setText("📦")
+            self.icon_label.setStyleSheet(f"font-size: 20px; background-color: transparent; color: {theme['text_primary']};")
+
+        layout.addWidget(self.icon_label, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # Version name
+        if self.is_add_button:
+            name_text = "Add"
+        elif self.is_latest:
+            name_text = f"{self.version}\n(Latest)"
+        else:
+            name_text = self.version
+
+        self.name_label = QLabel(name_text)
+        self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.name_label.setWordWrap(True)
+        self.name_label.setStyleSheet(f"font-size: 11px; background-color: transparent; color: {theme['text_primary']};")
+        layout.addWidget(self.name_label)
+
+        layout.addStretch()
+
+    def update_style(self):
+        theme = get_current_theme()
+        self.setStyleSheet(f"""
+            VersionCard {{
+                background-color: {theme['bg_secondary']};
+                border: 2px solid {theme['border']};
+                border-radius: 8px;
+            }}
+            VersionCard:hover {{
+                border-color: {theme['accent']};
+            }}
+        """)
+
+    def on_delete_clicked(self):
+        self.delete_clicked.emit(self.version)
+
+    def mousePressEvent(self, event):
+        self.clicked.emit(self.version)
+
+
+# === Mod Editor Panel ===
+class ModEditorPanel(QWidget):
+    """Right panel for editing a selected mod."""
+    mod_changed = pyqtSignal()
+    mod_saved = pyqtSignal()  # Emitted when save is clicked - to close panel
+    mod_deleted = pyqtSignal(object)  # Emitted when delete is confirmed, passes the mod
+    hash_requested = pyqtSignal(str)
+    icon_changed = pyqtSignal()  # Emitted when icon is added/changed
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.current_mod: Optional[ModEntry] = None
+        self.hash_calculator: Optional[HashCalculator] = None
+        self.setup_ui()
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout(scroll_widget)
+        scroll_layout.setSpacing(16)
+
+        # ID Section (read-only after creation)
+        id_group = QGroupBox("Identifier")
+        id_layout = QFormLayout(id_group)
+        self.id_edit = QLineEdit()
+        self.id_edit.setPlaceholderText("Unique mod ID")
+        id_layout.addRow("ID:", self.id_edit)
+        scroll_layout.addWidget(id_group)
+
+        # Hash Section - Read only, automatically filled
+        hash_group = QGroupBox("Hash")
+        hash_layout = QVBoxLayout(hash_group)
+        self.hash_edit = QLineEdit()
+        self.hash_edit.setPlaceholderText("SHA-256 hash (auto-filled)")
+        self.hash_edit.setReadOnly(True)  # Make hash field read-only
+        self.hash_edit.setToolTip("Hash is automatically calculated when you click 'Auto-fill Hash'")
+        hash_layout.addWidget(self.hash_edit)
+
+        hash_btn_layout = QHBoxLayout()
+        self.auto_hash_btn = QPushButton("Auto-fill Hash")
+        self.auto_hash_btn.clicked.connect(self.auto_fill_hash)
+        hash_btn_layout.addWidget(self.auto_hash_btn)
+        self.hash_progress = QProgressBar()
+        self.hash_progress.setVisible(False)
+        hash_btn_layout.addWidget(self.hash_progress)
+        hash_layout.addLayout(hash_btn_layout)
+        scroll_layout.addWidget(hash_group)
+
+        # Source Section
+        source_group = QGroupBox("Source")
+        source_layout = QFormLayout(source_group)
+
+        source_btn_layout = QHBoxLayout()
+        self.curseforge_btn = QPushButton("CurseForge")
+        self.curseforge_btn.setCheckable(True)
+        self.curseforge_btn.clicked.connect(lambda: self.set_source_type('curseforge'))
+        source_btn_layout.addWidget(self.curseforge_btn)
+
+        self.modrinth_btn = QPushButton("Modrinth")
+        self.modrinth_btn.setCheckable(True)
+        self.modrinth_btn.clicked.connect(lambda: self.set_source_type('modrinth'))
+        source_btn_layout.addWidget(self.modrinth_btn)
+
+        self.url_btn = QPushButton("URL")
+        self.url_btn.setCheckable(True)
+        self.url_btn.clicked.connect(lambda: self.set_source_type('url'))
+        source_btn_layout.addWidget(self.url_btn)
+
+        source_layout.addRow("Type:", source_btn_layout)
+
+        self.mod_id_edit = QLineEdit()
+        self.mod_id_edit.setPlaceholderText("Project ID or slug")
+        source_layout.addRow("Mod ID:", self.mod_id_edit)
+
+        self.file_id_edit = QLineEdit()
+        self.file_id_edit.setPlaceholderText("File ID or version ID")
+        source_layout.addRow("File ID:", self.file_id_edit)
+
+        self.url_edit = QLineEdit()
+        self.url_edit.setPlaceholderText("Direct download URL")
+        source_layout.addRow("URL:", self.url_edit)
+
+        scroll_layout.addWidget(source_group)
+
+        # Install Location
+        location_group = QGroupBox("Install Location")
+        location_layout = QFormLayout(location_group)
+        self.install_location_edit = QLineEdit()
+        self.install_location_edit.setPlaceholderText("mods")
+        self.install_location_edit.setText("mods")
+        location_layout.addRow("Folder:", self.install_location_edit)
+
+        self.file_name_edit = QLineEdit()
+        self.file_name_edit.setPlaceholderText("Optional: custom filename")
+        location_layout.addRow("File Name:", self.file_name_edit)
+
+        scroll_layout.addWidget(location_group)
+
+        # Naming Section
+        naming_group = QGroupBox("Naming")
+        naming_layout = QFormLayout(naming_group)
+
+        # Display Name - just shown under boxes in config GUI
+        self.display_name_edit = QLineEdit()
+        self.display_name_edit.setPlaceholderText("Name shown under mod card (GUI only)")
+        naming_layout.addRow("Display Name:", self.display_name_edit)
+
+        theme = get_current_theme()
+        display_note = QLabel("Shown under mod card in editor only")
+        display_note.setStyleSheet(f"font-size: 11px; color: {theme['text_secondary']};")
+        naming_layout.addRow("", display_note)
+
+        # Info Name - saves as display_name in config
+        self.info_name_edit = QLineEdit()
+        self.info_name_edit.setPlaceholderText("Name saved to config (blank by default)")
+        naming_layout.addRow("Info Name:", self.info_name_edit)
+
+        info_note = QLabel("Saved as 'display_name' in config file")
+        info_note.setStyleSheet(f"font-size: 11px; color: {theme['text_secondary']};")
+        naming_layout.addRow("", info_note)
+
+        scroll_layout.addWidget(naming_group)
+
+        # Icon Section - for custom icons
+        icon_group = QGroupBox("Icon (Optional)")
+        icon_layout = QHBoxLayout(icon_group)
+
+        self.icon_preview = QLabel()
+        self.icon_preview.setFixedSize(64, 64)
+        self.icon_preview.setStyleSheet(f"border: 2px dashed {theme['border']}; border-radius: 8px;")
+        self.icon_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.icon_preview.setText("No Icon")
+        icon_layout.addWidget(self.icon_preview)
+
+        icon_btn_layout = QVBoxLayout()
+        self.select_icon_btn = QPushButton("Select Custom Icon...")
+        self.select_icon_btn.clicked.connect(self.select_custom_icon)
+        icon_btn_layout.addWidget(self.select_icon_btn)
+
+        self.fetch_icon_btn = QPushButton("Fetch from Source")
+        self.fetch_icon_btn.setToolTip("Fetch icon from CurseForge/Modrinth")
+        self.fetch_icon_btn.clicked.connect(self.fetch_source_icon)
+        icon_btn_layout.addWidget(self.fetch_icon_btn)
+
+        self.clear_icon_btn = QPushButton("Clear")
+        self.clear_icon_btn.clicked.connect(self.clear_icon)
+        icon_btn_layout.addWidget(self.clear_icon_btn)
+        icon_btn_layout.addStretch()
+        icon_layout.addLayout(icon_btn_layout)
+        icon_layout.addStretch()
+        scroll_layout.addWidget(icon_group)
+
+        scroll_layout.addStretch()
+        scroll.setWidget(scroll_widget)
+        layout.addWidget(scroll)
+
+        # Action Buttons
+        btn_layout = QHBoxLayout()
+        self.delete_btn = QPushButton("Delete")
+        self.delete_btn.setObjectName("dangerButton")
+        self.delete_btn.clicked.connect(self.request_delete)
+        btn_layout.addWidget(self.delete_btn)
+
+        btn_layout.addStretch()
+
+        self.save_btn = QPushButton("Save")
+        self.save_btn.setObjectName("successButton")
+        self.save_btn.clicked.connect(self.save_changes)
+        btn_layout.addWidget(self.save_btn)
+
+        layout.addLayout(btn_layout)
+
+        # Connect change signals
+        self.id_edit.textChanged.connect(self.on_field_changed)
+        self.hash_edit.textChanged.connect(self.on_field_changed)
+        self.mod_id_edit.textChanged.connect(self.on_field_changed)
+        self.file_id_edit.textChanged.connect(self.on_field_changed)
+        self.url_edit.textChanged.connect(self.on_field_changed)
+        self.install_location_edit.textChanged.connect(self.on_field_changed)
+        self.file_name_edit.textChanged.connect(self.on_field_changed)
+        self.display_name_edit.textChanged.connect(self.on_field_changed)
+        self.info_name_edit.textChanged.connect(self.on_field_changed)
+
+    def _update_source_button_styles(self):
+        """Update source button styles to show selected state with darker tint."""
+        # Use theme colors directly for proper theming
+        theme = get_current_theme()
+        selected_style = f"background-color: {theme['accent']}; border: 2px solid {theme['accent']}; color: {theme['bg_primary']};"
+        normal_style = ""
+
+        self.curseforge_btn.setStyleSheet(selected_style if self.curseforge_btn.isChecked() else normal_style)
+        self.modrinth_btn.setStyleSheet(selected_style if self.modrinth_btn.isChecked() else normal_style)
+        self.url_btn.setStyleSheet(selected_style if self.url_btn.isChecked() else normal_style)
+
+    def set_source_type(self, source_type: str):
+        self.curseforge_btn.setChecked(source_type == 'curseforge')
+        self.modrinth_btn.setChecked(source_type == 'modrinth')
+        self.url_btn.setChecked(source_type == 'url')
+
+        # Update button styles to show selected state
+        self._update_source_button_styles()
+
+        # Update field visibility
+        is_curseforge = source_type == 'curseforge'
+        is_modrinth = source_type == 'modrinth'
+        is_url = source_type == 'url'
+
+        self.mod_id_edit.setEnabled(is_curseforge or is_modrinth)
+        self.file_id_edit.setEnabled(is_curseforge or is_modrinth)
+        self.url_edit.setEnabled(is_url)
+
+        self.mod_id_edit.setPlaceholderText("Project ID" if is_curseforge else "Project slug" if is_modrinth else "")
+        self.file_id_edit.setPlaceholderText("File ID" if is_curseforge else "Version ID" if is_modrinth else "")
+
+    def load_mod(self, mod: ModEntry):
+        self.current_mod = mod
+
+        # Block signals during load
+        self.blockSignals(True)
+
+        self.id_edit.setText(mod.id)
+        self.id_edit.setEnabled(mod.is_new())  # Only editable for new mods
+
+        self.hash_edit.setText(mod.hash)
+        # Display name is used for GUI display under cards
+        # Use mod.id as fallback for display if no display name set
+        gui_display_name = getattr(mod, '_gui_display_name', '') or mod.display_name or mod.id
+        self.display_name_edit.setText(gui_display_name if gui_display_name != mod.id else '')
+        # Info name saves as display_name in config
+        self.info_name_edit.setText(mod.display_name)
+        self.file_name_edit.setText(mod.file_name)
+        self.install_location_edit.setText(mod.install_location or 'mods')
+
+        # Load source
+        source = mod.source
+        source_type = source.get('type', 'url')
+        self.set_source_type(source_type)
+
+        if source_type == 'curseforge':
+            self.mod_id_edit.setText(str(source.get('projectId', '')))
+            self.file_id_edit.setText(str(source.get('fileId', '')))
+            self.url_edit.clear()
+        elif source_type == 'modrinth':
+            self.mod_id_edit.setText(source.get('projectSlug', ''))
+            self.file_id_edit.setText(source.get('versionId', ''))
+            self.url_edit.clear()
+        else:
+            self.mod_id_edit.clear()
+            self.file_id_edit.clear()
+            self.url_edit.setText(source.get('url', ''))
+
+        # Load icon preview
+        self._update_icon_preview()
+
+        # If mod has icon URL but no icon data, try to fetch it
+        if hasattr(mod, '_icon_url') and mod._icon_url and not mod._icon_data:
+            self.fetch_source_icon()
+
+        self.blockSignals(False)
+
+        # Auto-fill hash if from curseforge/modrinth and no hash is set
+        # Use short delay to allow UI to update first before starting the hash calculation
+        if (source_type in ['curseforge', 'modrinth']) and not mod.hash:
+            QTimer.singleShot(100, self.auto_fill_hash)
+
+    def _update_icon_preview(self):
+        """Update the icon preview label."""
+        theme = get_current_theme()
+        if self.current_mod and self.current_mod._icon_data:
+            pixmap = QPixmap()
+            if pixmap.loadFromData(self.current_mod._icon_data):
+                self.icon_preview.setPixmap(pixmap.scaled(60, 60, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                self.icon_preview.setStyleSheet(f"border: 2px solid {theme['accent']}; border-radius: 8px;")
+            else:
+                self._set_no_icon()
+        elif self.current_mod and self.current_mod.icon_path and os.path.exists(self.current_mod.icon_path):
+            pixmap = QPixmap(self.current_mod.icon_path)
+            if not pixmap.isNull():
+                self.icon_preview.setPixmap(pixmap.scaled(60, 60, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                self.icon_preview.setStyleSheet(f"border: 2px solid {theme['accent']}; border-radius: 8px;")
+            else:
+                self._set_no_icon()
+        else:
+            self._set_no_icon()
+
+    def _set_no_icon(self):
+        """Set the icon preview to show no icon."""
+        theme = get_current_theme()
+        self.icon_preview.clear()
+        self.icon_preview.setText("No Icon")
+        self.icon_preview.setStyleSheet(f"border: 2px dashed {theme['border']}; border-radius: 8px;")
+
+    def select_custom_icon(self):
+        """Select a custom icon file."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Icon", "", "Images (*.png *.jpg *.jpeg *.gif *.ico)"
+        )
+        if file_path and self.current_mod:
+            self.current_mod.icon_path = file_path
+            self.current_mod._icon_data = None  # Clear any fetched icon data
+            with open(file_path, 'rb') as f:
+                self.current_mod._icon_data = f.read()
+            self._update_icon_preview()
+            self.icon_changed.emit()
+
+    def fetch_source_icon(self):
+        """Fetch icon from CurseForge or Modrinth source."""
+        if not self.current_mod:
+            return
+
+        # Check if we have a stored icon URL
+        icon_url = getattr(self.current_mod, '_icon_url', None)
+
+        if not icon_url:
+            # Try to fetch from source
+            source = self.current_mod.source
+            source_type = source.get('type', '')
+
+            if source_type == 'curseforge':
+                project_id = source.get('projectId', '')
+                if project_id:
+                    try:
+                        url = f"{CF_PROXY_BASE_URL}/mods/{project_id}"
+                        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+                        with urllib.request.urlopen(req, timeout=10) as response:
+                            data = json.loads(response.read())
+                            mod_data = data.get('data', data)
+                            logo = mod_data.get('logo', {})
+                            icon_url = logo.get('thumbnailUrl', logo.get('url', ''))
+                    except Exception as e:
+                        QMessageBox.warning(self, "Error", f"Failed to fetch icon from CurseForge: {e}")
+                        return
+            elif source_type == 'modrinth':
+                project_slug = source.get('projectSlug', '')
+                if project_slug:
+                    try:
+                        url = f"https://api.modrinth.com/v2/project/{project_slug}"
+                        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+                        with urllib.request.urlopen(req, timeout=10) as response:
+                            data = json.loads(response.read())
+                            icon_url = data.get('icon_url', '')
+                    except Exception as e:
+                        QMessageBox.warning(self, "Error", f"Failed to fetch icon from Modrinth: {e}")
+                        return
+
+        if not icon_url:
+            QMessageBox.information(self, "No Icon", "No icon URL available for this source.")
+            return
+
+        # Fetch the icon
+        try:
+            req = urllib.request.Request(icon_url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                self.current_mod._icon_data = response.read()
+                self.current_mod.icon_path = ''  # Clear custom path
+                self._update_icon_preview()
+                self.icon_changed.emit()
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to download icon: {e}")
+
+    def clear_icon(self):
+        """Clear the current icon."""
+        if self.current_mod:
+            self.current_mod.icon_path = ''
+            self.current_mod._icon_data = None
+            self._update_icon_preview()
+            self.icon_changed.emit()
+
+    def save_changes(self):
+        if not self.current_mod:
+            return
+
+        self.current_mod.id = self.id_edit.text().strip()
+        self.current_mod.hash = self.hash_edit.text().strip()
+        # Info name saves to display_name in config
+        self.current_mod.display_name = self.info_name_edit.text().strip()
+        # Store GUI display name separately (not saved to config)
+        self.current_mod._gui_display_name = self.display_name_edit.text().strip()
+        self.current_mod.file_name = self.file_name_edit.text().strip()
+        self.current_mod.install_location = self.install_location_edit.text().strip() or 'mods'
+
+        # Save source
+        if self.curseforge_btn.isChecked():
+            self.current_mod.source = {
+                'type': 'curseforge',
+                'projectId': int(self.mod_id_edit.text()) if self.mod_id_edit.text().isdigit() else 0,
+                'fileId': int(self.file_id_edit.text()) if self.file_id_edit.text().isdigit() else 0
+            }
+        elif self.modrinth_btn.isChecked():
+            self.current_mod.source = {
+                'type': 'modrinth',
+                'projectSlug': self.mod_id_edit.text().strip(),
+                'versionId': self.file_id_edit.text().strip()
+            }
+        else:
+            self.current_mod.source = {
+                'type': 'url',
+                'url': self.url_edit.text().strip()
+            }
+
+        self.current_mod.mark_saved()
+        self.mod_changed.emit()
+        self.mod_saved.emit()  # Signal to close the editor panel
+
+    def auto_fill_hash(self):
+        """Auto-fill hash from URL, CurseForge, or Modrinth source."""
+        url = None
+
+        if self.url_btn.isChecked():
+            url = self.url_edit.text().strip()
+            if not url:
+                QMessageBox.warning(self, "No URL", "Please enter a URL first to auto-fill the hash.")
+                return
+        elif self.curseforge_btn.isChecked():
+            # Fetch download URL from CurseForge using proxy API
+            project_id = self.mod_id_edit.text().strip()
+            file_id = self.file_id_edit.text().strip()
+            if not project_id or not file_id:
+                QMessageBox.warning(self, "Missing Info", "Please enter Project ID and File ID first.")
+                return
+            try:
+                # Use the curse.tools proxy which doesn't require API key
+                api_url = f"{CF_PROXY_BASE_URL}/mods/{project_id}/files/{file_id}"
+                req = urllib.request.Request(api_url, headers={
+                    "User-Agent": USER_AGENT
+                })
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    data = json.loads(response.read())
+                    # Handle both direct response and nested data response
+                    file_data = data.get('data', data)
+                    url = file_data.get('downloadUrl')
+                    if not url:
+                        QMessageBox.warning(self, "Error", "Could not get download URL from CurseForge.")
+                        return
+            except Exception as e:
+                QMessageBox.warning(self, "API Error", f"Failed to fetch from CurseForge:\n{str(e)}")
+                return
+        elif self.modrinth_btn.isChecked():
+            # Fetch download URL from Modrinth
+            version_id = self.file_id_edit.text().strip()
+            if not version_id:
+                QMessageBox.warning(self, "Missing Info", "Please enter Version ID first.")
+                return
+            try:
+                api_url = f"https://api.modrinth.com/v2/version/{version_id}"
+                req = urllib.request.Request(api_url, headers={"User-Agent": USER_AGENT})
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    data = json.loads(response.read())
+                    files = data.get('files', [])
+                    if files:
+                        url = files[0].get('url')
+                    if not url:
+                        QMessageBox.warning(self, "Error", "Could not get download URL from Modrinth.")
+                        return
+            except Exception as e:
+                QMessageBox.warning(self, "API Error", f"Failed to fetch from Modrinth:\n{str(e)}")
+                return
+        else:
+            QMessageBox.warning(self, "No Source", "Please select a source type and enter required information.")
+            return
+
+        self.hash_progress.setVisible(True)
+        self.hash_progress.setValue(0)
+        self.auto_hash_btn.setEnabled(False)
+
+        self.hash_calculator = HashCalculator(url)
+        self.hash_calculator.hash_calculated.connect(self.on_hash_calculated)
+        self.hash_calculator.progress_updated.connect(self.hash_progress.setValue)
+        self.hash_calculator.error_occurred.connect(self.on_hash_error)
+        self.hash_calculator.finished.connect(self.hash_calculator.deleteLater)
+        self.hash_calculator.start()
+
+    def on_hash_calculated(self, hash_value: str):
+        self.hash_edit.setText(hash_value)
+        self.hash_progress.setVisible(False)
+        self.auto_hash_btn.setEnabled(True)
+
+    def on_hash_error(self, error: str):
+        QMessageBox.warning(self, "Hash Error", f"Failed to calculate hash:\n{error}")
+        self.hash_progress.setVisible(False)
+        self.auto_hash_btn.setEnabled(True)
+
+    def on_field_changed(self):
+        pass  # Could add unsaved indicator
+
+    def request_delete(self):
+        if self.current_mod:
+            dialog = ConfirmDeleteDialog(self.current_mod.display_name or self.current_mod.id, "mod", self)
+            if dialog.exec():
+                self.mod_deleted.emit(self.current_mod)
+
+    def clear(self):
+        # Stop any running hash calculation
+        if self.hash_calculator is not None:
+            try:
+                if self.hash_calculator.isRunning():
+                    self.hash_calculator.stop()
+                    self.hash_calculator.wait(1000)
+            except Exception:
+                pass
+            self.hash_calculator = None
+        self.hash_progress.setVisible(False)
+        self.auto_hash_btn.setEnabled(True)
+        self.current_mod = None
+        self.id_edit.clear()
+        self.hash_edit.clear()
+        self.display_name_edit.clear()
+        self.info_name_edit.clear()
+        self.file_name_edit.clear()
+        self.install_location_edit.setText("mods")
+        self.mod_id_edit.clear()
+        self.file_id_edit.clear()
+        self.url_edit.clear()
+        self.set_source_type('url')
+
+
+
+# === File Editor Panel ===
+class FileEditorPanel(QWidget):
+    """Panel for editing a file entry."""
+    file_changed = pyqtSignal()
+    file_saved = pyqtSignal()  # Emitted when save is clicked - to close panel
+    file_deleted = pyqtSignal(object)  # Emitted when delete is confirmed, passes the file
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.current_file: Optional[FileEntry] = None
+        self.hash_calculator: Optional[HashCalculator] = None
+        self.setup_ui()
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout(scroll_widget)
+        scroll_layout.setSpacing(16)
+
+        # Basic Info
+        info_group = QGroupBox("File Information")
+        info_layout = QFormLayout(info_group)
+
+        self.display_name_edit = QLineEdit()
+        self.display_name_edit.setPlaceholderText("Display name")
+        info_layout.addRow("Display Name:", self.display_name_edit)
+
+        self.file_name_edit = QLineEdit()
+        self.file_name_edit.setPlaceholderText("Optional: custom filename")
+        info_layout.addRow("File Name:", self.file_name_edit)
+
+        self.url_edit = QLineEdit()
+        self.url_edit.setPlaceholderText("Direct download URL")
+        info_layout.addRow("URL:", self.url_edit)
+
+        self.download_path_edit = QLineEdit()
+        self.download_path_edit.setPlaceholderText("config/")
+        self.download_path_edit.setText("config/")
+        info_layout.addRow("Download Path:", self.download_path_edit)
+
+        scroll_layout.addWidget(info_group)
+
+        # Hash Section - Read only, automatically filled
+        hash_group = QGroupBox("Hash")
+        hash_layout = QVBoxLayout(hash_group)
+        self.hash_edit = QLineEdit()
+        self.hash_edit.setPlaceholderText("SHA-256 hash (auto-filled)")
+        self.hash_edit.setReadOnly(True)  # Make hash field read-only
+        self.hash_edit.setToolTip("Hash is automatically calculated when you click 'Auto-fill Hash'")
+        hash_layout.addWidget(self.hash_edit)
+
+        hash_btn_layout = QHBoxLayout()
+        self.auto_hash_btn = QPushButton("Auto-fill Hash")
+        self.auto_hash_btn.clicked.connect(self.auto_fill_hash)
+        hash_btn_layout.addWidget(self.auto_hash_btn)
+        self.hash_progress = QProgressBar()
+        self.hash_progress.setVisible(False)
+        hash_btn_layout.addWidget(self.hash_progress)
+        hash_layout.addLayout(hash_btn_layout)
+        scroll_layout.addWidget(hash_group)
+
+        # Options
+        options_group = QGroupBox("Options")
+        options_layout = QVBoxLayout(options_group)
+
+        self.overwrite_check = QCheckBox("Overwrite existing file")
+        self.overwrite_check.setChecked(True)
+        options_layout.addWidget(self.overwrite_check)
+
+        self.extract_check = QCheckBox("Extract ZIP archive")
+        options_layout.addWidget(self.extract_check)
+
+        scroll_layout.addWidget(options_group)
+        scroll_layout.addStretch()
+
+        scroll.setWidget(scroll_widget)
+        layout.addWidget(scroll)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        self.delete_btn = QPushButton("Delete")
+        self.delete_btn.setObjectName("dangerButton")
+        self.delete_btn.clicked.connect(self.request_delete)
+        btn_layout.addWidget(self.delete_btn)
+        btn_layout.addStretch()
+        self.save_btn = QPushButton("Save")
+        self.save_btn.setObjectName("successButton")
+        self.save_btn.clicked.connect(self.save_changes)
+        btn_layout.addWidget(self.save_btn)
+        layout.addLayout(btn_layout)
+
+    def load_file(self, file_entry: FileEntry):
+        self.current_file = file_entry
+        self.display_name_edit.setText(file_entry.display_name)
+        self.file_name_edit.setText(file_entry.file_name)
+        self.url_edit.setText(file_entry.url)
+        self.download_path_edit.setText(file_entry.download_path or 'config/')
+        self.hash_edit.setText(file_entry.hash)
+        self.overwrite_check.setChecked(file_entry.overwrite)
+        self.extract_check.setChecked(file_entry.extract)
+
+    def save_changes(self):
+        if not self.current_file:
+            return
+        self.current_file.display_name = self.display_name_edit.text().strip()
+        self.current_file.file_name = self.file_name_edit.text().strip()
+        self.current_file.url = self.url_edit.text().strip()
+        self.current_file.download_path = self.download_path_edit.text().strip() or 'config/'
+        self.current_file.hash = self.hash_edit.text().strip()
+        self.current_file.overwrite = self.overwrite_check.isChecked()
+        self.current_file.extract = self.extract_check.isChecked()
+        self.file_changed.emit()
+        self.file_saved.emit()  # Signal to close the editor panel
+
+    def auto_fill_hash(self):
+        url = self.url_edit.text().strip()
+        if not url:
+            QMessageBox.warning(self, "No URL", "Please enter a URL first.")
+            return
+
+        self.hash_progress.setVisible(True)
+        self.hash_progress.setValue(0)
+        self.auto_hash_btn.setEnabled(False)
+
+        self.hash_calculator = HashCalculator(url)
+        self.hash_calculator.hash_calculated.connect(self.on_hash_calculated)
+        self.hash_calculator.progress_updated.connect(self.hash_progress.setValue)
+        self.hash_calculator.error_occurred.connect(self.on_hash_error)
+        self.hash_calculator.finished.connect(self.hash_calculator.deleteLater)
+        self.hash_calculator.start()
+
+    def on_hash_calculated(self, hash_value: str):
+        self.hash_edit.setText(hash_value)
+        self.hash_progress.setVisible(False)
+        self.auto_hash_btn.setEnabled(True)
+
+    def on_hash_error(self, error: str):
+        QMessageBox.warning(self, "Hash Error", f"Failed to calculate hash:\n{error}")
+        self.hash_progress.setVisible(False)
+        self.auto_hash_btn.setEnabled(True)
+
+    def request_delete(self):
+        if self.current_file:
+            dialog = ConfirmDeleteDialog(self.current_file.display_name, "file", self)
+            if dialog.exec():
+                self.file_deleted.emit(self.current_file)
+
+    def clear(self):
+        # Stop any running hash calculation
+        if self.hash_calculator is not None:
+            try:
+                if self.hash_calculator.isRunning():
+                    self.hash_calculator.stop()
+                    self.hash_calculator.wait(1000)
+            except Exception:
+                pass
+            self.hash_calculator = None
+        self.hash_progress.setVisible(False)
+        self.auto_hash_btn.setEnabled(True)
+        self.current_file = None
+        self.display_name_edit.clear()
+        self.file_name_edit.clear()
+        self.url_edit.clear()
+        self.download_path_edit.setText("config/")
+        self.hash_edit.clear()
+        self.overwrite_check.setChecked(True)
+        self.extract_check.setChecked(False)
+
+
+# === Delete Editor Panel ===
+class DeleteEditorPanel(QWidget):
+    """Panel for editing a delete entry."""
+    delete_changed = pyqtSignal()
+    delete_saved = pyqtSignal()  # Emitted when save is clicked - to close panel
+    delete_entry_deleted = pyqtSignal(object)  # Emitted when delete is confirmed
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.current_delete: Optional[DeleteEntry] = None
+        self.setup_ui()
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        # Info
+        info_group = QGroupBox("Delete Entry")
+        info_layout = QFormLayout(info_group)
+
+        self.path_edit = QLineEdit()
+        self.path_edit.setPlaceholderText("Path to delete (e.g., mods/oldmod.jar)")
+        info_layout.addRow("Path:", self.path_edit)
+
+        self.type_combo = QComboBox()
+        self.type_combo.addItems(['file', 'folder'])
+        info_layout.addRow("Type:", self.type_combo)
+
+        self.reason_edit = QLineEdit()
+        self.reason_edit.setPlaceholderText("Optional: reason for deletion")
+        info_layout.addRow("Reason:", self.reason_edit)
+
+        layout.addWidget(info_group)
+        layout.addStretch()
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        self.delete_btn = QPushButton("Delete")
+        self.delete_btn.setObjectName("dangerButton")
+        self.delete_btn.clicked.connect(self.request_delete)
+        btn_layout.addWidget(self.delete_btn)
+        btn_layout.addStretch()
+        self.save_btn = QPushButton("Save")
+        self.save_btn.setObjectName("successButton")
+        self.save_btn.clicked.connect(self.save_changes)
+        btn_layout.addWidget(self.save_btn)
+        layout.addLayout(btn_layout)
+
+    def load_delete(self, delete_entry: DeleteEntry):
+        self.current_delete = delete_entry
+        self.path_edit.setText(delete_entry.path)
+        self.type_combo.setCurrentText(delete_entry.type)
+        self.reason_edit.setText(delete_entry.reason)
+        # Disable delete button for unremovable entries
+        self.delete_btn.setEnabled(not delete_entry._is_unremovable)
+        if delete_entry._is_unremovable:
+            self.delete_btn.setToolTip("This entry was auto-added and cannot be removed")
+
+    def save_changes(self):
+        if not self.current_delete:
+            return
+        self.current_delete.path = self.path_edit.text().strip()
+        self.current_delete.type = self.type_combo.currentText()
+        self.current_delete.reason = self.reason_edit.text().strip()
+        self.delete_changed.emit()
+        self.delete_saved.emit()  # Signal to close the editor panel
+
+    def request_delete(self):
+        if self.current_delete:
+            if self.current_delete._is_unremovable:
+                QMessageBox.warning(self, "Cannot Delete", "This entry was auto-added from a removed mod/file and cannot be deleted.")
+                return
+            dialog = ConfirmDeleteDialog(self.current_delete.path, "delete entry", self)
+            if dialog.exec():
+                self.delete_entry_deleted.emit(self.current_delete)
+
+    def clear(self):
+        self.current_delete = None
+        self.path_edit.clear()
+        self.type_combo.setCurrentIndex(0)
+        self.reason_edit.clear()
+        self.delete_btn.setEnabled(True)
+        self.delete_btn.setToolTip("")
+
+
+
+# === Version Editor Page ===
+class VersionEditorPage(QWidget):
+    """Page for editing a specific version (mods, files, deletes)."""
+    version_modified = pyqtSignal()
+    back_requested = pyqtSignal()
+    create_requested = pyqtSignal(object)  # Emitted with version_config when Create is clicked
+
+    # Number of icons to load immediately when opening a version
+    INITIAL_ICON_LOAD_COUNT = 8
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.version_config: Optional[VersionConfig] = None
+        self.selected_mod_index = -1
+        self.selected_file_index = -1
+        self.selected_delete_index = -1
+        self.icon_cache = {}
+        # Pending items - items being edited but not yet added to the list
+        self._pending_mod: Optional[ModEntry] = None
+        self._pending_file: Optional[FileEntry] = None
+        self._pending_delete: Optional[DeleteEntry] = None
+        # Track which mod icons have been loaded (for lazy loading)
+        self._icons_loaded_count = 0
+        self._icon_load_threads: List[QThread] = []
+        self._remaining_icons_loaded = False  # Whether all remaining icons have been loaded
+        self.setup_ui()
+
+    def setup_ui(self):
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Header with back button
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(16, 12, 16, 12)
+
+        self.back_btn = QPushButton("← Back")
+        self.back_btn.clicked.connect(self.on_back_clicked)
+        header_layout.addWidget(self.back_btn)
+
+        self.version_label = QLabel("Version")
+        self.version_label.setStyleSheet("font-size: 18px; font-weight: bold;")
+        header_layout.addWidget(self.version_label)
+
+        header_layout.addStretch()
+
+        # Locked indicator (shown for already-saved versions)
+        theme = get_current_theme()
+        self.locked_label = QLabel("🔒 Locked")
+        self.locked_label.setStyleSheet(f"color: {theme['warning']}; font-weight: bold;")
+        self.locked_label.setVisible(False)
+        header_layout.addWidget(self.locked_label)
+
+        # Create Version button (only shown for new versions)
+        self.create_btn = QPushButton("✓ Create Version")
+        self.create_btn.setObjectName("successButton")
+        self.create_btn.setToolTip("Save this version to the repository. Once created, it cannot be edited.")
+        self.create_btn.clicked.connect(self.on_create_clicked)
+        self.create_btn.setVisible(False)
+        header_layout.addWidget(self.create_btn)
+
+        main_layout.addLayout(header_layout)
+
+        # Tab widget
+        self.tabs = QTabWidget()
+        self.tabs.currentChanged.connect(self.on_tab_changed)
+
+        # Mods Tab
+        self.mods_tab = QWidget()
+        self.setup_mods_tab()
+        self.tabs.addTab(self.mods_tab, "Mods")
+
+        # Files Tab
+        self.files_tab = QWidget()
+        self.setup_files_tab()
+        self.tabs.addTab(self.files_tab, "Files")
+
+        # Delete Tab
+        self.delete_tab = QWidget()
+        self.setup_delete_tab()
+        self.tabs.addTab(self.delete_tab, "Delete")
+
+        # Settings Tab
+        self.settings_tab = QWidget()
+        self.setup_settings_tab()
+        self.tabs.addTab(self.settings_tab, "Settings")
+
+        main_layout.addWidget(self.tabs)
+
+    def setup_mods_tab(self):
+        layout = QHBoxLayout(self.mods_tab)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # Left: Grid of mods
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(16, 16, 8, 16)
+
+        self.mods_scroll = QScrollArea()
+        self.mods_scroll.setWidgetResizable(True)
+        self.mods_scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.mods_grid_widget = QWidget()
+        self.mods_grid = QGridLayout(self.mods_grid_widget)
+        self.mods_grid.setSpacing(8)  # Reduced spacing
+        self.mods_scroll.setWidget(self.mods_grid_widget)
+
+        left_layout.addWidget(self.mods_scroll)
+
+        # Right: Stacked widget for editor panel and placeholder
+        # Wrap in a container with distinct styling
+        self.mod_right_container = QFrame()
+        theme = get_current_theme()
+        self.mod_right_container.setStyleSheet(f"""
+            QFrame {{
+                background-color: {theme['bg_secondary']};
+                border: none;
+                border-radius: 8px;
+                margin: 4px;
+            }}
+            QScrollBar:vertical {{
+                background-color: {theme['bg_secondary']};
+                width: 12px;
+                border-radius: 6px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: {theme['border']};
+                border-radius: 4px;
+                min-height: 30px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: {theme['accent']};
+            }}
+        """)
+        mod_right_container_layout = QVBoxLayout(self.mod_right_container)
+        mod_right_container_layout.setContentsMargins(8, 8, 8, 8)
+
+        self.mod_right_stack = QStackedWidget()
+
+        # Placeholder for when no mod is selected
+        self.mod_placeholder = QWidget()
+        placeholder_layout = QVBoxLayout(self.mod_placeholder)
+        placeholder_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder_layout.setContentsMargins(20, 20, 20, 20)
+        placeholder_label = QLabel("No option selected")
+        placeholder_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 16px; font-style: italic; background-color: transparent; padding: 16px;")
+        placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder_layout.addWidget(placeholder_label)
+        self.mod_right_stack.addWidget(self.mod_placeholder)
+
+        # Editor panel
+        self.mod_editor = ModEditorPanel()
+        self.mod_editor.mod_changed.connect(self.on_mod_changed)
+        self.mod_editor.mod_saved.connect(self.on_mod_saved)
+        self.mod_editor.mod_deleted.connect(self.on_mod_deleted)
+        self.mod_right_stack.addWidget(self.mod_editor)
+
+        # Show placeholder by default
+        self.mod_right_stack.setCurrentWidget(self.mod_placeholder)
+
+        mod_right_container_layout.addWidget(self.mod_right_stack)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(left_panel)
+        splitter.addWidget(self.mod_right_container)
+        splitter.setSizes([400, 400])
+
+        layout.addWidget(splitter)
+
+    def setup_files_tab(self):
+        layout = QHBoxLayout(self.files_tab)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # Left: Grid of files
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(16, 16, 8, 16)
+
+        self.files_scroll = QScrollArea()
+        self.files_scroll.setWidgetResizable(True)
+        self.files_scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.files_grid_widget = QWidget()
+        self.files_grid = QGridLayout(self.files_grid_widget)
+        self.files_grid.setSpacing(8)  # Reduced spacing
+        self.files_scroll.setWidget(self.files_grid_widget)
+
+        left_layout.addWidget(self.files_scroll)
+
+        # Right: Stacked widget for editor panel and placeholder
+        # Wrap in a container with distinct styling
+        self.file_right_container = QFrame()
+        theme = get_current_theme()
+        self.file_right_container.setStyleSheet(f"""
+            QFrame {{
+                background-color: {theme['bg_secondary']};
+                border: none;
+                border-radius: 8px;
+                margin: 4px;
+            }}
+            QScrollBar:vertical {{
+                background-color: {theme['bg_secondary']};
+                width: 12px;
+                border-radius: 6px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: {theme['border']};
+                border-radius: 4px;
+                min-height: 30px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: {theme['accent']};
+            }}
+        """)
+        file_right_container_layout = QVBoxLayout(self.file_right_container)
+        file_right_container_layout.setContentsMargins(8, 8, 8, 8)
+
+        self.file_right_stack = QStackedWidget()
+
+        # Placeholder for when no file is selected
+        self.file_placeholder = QWidget()
+        placeholder_layout = QVBoxLayout(self.file_placeholder)
+        placeholder_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder_layout.setContentsMargins(20, 20, 20, 20)
+        placeholder_label = QLabel("No option selected")
+        placeholder_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 16px; font-style: italic; background-color: transparent; padding: 16px;")
+        placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder_layout.addWidget(placeholder_label)
+        self.file_right_stack.addWidget(self.file_placeholder)
+
+        # Editor panel
+        self.file_editor = FileEditorPanel()
+        self.file_editor.file_changed.connect(self.on_file_changed)
+        self.file_editor.file_saved.connect(self.on_file_saved)
+        self.file_editor.file_deleted.connect(self.on_file_deleted)
+        self.file_right_stack.addWidget(self.file_editor)
+
+        # Show placeholder by default
+        self.file_right_stack.setCurrentWidget(self.file_placeholder)
+
+        file_right_container_layout.addWidget(self.file_right_stack)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(left_panel)
+        splitter.addWidget(self.file_right_container)
+        splitter.setSizes([400, 400])
+
+        layout.addWidget(splitter)
+
+    def setup_delete_tab(self):
+        layout = QHBoxLayout(self.delete_tab)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # Left: List of deletes
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(16, 16, 8, 16)
+
+        self.deletes_list = QListWidget()
+        self.deletes_list.itemClicked.connect(self.on_delete_selected)
+        left_layout.addWidget(self.deletes_list)
+
+        add_delete_btn = QPushButton("+ Add Delete Entry")
+        add_delete_btn.setObjectName("primaryButton")
+        add_delete_btn.clicked.connect(self.add_delete)
+        left_layout.addWidget(add_delete_btn)
+
+        # Right: Stacked widget for editor panel and placeholder
+        # Wrap in a container with distinct styling
+        self.delete_right_container = QFrame()
+        theme = get_current_theme()
+        self.delete_right_container.setStyleSheet(f"""
+            QFrame {{
+                background-color: {theme['bg_secondary']};
+                border: none;
+                border-radius: 8px;
+                margin: 4px;
+            }}
+            QScrollBar:vertical {{
+                background-color: {theme['bg_secondary']};
+                width: 12px;
+                border-radius: 6px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: {theme['border']};
+                border-radius: 4px;
+                min-height: 30px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: {theme['accent']};
+            }}
+        """)
+        delete_right_container_layout = QVBoxLayout(self.delete_right_container)
+        delete_right_container_layout.setContentsMargins(8, 8, 8, 8)
+
+        self.delete_right_stack = QStackedWidget()
+
+        # Placeholder for when no delete entry is selected
+        self.delete_placeholder = QWidget()
+        placeholder_layout = QVBoxLayout(self.delete_placeholder)
+        placeholder_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder_layout.setContentsMargins(20, 20, 20, 20)
+        placeholder_label = QLabel("No option selected")
+        placeholder_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 16px; font-style: italic; background-color: transparent; padding: 16px;")
+        placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder_layout.addWidget(placeholder_label)
+        self.delete_right_stack.addWidget(self.delete_placeholder)
+
+        # Editor panel
+        self.delete_editor = DeleteEditorPanel()
+        self.delete_editor.delete_changed.connect(self.on_delete_changed)
+        self.delete_editor.delete_saved.connect(self.on_delete_entry_saved)
+        self.delete_editor.delete_entry_deleted.connect(self.on_delete_entry_deleted)
+        self.delete_right_stack.addWidget(self.delete_editor)
+
+        # Show placeholder by default
+        self.delete_right_stack.setCurrentWidget(self.delete_placeholder)
+
+        delete_right_container_layout.addWidget(self.delete_right_stack)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(left_panel)
+        splitter.addWidget(self.delete_right_container)
+        splitter.setSizes([300, 400])
+
+        layout.addWidget(splitter)
+
+    def setup_settings_tab(self):
+        layout = QVBoxLayout(self.settings_tab)
+        layout.setContentsMargins(24, 24, 24, 24)
+
+        header = QLabel("Version Settings")
+        header.setStyleSheet("font-size: 18px; font-weight: bold;")
+        layout.addWidget(header)
+
+        # Version icon
+        icon_group = QGroupBox("Version Icon (Optional)")
+        icon_layout = QHBoxLayout(icon_group)
+
+        theme = get_current_theme()
+        self.version_icon_preview = QLabel()
+        self.version_icon_preview.setFixedSize(64, 64)
+        self.version_icon_preview.setStyleSheet(f"border: 2px dashed {theme['border']}; border-radius: 8px;")
+        self.version_icon_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.version_icon_preview.setText("No Icon")
+        icon_layout.addWidget(self.version_icon_preview)
+
+        icon_btn_layout = QVBoxLayout()
+        select_icon_btn = QPushButton("Select Icon...")
+        select_icon_btn.clicked.connect(self.select_version_icon)
+        icon_btn_layout.addWidget(select_icon_btn)
+        clear_icon_btn = QPushButton("Clear")
+        clear_icon_btn.clicked.connect(self.clear_version_icon)
+        icon_btn_layout.addWidget(clear_icon_btn)
+        icon_btn_layout.addStretch()
+        icon_layout.addLayout(icon_btn_layout)
+        icon_layout.addStretch()
+
+        layout.addWidget(icon_group)
+        layout.addStretch()
+
+    def load_version(self, version_config: VersionConfig):
+        self.version_config = version_config
+        self.version_label.setText(f"Version {version_config.version}")
+
+        # Reset icon loading state
+        self._icons_loaded_count = 0
+        self._remaining_icons_loaded = False
+        self._cancel_icon_load_threads()
+
+        self.refresh_mods_grid()
+        self.refresh_files_grid()
+        self.refresh_deletes_list()
+
+        # Clear editor panels and show placeholders
+        self.mod_editor.clear()
+        self.mod_right_stack.setCurrentWidget(self.mod_placeholder)
+        self.file_editor.clear()
+        self.file_right_stack.setCurrentWidget(self.file_placeholder)
+        self.delete_editor.clear()
+        self.delete_right_stack.setCurrentWidget(self.delete_placeholder)
+
+        self.selected_mod_index = -1
+        self.selected_file_index = -1
+        self.selected_delete_index = -1
+
+        # Update UI based on locked/new status
+        is_locked = version_config.is_locked()
+        is_new = version_config.is_new()
+
+        self.locked_label.setVisible(is_locked)
+        self.create_btn.setVisible(is_new)
+
+        # Always enable tabs for viewing, but disable editing controls if locked
+        self.tabs.setEnabled(True)
+        self._set_editing_enabled(not is_locked)
+
+        if is_locked:
+            self.version_label.setText(f"Version {version_config.version} (View Only)")
+
+        # Set Mods tab as first tab when creating a new version
+        if is_new:
+            self.tabs.setCurrentIndex(0)  # Mods tab
+
+        # Load version icon
+        if version_config.icon_path and os.path.exists(version_config.icon_path):
+            pixmap = QPixmap(version_config.icon_path)
+            if not pixmap.isNull():
+                self.version_icon_preview.setPixmap(pixmap.scaled(60, 60, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+
+        # Start loading the first 8 mod icons
+        QTimer.singleShot(50, self._load_initial_icons)
+
+    def _set_editing_enabled(self, enabled: bool):
+        """Enable or disable editing controls (for locked versions).
+
+        Note: When locked, users can still view all data but cannot modify it.
+        They can also still delete items (which marks them for removal in next version).
+        """
+        # Mod editor controls - disable modification but allow viewing
+        self.mod_editor.save_btn.setEnabled(enabled)
+        # Delete is always enabled (users should be able to delete locked files/old versions)
+        # self.mod_editor.delete_btn.setEnabled(enabled)  # Keep enabled for deleting
+        self.mod_editor.id_edit.setReadOnly(not enabled)
+        self.mod_editor.hash_edit.setReadOnly(not enabled)
+        self.mod_editor.mod_id_edit.setReadOnly(not enabled)
+        self.mod_editor.file_id_edit.setReadOnly(not enabled)
+        self.mod_editor.url_edit.setReadOnly(not enabled)
+        self.mod_editor.install_location_edit.setReadOnly(not enabled)
+        self.mod_editor.file_name_edit.setReadOnly(not enabled)
+        self.mod_editor.display_name_edit.setReadOnly(not enabled)
+        self.mod_editor.info_name_edit.setReadOnly(not enabled)
+        self.mod_editor.auto_hash_btn.setEnabled(enabled)
+        self.mod_editor.curseforge_btn.setEnabled(enabled)
+        self.mod_editor.modrinth_btn.setEnabled(enabled)
+        self.mod_editor.url_btn.setEnabled(enabled)
+
+        # File editor controls
+        self.file_editor.save_btn.setEnabled(enabled)
+        # self.file_editor.delete_btn.setEnabled(enabled)  # Keep enabled for deleting
+        self.file_editor.display_name_edit.setReadOnly(not enabled)
+        self.file_editor.file_name_edit.setReadOnly(not enabled)
+        self.file_editor.url_edit.setReadOnly(not enabled)
+        self.file_editor.download_path_edit.setReadOnly(not enabled)
+        self.file_editor.hash_edit.setReadOnly(not enabled)
+        self.file_editor.overwrite_check.setEnabled(enabled)
+        self.file_editor.extract_check.setEnabled(enabled)
+        self.file_editor.auto_hash_btn.setEnabled(enabled)
+
+        # Delete editor controls
+        self.delete_editor.save_btn.setEnabled(enabled)
+        # self.delete_editor.delete_btn.setEnabled(enabled)  # Keep enabled for deleting
+        self.delete_editor.path_edit.setReadOnly(not enabled)
+        self.delete_editor.type_combo.setEnabled(enabled)
+        self.delete_editor.reason_edit.setReadOnly(not enabled)
+
+    def on_back_clicked(self):
+        """Handle back button click."""
+        self.back_requested.emit()
+
+    def on_tab_changed(self, index: int):
+        """Handle tab change - auto-select first item in mods, files, or deletes tabs."""
+        if not self.version_config:
+            return
+
+        # Tab indices: 0=Mods, 1=Files, 2=Delete, 3=Settings
+        if index == 0:  # Mods tab
+            if self.version_config.mods and self.selected_mod_index < 0:
+                # Auto-select first mod
+                self.select_mod(0)
+        elif index == 1:  # Files tab
+            if self.version_config.files and self.selected_file_index < 0:
+                # Auto-select first file
+                self.select_file(0)
+        elif index == 2:  # Delete tab
+            if self.version_config.deletes and self.selected_delete_index < 0:
+                # Auto-select first delete entry
+                self.deletes_list.setCurrentRow(0)
+                first_item = self.deletes_list.item(0)
+                if first_item:
+                    self.on_delete_selected(first_item)
+
+    def on_create_clicked(self):
+        """Handle Create button click - save version to repo."""
+        if not self.version_config:
+            return
+
+        # Show confirmation dialog
+        reply = QMessageBox.question(
+            self, "Create Version",
+            f"Are you sure you want to create version {self.version_config.version}?\n\n"
+            "⚠️ Warning: Once created, this version cannot be edited.\n"
+            "Make sure all mods and files are correctly configured.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            self.create_requested.emit(self.version_config)
+
+    def refresh_mods_grid(self):
+        # Clear grid
+        while self.mods_grid.count():
+            item = self.mods_grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not self.version_config:
+            return
+
+        row, col = 0, 0
+        max_cols = 4
+
+        # Add mod cards
+        for i, mod in enumerate(self.version_config.mods):
+            # Support both icon_path and cached icon_data
+            icon_data = getattr(mod, '_icon_data', None)
+            # Use GUI display name if set, otherwise fall back to display_name or id
+            gui_display = getattr(mod, '_gui_display_name', '') or mod.display_name or mod.id
+            card = ItemCard(gui_display, mod.icon_path, icon_data=icon_data)
+            card.clicked.connect(lambda idx=i: self.select_mod(idx))
+            card.double_clicked.connect(lambda idx=i: self.select_mod(idx))
+            self.mods_grid.addWidget(card, row, col)
+
+            col += 1
+            if col >= max_cols:
+                col = 0
+                row += 1
+
+        # Add "Add" button only if version is not locked
+        if self.version_config and not self.version_config.is_locked():
+            add_card = ItemCard("", "", is_add_button=True)
+            add_card.clicked.connect(self.add_mod)
+            self.mods_grid.addWidget(add_card, row, col)
+
+    def refresh_files_grid(self):
+        # Clear grid
+        while self.files_grid.count():
+            item = self.files_grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not self.version_config:
+            return
+
+        row, col = 0, 0
+        max_cols = 4
+
+        # Add file cards
+        for i, file in enumerate(self.version_config.files):
+            card = ItemCard(file.display_name or file.file_name, file.icon_path)
+            card.clicked.connect(lambda idx=i: self.select_file(idx))
+            self.files_grid.addWidget(card, row, col)
+
+            col += 1
+            if col >= max_cols:
+                col = 0
+                row += 1
+
+        # Add "Add" button only if version is not locked
+        if self.version_config and not self.version_config.is_locked():
+            add_card = ItemCard("", "", is_add_button=True)
+            add_card.clicked.connect(self.add_file)
+            self.files_grid.addWidget(add_card, row, col)
+
+    def refresh_deletes_list(self):
+        self.deletes_list.clear()
+        if not self.version_config:
+            return
+
+        for delete in self.version_config.deletes:
+            self.deletes_list.addItem(f"{delete.path} ({delete.type})")
+
+    def select_mod(self, index: int):
+        if not self.version_config or index < 0 or index >= len(self.version_config.mods):
+            return
+        self.selected_mod_index = index
+        self.mod_editor.load_mod(self.version_config.mods[index])
+        self.mod_right_stack.setCurrentWidget(self.mod_editor)  # Show editor panel
+
+        # Update selection visuals
+        for i in range(self.mods_grid.count()):
+            widget = self.mods_grid.itemAt(i).widget()
+            if isinstance(widget, ItemCard) and not widget.is_add_button:
+                widget.set_selected(i == index)
+
+    def select_file(self, index: int):
+        if not self.version_config or index < 0 or index >= len(self.version_config.files):
+            return
+        self.selected_file_index = index
+        self.file_editor.load_file(self.version_config.files[index])
+        self.file_right_stack.setCurrentWidget(self.file_editor)  # Show editor panel
+
+        # Update selection visuals
+        for i in range(self.files_grid.count()):
+            widget = self.files_grid.itemAt(i).widget()
+            if isinstance(widget, ItemCard) and not widget.is_add_button:
+                widget.set_selected(i == index)
+
+    def on_delete_selected(self, item):
+        index = self.deletes_list.row(item)
+        if not self.version_config or index < 0 or index >= len(self.version_config.deletes):
+            return
+        self.selected_delete_index = index
+        self.delete_editor.load_delete(self.version_config.deletes[index])
+        self.delete_right_stack.setCurrentWidget(self.delete_editor)  # Show editor panel
+
+    def add_mod(self):
+        if not self.version_config:
+            return
+
+        # Show a choice dialog: Browse CurseForge/Modrinth first, then Manual Add
+        menu = QMenu(self)
+        browse_action = menu.addAction("🔍 Browse CurseForge/Modrinth")
+        manual_action = menu.addAction("✏️ Add Manually")
+
+        # Get the "Add" button position
+        add_card = None
+        for i in range(self.mods_grid.count()):
+            widget = self.mods_grid.itemAt(i).widget()
+            if isinstance(widget, ItemCard) and widget.is_add_button:
+                add_card = widget
+                break
+
+        if add_card:
+            pos = add_card.mapToGlobal(add_card.rect().bottomLeft())
+        else:
+            pos = self.mods_grid_widget.mapToGlobal(self.mods_grid_widget.rect().center())
+
+        action = menu.exec(pos)
+
+        if action == browse_action:
+            self._add_mod_browse()
+        elif action == manual_action:
+            self._add_mod_manual()
+
+    def _add_mod_manual(self):
+        """Add a mod manually."""
+        existing_ids = [m.id for m in self.version_config.mods]
+        dialog = AddModDialog(existing_ids, self)
+        if dialog.exec():
+            mod = dialog.get_mod()
+            mod.since = self.version_config.version  # Set since to current version
+            mod._is_pending = True  # Mark as pending until saved
+            # Show in editor but don't add to list yet
+            self._pending_mod = mod
+            self.mod_editor.load_mod(mod)
+            self.mod_right_stack.setCurrentWidget(self.mod_editor)
+            # Connect save to add the pending mod
+
+    def _add_mod_browse(self):
+        """Add a mod by browsing CurseForge/Modrinth."""
+        # Load remaining icons now that the user is opening the mod browser
+        self._load_remaining_icons()
+
+        existing_ids = [m.id for m in self.version_config.mods]
+        dialog = ModBrowserDialog(existing_ids, self.version_config.version, self)
+        if dialog.exec():
+            mod = dialog.get_mod()
+            if mod:
+                # Check for duplicate
+                if mod.id in existing_ids:
+                    QMessageBox.warning(self, "Duplicate", f"A mod with ID '{mod.id}' already exists.")
+                    return
+                mod._is_pending = True  # Mark as pending until saved
+                # Show in editor but don't add to list yet
+                self._pending_mod = mod
+                self.mod_editor.load_mod(mod)
+                self.mod_right_stack.setCurrentWidget(self.mod_editor)
+
+    def add_file(self):
+        if not self.version_config:
+            return
+
+        file_entry = FileEntry()
+        file_entry._is_pending = True  # Mark as pending until saved
+        self._pending_file = file_entry
+        self.file_editor.load_file(file_entry)
+        self.file_right_stack.setCurrentWidget(self.file_editor)
+
+    def add_delete(self):
+        if not self.version_config:
+            return
+
+        delete_entry = DeleteEntry()
+        delete_entry._is_pending = True  # Mark as pending until saved
+        self._pending_delete = delete_entry
+        self.delete_editor.load_delete(delete_entry)
+        self.delete_right_stack.setCurrentWidget(self.delete_editor)
+
+    def on_mod_changed(self):
+        self.version_config.modified = True
+        self.refresh_mods_grid()
+        self.version_modified.emit()
+
+    def on_file_changed(self):
+        self.version_config.modified = True
+        self.refresh_files_grid()
+        self.version_modified.emit()
+
+    def on_delete_changed(self):
+        self.version_config.modified = True
+        self.refresh_deletes_list()
+        self.version_modified.emit()
+
+    def on_mod_saved(self):
+        """Handle when mod save button is clicked - add pending mod and show placeholder."""
+        # Check if we have a pending mod to add
+        if hasattr(self, '_pending_mod') and self._pending_mod is not None:
+            mod = self._pending_mod
+
+            # Check for duplicate ID
+            mod_id = mod.id
+            existing_mod = None
+            for m in self.version_config.mods:
+                if m.id == mod_id:
+                    existing_mod = m
+                    break
+
+            if existing_mod:
+                # Compare hashes
+                if mod.hash and existing_mod.hash and mod.hash == existing_mod.hash:
+                    # Same hash - this file has already been added
+                    QMessageBox.warning(self, "Duplicate Mod",
+                        f"This file has already been added.\n\n"
+                        f"A mod with ID '{mod_id}' and the same hash already exists.")
+                    return  # Don't add the mod
+                else:
+                    # Different hash or hash not available - warn about possible duplicate
+                    reply = QMessageBox.warning(self, "Possible Duplicate",
+                        f"There is already a mod with ID '{mod_id}'.\n\n"
+                        f"It might be a duplicate mod. Double check before adding.\n"
+                        f"If you are sure it is not a duplicate, please change the ID and try again.",
+                        QMessageBox.StandardButton.Ok)
+                    return  # Don't add the mod - user must change ID
+
+            mod._is_pending = False
+            mod.since = self.version_config.version
+            self.version_config.mods.append(mod)
+            self.version_config.modified = True
+            self._pending_mod = None
+            self.refresh_mods_grid()
+            self.version_modified.emit()
+
+        self.mod_right_stack.setCurrentWidget(self.mod_placeholder)
+        self.selected_mod_index = -1
+
+    def on_mod_deleted(self, mod):
+        """Handle when mod delete is confirmed."""
+        # Check if this is a pending mod being cancelled
+        if hasattr(self, '_pending_mod') and self._pending_mod == mod:
+            self._pending_mod = None
+            self.mod_editor.clear()
+            self.mod_right_stack.setCurrentWidget(self.mod_placeholder)
+            self.selected_mod_index = -1
+            return
+
+        if not self.version_config or mod not in self.version_config.mods:
+            return
+
+        # If this is a mod from a previous version, add to deletes
+        if mod._is_from_previous and mod.install_location:
+            delete_entry = DeleteEntry({
+                'path': f"{mod.install_location}/{mod.file_name or mod.id + '.jar'}",
+                'type': 'file',
+                'reason': f"Removed mod: {mod.display_name or mod.id}",
+                '_is_unremovable': True
+            })
+            self.version_config.deletes.append(delete_entry)
+
+        self.version_config.mods.remove(mod)
+        self.version_config.modified = True
+        self.mod_editor.clear()
+        self.mod_right_stack.setCurrentWidget(self.mod_placeholder)
+        self.selected_mod_index = -1
+        self.refresh_mods_grid()
+        self.refresh_deletes_list()
+        self.version_modified.emit()
+
+    def on_file_saved(self):
+        """Handle when file save button is clicked - add pending file and show placeholder."""
+        # Check if we have a pending file to add
+        if hasattr(self, '_pending_file') and self._pending_file is not None:
+            file_entry = self._pending_file
+            file_entry._is_pending = False
+            file_entry.since = self.version_config.version
+            self.version_config.files.append(file_entry)
+            self.version_config.modified = True
+            self._pending_file = None
+            self.refresh_files_grid()
+            self.version_modified.emit()
+
+        self.file_right_stack.setCurrentWidget(self.file_placeholder)
+        self.selected_file_index = -1
+
+    def on_file_deleted(self, file_entry):
+        """Handle when file delete is confirmed."""
+        # Check if this is a pending file being cancelled
+        if hasattr(self, '_pending_file') and self._pending_file == file_entry:
+            self._pending_file = None
+            self.file_editor.clear()
+            self.file_right_stack.setCurrentWidget(self.file_placeholder)
+            self.selected_file_index = -1
+            return
+
+        if not self.version_config or file_entry not in self.version_config.files:
+            return
+
+        # If this is a file from a previous version, add to deletes
+        if file_entry._is_from_previous and file_entry.download_path:
+            delete_entry = DeleteEntry({
+                'path': f"{file_entry.download_path}{file_entry.file_name or file_entry.display_name}",
+                'type': 'file',
+                'reason': f"Removed file: {file_entry.display_name or file_entry.file_name}",
+                '_is_unremovable': True
+            })
+            self.version_config.deletes.append(delete_entry)
+
+        self.version_config.files.remove(file_entry)
+        self.version_config.modified = True
+        self.file_editor.clear()
+        self.file_right_stack.setCurrentWidget(self.file_placeholder)
+        self.selected_file_index = -1
+        self.refresh_files_grid()
+        self.refresh_deletes_list()
+        self.version_modified.emit()
+
+    def on_delete_entry_saved(self):
+        """Handle when delete save button is clicked - add pending delete and show placeholder."""
+        # Check if we have a pending delete to add
+        if hasattr(self, '_pending_delete') and self._pending_delete is not None:
+            delete_entry = self._pending_delete
+            delete_entry._is_pending = False
+            delete_entry.version = self.version_config.version
+            self.version_config.deletes.append(delete_entry)
+            self.version_config.modified = True
+            self._pending_delete = None
+            self.refresh_deletes_list()
+            self.version_modified.emit()
+
+        self.delete_right_stack.setCurrentWidget(self.delete_placeholder)
+        self.selected_delete_index = -1
+
+    def on_delete_entry_deleted(self, delete_entry):
+        """Handle when delete entry delete is confirmed."""
+        # Check if this is a pending delete being cancelled
+        if hasattr(self, '_pending_delete') and self._pending_delete == delete_entry:
+            self._pending_delete = None
+            self.delete_editor.clear()
+            self.delete_right_stack.setCurrentWidget(self.delete_placeholder)
+            self.selected_delete_index = -1
+            return
+
+        if not self.version_config or delete_entry not in self.version_config.deletes:
+            return
+
+        self.version_config.deletes.remove(delete_entry)
+        self.version_config.modified = True
+        self.delete_editor.clear()
+        self.delete_right_stack.setCurrentWidget(self.delete_placeholder)
+        self.selected_delete_index = -1
+        self.refresh_deletes_list()
+        self.version_modified.emit()
+
+    def select_version_icon(self):
+        if not self.version_config:
+            return
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Icon", "", "Images (*.png *.jpg *.jpeg *.gif *.ico)"
+        )
+        if file_path:
+            self.version_config.icon_path = file_path
+            pixmap = QPixmap(file_path)
+            if not pixmap.isNull():
+                self.version_icon_preview.setPixmap(pixmap.scaled(60, 60, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            self.version_modified.emit()
+
+    def clear_version_icon(self):
+        if not self.version_config:
+            return
+        self.version_config.icon_path = ""
+        self.version_icon_preview.clear()
+        self.version_icon_preview.setText("No Icon")
+        self.version_modified.emit()
+
+    def refresh_editor_panels_style(self):
+        """Refresh the styling of editor panel containers when theme changes."""
+        theme = get_current_theme()
+        container_style = f"""
+            QFrame {{
+                background-color: {theme['bg_secondary']};
+                border: none;
+                border-radius: 8px;
+                margin: 4px;
+            }}
+            QScrollBar:vertical {{
+                background-color: {theme['bg_secondary']};
+                width: 12px;
+                border-radius: 6px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: {theme['border']};
+                border-radius: 4px;
+                min-height: 30px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: {theme['accent']};
+            }}
+        """
+        if hasattr(self, 'mod_right_container'):
+            self.mod_right_container.setStyleSheet(container_style)
+        if hasattr(self, 'file_right_container'):
+            self.file_right_container.setStyleSheet(container_style)
+        if hasattr(self, 'delete_right_container'):
+            self.delete_right_container.setStyleSheet(container_style)
+
+    # === Lazy Icon Loading Methods ===
+
+    def _cancel_icon_load_threads(self):
+        """Cancel all running icon load threads and wait for them to finish."""
+        for thread in self._icon_load_threads:
+            try:
+                if thread.isRunning():
+                    thread.stop()
+                    thread.wait(1000)
+            except Exception:
+                pass
+        self._icon_load_threads.clear()
+
+    def _load_initial_icons(self):
+        """Load the first INITIAL_ICON_LOAD_COUNT icons when a version is opened."""
+        if not self.version_config:
+            return
+
+        # Get mods that need icon loading
+        mods_to_load = []
+        for i, mod in enumerate(self.version_config.mods[:self.INITIAL_ICON_LOAD_COUNT]):
+            if not getattr(mod, '_icon_data', None):
+                # Check if mod has a source that can provide an icon
+                source = mod.source
+                if source and source.get('type') in ('curseforge', 'modrinth'):
+                    mods_to_load.append((i, mod))
+
+        # Start loading icons for these mods
+        for idx, mod in mods_to_load:
+            self._start_mod_icon_load(idx, mod)
+
+        self._icons_loaded_count = min(self.INITIAL_ICON_LOAD_COUNT, len(self.version_config.mods))
+
+    def _load_remaining_icons(self):
+        """Load icons for mods beyond the initial INITIAL_ICON_LOAD_COUNT.
+
+        This is called when the ModBrowserDialog is about to open.
+        """
+        if not self.version_config or self._remaining_icons_loaded:
+            return
+
+        self._remaining_icons_loaded = True
+
+        # Get remaining mods that need icon loading
+        for i, mod in enumerate(self.version_config.mods[self.INITIAL_ICON_LOAD_COUNT:], start=self.INITIAL_ICON_LOAD_COUNT):
+            if not getattr(mod, '_icon_data', None):
+                # Check if mod has a source that can provide an icon
+                source = mod.source
+                if source and source.get('type') in ('curseforge', 'modrinth'):
+                    self._start_mod_icon_load(i, mod)
+
+    def _start_mod_icon_load(self, mod_index: int, mod: ModEntry):
+        """Start loading an icon for a specific mod."""
+        source = mod.source
+        source_type = source.get('type', '')
+
+        if source_type == 'modrinth':
+            project_slug = source.get('projectSlug', '')
+            if project_slug:
+                thread = IconFetcher({'source': source, 'id': mod.id})
+                thread.icon_fetched.connect(lambda mod_id, data, idx=mod_index: self._on_mod_icon_loaded(idx, data))
+                thread.finished.connect(thread.deleteLater)
+                self._icon_load_threads.append(thread)
+                thread.start()
+        elif source_type == 'curseforge':
+            # CurseForge icons require fetching project info first
+            project_id = source.get('projectId', '')
+            if project_id:
+                thread = _CurseForgeIconFetcher(str(project_id), mod.id, mod_index)
+                thread.icon_fetched.connect(self._on_mod_icon_loaded)
+                thread.finished.connect(thread.deleteLater)
+                self._icon_load_threads.append(thread)
+                thread.start()
+
+    def _on_mod_icon_loaded(self, mod_index: int, icon_data: bytes):
+        """Handle when a mod icon has been loaded."""
+        if not self.version_config or mod_index >= len(self.version_config.mods):
+            return
+
+        mod = self.version_config.mods[mod_index]
+        mod._icon_data = icon_data
+
+        # Update the card in the grid if it exists
+        if mod_index < self.mods_grid.count():
+            widget = self.mods_grid.itemAt(mod_index)
+            if widget:
+                card = widget.widget()
+                if isinstance(card, ItemCard):
+                    card.set_icon_from_bytes(icon_data)
+
+
+class _CurseForgeIconFetcher(QThread):
+    """Background thread for fetching CurseForge mod icons."""
+    icon_fetched = pyqtSignal(int, bytes)  # mod_index, icon_bytes
+
+    def __init__(self, project_id: str, mod_id: str, mod_index: int):
+        super().__init__()
+        self.project_id = project_id
+        self.mod_id = mod_id
+        self.mod_index = mod_index
+        self._running = True
+
+    def run(self):
+        """Fetch icon from CurseForge API."""
+        if not self._running:
+            return
+        try:
+            # Use curse.tools proxy API
+            url = f"{CF_PROXY_BASE_URL}/mods/{self.project_id}"
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read())
+                mod_data = data.get('data', {})
+                logo = mod_data.get('logo', {})
+                icon_url = logo.get('thumbnailUrl', '') or logo.get('url', '')
+
+                if icon_url and self._running:
+                    with urllib.request.urlopen(icon_url, timeout=10) as img_response:
+                        icon_data = img_response.read()
+                        if icon_data and self._running:
+                            self.icon_fetched.emit(self.mod_index, icon_data)
+        except Exception:
+            pass  # Silently fail icon loads
+
+    def stop(self):
+        self._running = False
+
+
+
+# === Version Selection Page ===
+class VersionSelectionPage(QWidget):
+    version_selected = pyqtSignal(str)
+    version_deleted = pyqtSignal(str)
+    def refresh_grid(self):
+        # Clear grid
+        while self.grid.count():
+            item = self.grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.versions: Dict[str, VersionConfig] = {}
+        self.setup_ui()
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+
+        header = QLabel("Select Version")
+        header.setObjectName("headerLabel")
+        layout.addWidget(header)
+
+        desc = QLabel("Choose a version to edit or create a new one. Click × to delete a version.")
+        layout.addWidget(desc)
+
+        # Latest version indicator
+        self.latest_version_label = QLabel("")
+        theme = get_current_theme()
+        self.latest_version_label.setStyleSheet(f"color: {theme['accent']}; font-weight: bold; font-size: 14px; padding: 8px 0;")
+        layout.addWidget(self.latest_version_label)
+
+        layout.addSpacing(10)
+
+        # Grid of versions
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.grid_widget = QWidget()
+        self.grid = QGridLayout(self.grid_widget)
+        self.grid.setSpacing(8)  # Reduced spacing between version cards
+        self.scroll.setWidget(self.grid_widget)
+
+        layout.addWidget(self.scroll)
 
     def set_versions(self, versions: Dict[str, VersionConfig]):
         self.versions = versions
@@ -2281,6 +5668,9 @@ class ConfigurationPage(QWidget):
         scroll_layout.addWidget(advanced_group)
         scroll_layout.addStretch()
         
+        scroll.setWidget(scroll_widget)
+        layout.addWidget(scroll)
+
         # Save button at bottom
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
@@ -2426,14 +5816,7 @@ class SettingsPage(QWidget):
 <h3>{APP_NAME}</h3>
 <p>Version {APP_VERSION}</p>
 <p>A modern configuration editor for ModUpdater.</p>
-<p>Features:</p>
-<ul>
-    <li>GitHub integration</li>
-    <li>Version management</li>
-    <li>Auto-fill hashes</li>
-    <li>Theme support</li>
-    <li>Mod icon fetching</li>
-</ul>
+<p>Features GitHub integration, version management, and theme support.</p>
         """)
         about_label.setWordWrap(True)
         about_layout.addWidget(about_label)
@@ -3315,3 +6698,17 @@ class MainWindow(QMainWindow):
         else:
             event.accept()
 
+
+def main():
+    """Main entry point."""
+    app = QApplication(sys.argv)
+    app.setStyle("Fusion")
+
+    window = MainWindow()
+    window.show()
+
+    sys.exit(app.exec() if PYQT_VERSION == 6 else app.exec_())
+
+
+if __name__ == "__main__":
+    main()
