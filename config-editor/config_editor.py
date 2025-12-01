@@ -1187,9 +1187,10 @@ class AddVersionDialog(QDialog):
         layout.addWidget(header)
         
         # Warning message
+        theme = get_current_theme()
         warning = QLabel("⚠️ Warning: Once a version is created and saved to the repository,\n"
                         "it cannot be edited. Make sure your mods and files are correct.")
-        warning.setStyleSheet("color: #f9e2af; padding: 10px; background-color: rgba(249, 226, 175, 0.1); border-radius: 6px;")
+        warning.setStyleSheet(f"color: {theme['warning']}; padding: 10px; background-color: rgba(249, 226, 175, 0.1); border-radius: 6px;")
         warning.setWordWrap(True)
         layout.addWidget(warning)
         
@@ -1201,17 +1202,17 @@ class AddVersionDialog(QDialog):
         layout.addLayout(form_layout)
         
         format_note = QLabel("Version must be in X.Y.Z format (e.g., 1.0.0, 2.1.0)")
-        format_note.setStyleSheet("font-size: 11px; color: #a6adc8;")
+        format_note.setStyleSheet(f"font-size: 11px; color: {theme['text_secondary']};")
         layout.addWidget(format_note)
         
         # Show latest version info
         if self.latest_version:
             latest_note = QLabel(f"Current latest version: {self.latest_version} - New version must be higher")
-            latest_note.setStyleSheet("font-size: 11px; color: #89b4fa;")
+            latest_note.setStyleSheet(f"font-size: 11px; color: {theme['accent']};")
             layout.addWidget(latest_note)
         
         self.error_label = QLabel("")
-        self.error_label.setStyleSheet("color: #f38ba8;")
+        self.error_label.setStyleSheet(f"color: {theme['danger']};")
         layout.addWidget(self.error_label)
         
         layout.addStretch()
@@ -1289,7 +1290,8 @@ class AddModDialog(QDialog):
         
         self.icon_preview = QLabel()
         self.icon_preview.setFixedSize(64, 64)
-        self.icon_preview.setStyleSheet("border: 2px dashed #45475a; border-radius: 8px;")
+        theme = get_current_theme()
+        self.icon_preview.setStyleSheet(f"border: 2px dashed {theme['border']}; border-radius: 8px;")
         self.icon_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.icon_preview.setText("No Icon")
         icon_layout.addWidget(self.icon_preview)
@@ -1307,7 +1309,7 @@ class AddModDialog(QDialog):
         layout.addWidget(icon_group)
         
         self.error_label = QLabel("")
-        self.error_label.setStyleSheet("color: #f38ba8;")
+        self.error_label.setStyleSheet(f"color: {theme['danger']};")
         layout.addWidget(self.error_label)
         
         layout.addStretch()
@@ -1383,7 +1385,8 @@ class ConfirmDeleteDialog(QDialog):
         layout.setContentsMargins(30, 30, 30, 30)
         
         header = QLabel("Confirm Delete")
-        header.setStyleSheet("font-size: 18px; font-weight: bold; color: #f38ba8;")
+        theme = get_current_theme()
+        header.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {theme['danger']};")
         layout.addWidget(header)
         
         message = QLabel(f"Are you sure you want to delete this {self.item_type}?\n\n\"{self.item_name}\"")
@@ -1612,8 +1615,9 @@ class ModBrowserDialog(QDialog):
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         header_layout.addWidget(title)
         
+        theme = get_current_theme()
         instructions = QLabel("1. Select a source → 2. Search or browse popular mods → 3. Select a mod → 4. Choose a file version → 5. Click Add")
-        instructions.setStyleSheet("color: #a6adc8; font-size: 12px; padding: 4px 0;")
+        instructions.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 12px; padding: 4px 0;")
         header_layout.addWidget(instructions)
         layout.addLayout(header_layout)
         
@@ -1682,7 +1686,7 @@ class ModBrowserDialog(QDialog):
         left_layout.addWidget(self.results_list)
         
         self.search_status = QLabel("")
-        self.search_status.setStyleSheet("font-size: 11px; color: #a6adc8;")
+        self.search_status.setStyleSheet(f"font-size: 11px; color: {theme['text_secondary']};")
         left_layout.addWidget(self.search_status)
         
         splitter.addWidget(left_panel)
@@ -1738,7 +1742,7 @@ class ModBrowserDialog(QDialog):
         
         # Status indicator
         self.selection_status = QLabel("Select a mod and file version to continue")
-        self.selection_status.setStyleSheet("color: #f9e2af; font-style: italic;")
+        self.selection_status.setStyleSheet(f"color: {theme['warning']}; font-style: italic;")
         button_layout.addWidget(self.selection_status)
         
         button_layout.addStretch()
@@ -2319,8 +2323,9 @@ class ModEditorPanel(QWidget):
         self.display_name_edit.setPlaceholderText("Name shown under mod card (GUI only)")
         naming_layout.addRow("Display Name:", self.display_name_edit)
         
+        theme = get_current_theme()
         display_note = QLabel("Shown under mod card in editor only")
-        display_note.setStyleSheet("font-size: 11px; color: #a6adc8;")
+        display_note.setStyleSheet(f"font-size: 11px; color: {theme['text_secondary']};")
         naming_layout.addRow("", display_note)
         
         # Info Name - saves as display_name in config
@@ -2329,7 +2334,7 @@ class ModEditorPanel(QWidget):
         naming_layout.addRow("Info Name:", self.info_name_edit)
         
         info_note = QLabel("Saved as 'display_name' in config file")
-        info_note.setStyleSheet("font-size: 11px; color: #a6adc8;")
+        info_note.setStyleSheet(f"font-size: 11px; color: {theme['text_secondary']};")
         naming_layout.addRow("", info_note)
         
         scroll_layout.addWidget(naming_group)
@@ -2860,8 +2865,9 @@ class VersionEditorPage(QWidget):
         header_layout.addStretch()
         
         # Locked indicator (shown for already-saved versions)
+        theme = get_current_theme()
         self.locked_label = QLabel("🔒 Locked")
-        self.locked_label.setStyleSheet("color: #f9e2af; font-weight: bold;")
+        self.locked_label.setStyleSheet(f"color: {theme['warning']}; font-weight: bold;")
         self.locked_label.setVisible(False)
         header_layout.addWidget(self.locked_label)
         
@@ -3013,9 +3019,10 @@ class VersionEditorPage(QWidget):
         icon_group = QGroupBox("Version Icon (Optional)")
         icon_layout = QHBoxLayout(icon_group)
         
+        theme = get_current_theme()
         self.version_icon_preview = QLabel()
         self.version_icon_preview.setFixedSize(64, 64)
-        self.version_icon_preview.setStyleSheet("border: 2px dashed #45475a; border-radius: 8px;")
+        self.version_icon_preview.setStyleSheet(f"border: 2px dashed {theme['border']}; border-radius: 8px;")
         self.version_icon_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.version_icon_preview.setText("No Icon")
         icon_layout.addWidget(self.version_icon_preview)
@@ -4016,7 +4023,8 @@ class MainWindow(QMainWindow):
         
         # Status indicator
         self.status_label = QLabel("● Disconnected")
-        self.status_label.setStyleSheet("color: #f38ba8; padding: 8px;")
+        theme = get_current_theme()
+        self.status_label.setStyleSheet(f"color: {theme['danger']}; padding: 8px;")
         sidebar_layout.addWidget(self.status_label)
         
         # Save button
@@ -4146,18 +4154,19 @@ class MainWindow(QMainWindow):
     
     def _update_connection_status(self, status: str):
         """Update the connection status indicator."""
+        theme = get_current_theme()
         if status == "connected":
             self.status_label.setText("● Connected")
-            self.status_label.setStyleSheet("color: #a6e3a1;")
+            self.status_label.setStyleSheet(f"color: {theme['success']};")
         elif status == "failed":
             self.status_label.setText("● Connection failed")
-            self.status_label.setStyleSheet("color: #f38ba8;")
+            self.status_label.setStyleSheet(f"color: {theme['danger']};")
         elif status == "not_configured":
             self.status_label.setText("● Not configured")
-            self.status_label.setStyleSheet("color: #f38ba8;")
+            self.status_label.setStyleSheet(f"color: {theme['danger']};")
         else:
             self.status_label.setText("● Error")
-            self.status_label.setStyleSheet("color: #f38ba8;")
+            self.status_label.setStyleSheet(f"color: {theme['danger']};")
     
     def connect_to_github(self):
         """Connect to GitHub and fetch configs."""
