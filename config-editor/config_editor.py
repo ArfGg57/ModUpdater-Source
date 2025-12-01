@@ -2094,6 +2094,119 @@ class ItemCard(QFrame):
         self.double_clicked.emit()
 
 
+# === Version Card Widget ===
+class VersionCard(QFrame):
+    """Card widget for displaying versions with optional delete button."""
+    clicked = pyqtSignal(str)
+    delete_clicked = pyqtSignal(str)
+    
+    def __init__(self, version: str, is_latest: bool = False, is_new: bool = True, icon_path: str = "", is_add_button: bool = False, parent=None):
+        super().__init__(parent)
+        self.version = version
+        self.is_latest = is_latest
+        self.is_new = is_new
+        self.icon_path = icon_path
+        self.is_add_button = is_add_button
+        self.setup_ui()
+    
+    def setup_ui(self):
+        self.setFixedSize(110, 120)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.update_style()
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(2)
+        
+        # Header with delete button (only for non-new versions, not the add button)
+        if not self.is_add_button and not self.is_new:
+            header_layout = QHBoxLayout()
+            header_layout.setContentsMargins(0, 0, 0, 0)
+            header_layout.addStretch()
+            
+            delete_btn = QPushButton("×")
+            delete_btn.setFixedSize(20, 20)
+            delete_btn.setToolTip("Delete this version")
+            theme = get_current_theme()
+            delete_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {theme['danger']};
+                    color: white;
+                    border: none;
+                    border-radius: 10px;
+                    font-weight: bold;
+                    font-size: 14px;
+                }}
+                QPushButton:hover {{
+                    background-color: {theme['danger']};
+                    opacity: 0.8;
+                }}
+            """)
+            delete_btn.clicked.connect(self.on_delete_clicked)
+            header_layout.addWidget(delete_btn)
+            layout.addLayout(header_layout)
+        
+        # Icon
+        self.icon_label = QLabel()
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.icon_label.setFixedSize(40, 40)
+        
+        if self.is_add_button:
+            self.icon_label.setText("+")
+            self.icon_label.setStyleSheet("font-size: 28px; font-weight: bold;")
+        elif self.icon_path and os.path.exists(self.icon_path):
+            pixmap = QPixmap(self.icon_path)
+            if not pixmap.isNull():
+                self.icon_label.setPixmap(pixmap.scaled(40, 40, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            else:
+                self.icon_label.setText("📦")
+                self.icon_label.setStyleSheet("font-size: 20px;")
+        else:
+            self.icon_label.setText("📦")
+            self.icon_label.setStyleSheet("font-size: 20px;")
+        
+        layout.addWidget(self.icon_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        
+        # Version name
+        if self.is_add_button:
+            name_text = "Add"
+        elif self.is_latest:
+            name_text = f"{self.version}\n(Latest)"
+        else:
+            name_text = self.version
+        
+        self.name_label = QLabel(name_text)
+        self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.name_label.setWordWrap(True)
+        self.name_label.setStyleSheet("font-size: 11px;")
+        layout.addWidget(self.name_label)
+        
+        layout.addStretch()
+    
+    def update_style(self):
+        theme = get_current_theme()
+        self.setStyleSheet(f"""
+            VersionCard {{
+                background-color: {theme['bg_secondary']};
+                border: 2px solid {theme['border']};
+                border-radius: 8px;
+            }}
+            VersionCard:hover {{
+                border-color: {theme['accent']};
+            }}
+            VersionCard QLabel {{
+                background-color: transparent;
+                color: {theme['text_primary']};
+            }}
+        """)
+    
+    def on_delete_clicked(self):
+        self.delete_clicked.emit(self.version)
+    
+    def mousePressEvent(self, event):
+        self.clicked.emit(self.version)
+
+
 # === Mod Editor Panel ===
 class ModEditorPanel(QWidget):
     """Right panel for editing a selected mod."""
@@ -3413,6 +3526,7 @@ class VersionEditorPage(QWidget):
 class VersionSelectionPage(QWidget):
     """Page for selecting/creating versions."""
     version_selected = pyqtSignal(str)
+    version_deleted = pyqtSignal(str)  # Signal for version deletion
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -3427,7 +3541,7 @@ class VersionSelectionPage(QWidget):
         header.setObjectName("headerLabel")
         layout.addWidget(header)
         
-        desc = QLabel("Choose a version to edit or create a new one.")
+        desc = QLabel("Choose a version to edit or create a new one. Click × to delete a version.")
         layout.addWidget(desc)
         
         # Latest version indicator
@@ -3501,13 +3615,13 @@ class VersionSelectionPage(QWidget):
         for i, version in enumerate(sorted_versions):
             config = self.versions[version]
             icon_path = config.icon_path if hasattr(config, 'icon_path') else ""
+            is_latest = (i == 0)
+            is_new = config.is_new() if hasattr(config, 'is_new') else True
             
-            # Add "(Latest)" suffix to the first (latest) version
-            display_name = f"{version}\n(Latest)" if i == 0 else version
-            
-            card = ItemCard(display_name, icon_path)
+            # Use VersionCard for versions (with delete button for non-new ones)
+            card = VersionCard(version, is_latest=is_latest, is_new=is_new, icon_path=icon_path)
             card.clicked.connect(lambda v=version: self.version_selected.emit(v))
-            card.double_clicked.connect(lambda v=version: self.version_selected.emit(v))
+            card.delete_clicked.connect(self.on_delete_version)
             self.grid.addWidget(card, row, col)
             
             col += 1
@@ -3516,9 +3630,20 @@ class VersionSelectionPage(QWidget):
                 row += 1
         
         # Add "Add" button
-        add_card = ItemCard("", "", is_add_button=True)
-        add_card.clicked.connect(self.add_version)
+        add_card = VersionCard("", is_add_button=True)
+        add_card.clicked.connect(lambda v="": self.add_version())
         self.grid.addWidget(add_card, row, col)
+    
+    def on_delete_version(self, version: str):
+        """Handle version delete request."""
+        # Show confirmation dialog
+        dialog = ConfirmDeleteDialog(version, "version", self)
+        if dialog.exec():
+            # Remove version from local storage
+            if version in self.versions:
+                del self.versions[version]
+                self.refresh_grid()
+                self.version_deleted.emit(version)
     
     def add_version(self):
         existing = list(self.versions.keys())
@@ -3908,6 +4033,7 @@ class MainWindow(QMainWindow):
         # Version Selection Page
         self.version_selection_page = VersionSelectionPage()
         self.version_selection_page.version_selected.connect(self.open_version)
+        self.version_selection_page.version_deleted.connect(self.on_version_deleted)
         self.stack.addWidget(self.version_selection_page)
         
         # Version Editor Page
@@ -4283,6 +4409,25 @@ class MainWindow(QMainWindow):
         """Handle version modification."""
         # Update status or indicator
         pass
+    
+    def on_version_deleted(self, version: str):
+        """Handle version deletion - update internal data model."""
+        # Remove from versions dict
+        if version in self.versions:
+            del self.versions[version]
+        
+        # Note: We don't delete from GitHub here - that would be done in save_all or a separate operation
+        # For now, just remove from local state and let the user save changes
+        
+        # Update all_mods to remove mods that were first introduced in this version
+        self.all_mods = [m for m in self.all_mods if m.since != version]
+        
+        # Update all_files similarly
+        self.all_files = [f for f in self.all_files if f.since != version]
+        
+        # Remove deletes for this version
+        if version in self.all_deletes:
+            del self.all_deletes[version]
     
     def on_config_changed(self):
         """Handle configuration page changes."""
