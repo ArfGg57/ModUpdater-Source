@@ -803,6 +803,7 @@ class RemoteImageTextBrowser(QTextBrowser):
                 thread.image_loaded.connect(self._on_image_loaded)
                 # Use a no-arg lambda that captures url so finished (which emits no args) works
                 thread.finished.connect(lambda url=url: self._on_load_finished(url))
+                thread.finished.connect(thread.deleteLater)
                 self._pending_loads[url] = thread
                 thread.start()
     
@@ -847,6 +848,20 @@ class RemoteImageTextBrowser(QTextBrowser):
                 return QImage()  # Return empty image while loading
         
         return super().loadResource(type_, url)
+    
+    def shutdown(self):
+        """Stop and wait for all pending image load threads."""
+        try:
+            for thread in list(self._pending_loads.values()):
+                try:
+                    thread.stop()
+                    thread.wait(1000)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        self._pending_loads.clear()
+        self._pending_urls.clear()
 
 
 # === Icon Loading System ===
@@ -2436,6 +2451,7 @@ class ModBrowserDialog(QDialog):
             thread = SimpleIconFetcher(mod_id, icon_url, source)
             thread.icon_fetched.connect(self._on_simple_icon_fetched)
             thread.finished_loading.connect(self._on_icon_load_complete)
+            thread.finished.connect(thread.deleteLater)
             # Store item reference and index for callback and cancellation
             thread.item = item
             thread.item_idx = item_idx
@@ -2652,6 +2668,7 @@ class ModBrowserDialog(QDialog):
         self.search_thread.offset = page * SEARCH_PAGE_SIZE
         self.search_thread.search_complete.connect(self._on_page_loaded)
         self.search_thread.error_occurred.connect(self._on_page_load_error)
+        self.search_thread.finished.connect(self.search_thread.deleteLater)
         self.search_thread.start()
     
     def _on_page_loaded(self, results: list, total_count: int = 0):
@@ -2754,10 +2771,14 @@ class ModBrowserDialog(QDialog):
             self._start_icon_load(item, mod_id, icon_url, source, item_idx=i)
     
     def _cancel_all_icon_loads(self):
-        """Cancel all pending icon load threads."""
+        """Cancel all pending icon load threads and wait for them to finish."""
         for thread in self.icon_threads:
-            if thread.isRunning():
-                thread.stop()
+            try:
+                if thread.isRunning():
+                    thread.stop()
+                    thread.wait(500)  # Wait up to 500ms for each thread
+            except Exception:
+                pass
         self.icon_threads.clear()
         self._loading_mod_ids.clear()
     
@@ -2815,6 +2836,7 @@ class ModBrowserDialog(QDialog):
         self._preload_source = other_source
         self._preload_thread = ModSearchThread(other_source, "", "")
         self._preload_thread.search_complete.connect(self._on_preload_complete)
+        self._preload_thread.finished.connect(self._preload_thread.deleteLater)
         self._preload_thread.start()
     
     def _on_preload_complete(self, results: list, total_count: int = 0):
@@ -2869,6 +2891,7 @@ class ModBrowserDialog(QDialog):
                 thread = SimpleIconFetcher(mod_id, icon_url, source)
                 thread.icon_fetched.connect(self._on_background_icon_fetched)
                 thread.finished_loading.connect(lambda mid=mod_id, r=results, s=source: self._on_preload_icon_complete(mid, r, s))
+                thread.finished.connect(thread.deleteLater)
                 self.icon_threads.append(thread)
                 thread.start()
             except Exception:
@@ -2918,6 +2941,7 @@ class ModBrowserDialog(QDialog):
         thread.offset = page * SEARCH_PAGE_SIZE
         thread.search_complete.connect(lambda results, total, p=page, s=source: 
                                         self._on_page_preload_complete(results, p, s))
+        thread.finished.connect(thread.deleteLater)
         self._preload_page_threads.append(thread)
         thread.start()
     
@@ -2966,6 +2990,7 @@ class ModBrowserDialog(QDialog):
                 thread.finished_loading.connect(
                     lambda mid=mod_id, m=mods, s=source, p=page, i=index: 
                         self._on_page_mod_icon_complete(mid, m, s, p, i))
+                thread.finished.connect(thread.deleteLater)
                 self.icon_threads.append(thread)
                 thread.start()
             except Exception:
@@ -2991,8 +3016,8 @@ class ModBrowserDialog(QDialog):
         self.has_more_results = True
         self.all_search_results = []
         
-        # Reset loading state (keep cache)
-        self._loading_mod_ids.clear()
+        # Cancel any pending icon loads from previous source/page
+        self._cancel_all_icon_loads()
         
         self.results_list.clear()
         self.versions_combo.clear()
@@ -3064,8 +3089,8 @@ class ModBrowserDialog(QDialog):
         self.has_more_results = True
         self.all_search_results = []
         
-        # Reset loading state (keep cache)
-        self._loading_mod_ids.clear()
+        # Cancel any pending icon loads
+        self._cancel_all_icon_loads()
         
         self.results_list.clear()
         self.versions_combo.clear()
@@ -3124,6 +3149,7 @@ class ModBrowserDialog(QDialog):
         self.version_thread = ModVersionFetchThread(mod['source'], mod['id'], game_version)
         self.version_thread.versions_fetched.connect(self.on_versions_fetched)
         self.version_thread.error_occurred.connect(self.on_versions_error)
+        self.version_thread.finished.connect(self.version_thread.deleteLater)
         self.version_thread.start()
         
         # Show loading message for description (loaded after versions)
@@ -3137,6 +3163,7 @@ class ModBrowserDialog(QDialog):
         self.description_thread = ModDescriptionFetchThread(mod['source'], mod['id'])
         self.description_thread.description_fetched.connect(self.on_description_fetched)
         self.description_thread.error_occurred.connect(self.on_description_error)
+        self.description_thread.finished.connect(self.description_thread.deleteLater)
         self.description_thread.start()
     
     def on_description_fetched(self, description: str):
@@ -3250,25 +3277,64 @@ class ModBrowserDialog(QDialog):
         
         # Stop search thread
         if self.search_thread and self.search_thread.isRunning():
-            self.search_thread.stop()
-            self.search_thread.wait(1000)  # Wait up to 1 second
+            try:
+                self.search_thread.stop()
+                self.search_thread.wait(1000)  # Wait up to 1 second
+            except Exception:
+                pass
         
         # Stop version thread
         if self.version_thread and self.version_thread.isRunning():
-            self.version_thread.stop()
-            self.version_thread.wait(1000)
+            try:
+                self.version_thread.stop()
+                self.version_thread.wait(1000)
+            except Exception:
+                pass
         
         # Stop description thread
         if self.description_thread and self.description_thread.isRunning():
-            self.description_thread.stop()
-            self.description_thread.wait(1000)
+            try:
+                self.description_thread.stop()
+                self.description_thread.wait(1000)
+            except Exception:
+                pass
+        
+        # Stop preload thread
+        if hasattr(self, '_preload_thread') and self._preload_thread:
+            try:
+                if self._preload_thread.isRunning():
+                    self._preload_thread.stop()
+                    self._preload_thread.wait(1000)
+            except Exception:
+                pass
+        
+        # Stop preload page threads
+        if hasattr(self, '_preload_page_threads'):
+            for thread in self._preload_page_threads:
+                try:
+                    if thread.isRunning():
+                        thread.stop()
+                        thread.wait(500)
+                except Exception:
+                    pass
+            self._preload_page_threads.clear()
         
         # Stop icon threads
         for thread in self.icon_threads:
-            if thread.isRunning():
-                thread.stop()
-                thread.wait(100)  # Brief wait per thread
+            try:
+                if thread.isRunning():
+                    thread.stop()
+                    thread.wait(100)  # Brief wait per thread
+            except Exception:
+                pass
         self.icon_threads.clear()
+        
+        # Shutdown description browser image threads
+        if hasattr(self, 'description_browser'):
+            try:
+                self.description_browser.shutdown()
+            except Exception:
+                pass
         
         # Clear loading state
         self._loading_mod_ids.clear()
@@ -3989,6 +4055,7 @@ class ModEditorPanel(QWidget):
         self.hash_calculator.hash_calculated.connect(self.on_hash_calculated)
         self.hash_calculator.progress_updated.connect(self.hash_progress.setValue)
         self.hash_calculator.error_occurred.connect(self.on_hash_error)
+        self.hash_calculator.finished.connect(self.hash_calculator.deleteLater)
         self.hash_calculator.start()
     
     def on_hash_calculated(self, hash_value: str):
@@ -4011,6 +4078,17 @@ class ModEditorPanel(QWidget):
                 self.mod_deleted.emit(self.current_mod)
     
     def clear(self):
+        # Stop any running hash calculation
+        if self.hash_calculator is not None:
+            try:
+                if self.hash_calculator.isRunning():
+                    self.hash_calculator.stop()
+                    self.hash_calculator.wait(1000)
+            except Exception:
+                pass
+            self.hash_calculator = None
+        self.hash_progress.setVisible(False)
+        self.auto_hash_btn.setEnabled(True)
         self.current_mod = None
         self.id_edit.clear()
         self.hash_edit.clear()
@@ -4160,6 +4238,7 @@ class FileEditorPanel(QWidget):
         self.hash_calculator.hash_calculated.connect(self.on_hash_calculated)
         self.hash_calculator.progress_updated.connect(self.hash_progress.setValue)
         self.hash_calculator.error_occurred.connect(self.on_hash_error)
+        self.hash_calculator.finished.connect(self.hash_calculator.deleteLater)
         self.hash_calculator.start()
     
     def on_hash_calculated(self, hash_value: str):
@@ -4179,6 +4258,17 @@ class FileEditorPanel(QWidget):
                 self.file_deleted.emit(self.current_file)
     
     def clear(self):
+        # Stop any running hash calculation
+        if self.hash_calculator is not None:
+            try:
+                if self.hash_calculator.isRunning():
+                    self.hash_calculator.stop()
+                    self.hash_calculator.wait(1000)
+            except Exception:
+                pass
+            self.hash_calculator = None
+        self.hash_progress.setVisible(False)
+        self.auto_hash_btn.setEnabled(True)
         self.current_file = None
         self.display_name_edit.clear()
         self.file_name_edit.clear()
@@ -5194,10 +5284,14 @@ class VersionEditorPage(QWidget):
     # === Lazy Icon Loading Methods ===
     
     def _cancel_icon_load_threads(self):
-        """Cancel all running icon load threads."""
+        """Cancel all running icon load threads and wait for them to finish."""
         for thread in self._icon_load_threads:
-            if thread.isRunning():
-                thread.stop()
+            try:
+                if thread.isRunning():
+                    thread.stop()
+                    thread.wait(1000)
+            except Exception:
+                pass
         self._icon_load_threads.clear()
     
     def _load_initial_icons(self):
@@ -5248,6 +5342,7 @@ class VersionEditorPage(QWidget):
             if project_slug:
                 thread = IconFetcher({'source': source, 'id': mod.id})
                 thread.icon_fetched.connect(lambda mod_id, data, idx=mod_index: self._on_mod_icon_loaded(idx, data))
+                thread.finished.connect(thread.deleteLater)
                 self._icon_load_threads.append(thread)
                 thread.start()
         elif source_type == 'curseforge':
@@ -5256,6 +5351,7 @@ class VersionEditorPage(QWidget):
             if project_id:
                 thread = _CurseForgeIconFetcher(str(project_id), mod.id, mod_index)
                 thread.icon_fetched.connect(self._on_mod_icon_loaded)
+                thread.finished.connect(thread.deleteLater)
                 self._icon_load_threads.append(thread)
                 thread.start()
     
@@ -6549,8 +6645,35 @@ class MainWindow(QMainWindow):
             </ul>
             """)
     
+    def _shutdown_threads(self):
+        """Gracefully stop all background threads before exit."""
+        try:
+            # Stop icon load threads in version editor page
+            if hasattr(self, 'version_editor_page') and self.version_editor_page:
+                try:
+                    self.version_editor_page._cancel_icon_load_threads()
+                except Exception:
+                    pass
+                
+                # Clear mod and file editors to stop any hash calculators
+                try:
+                    if hasattr(self.version_editor_page, 'mod_editor'):
+                        self.version_editor_page.mod_editor.clear()
+                except Exception:
+                    pass
+                try:
+                    if hasattr(self.version_editor_page, 'file_editor'):
+                        self.version_editor_page.file_editor.clear()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    
     def closeEvent(self, event):
         """Handle window close."""
+        # Shutdown background threads first
+        self._shutdown_threads()
+        
         # Check for unsaved changes
         has_unsaved = any(v.modified for v in self.versions.values())
         
@@ -6567,6 +6690,8 @@ class MainWindow(QMainWindow):
             msg_box.exec()
             
             if msg_box.clickedButton() == exit_btn:
+                # Shutdown threads again before accepting exit
+                self._shutdown_threads()
                 event.accept()
             else:
                 event.ignore()
