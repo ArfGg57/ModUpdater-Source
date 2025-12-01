@@ -44,8 +44,8 @@ try:
         QStyle, QSizePolicy, QGridLayout, QProgressDialog, QInputDialog,
         QMenu, QWidgetAction, QProgressBar
     )
-    from PyQt6.QtCore import Qt, QSize, pyqtSignal, QThread, QTimer, QByteArray, QUrl
-    from PyQt6.QtGui import QFont, QColor, QPalette, QIcon, QAction, QPixmap, QPainter, QImage, QTextDocument
+    from PyQt6.QtCore import Qt, QSize, pyqtSignal, QThread, QTimer, QByteArray
+    from PyQt6.QtGui import QFont, QColor, QPalette, QIcon, QAction, QPixmap, QPainter, QImage
     PYQT_VERSION = 6
 except ImportError:
     try:
@@ -59,8 +59,8 @@ except ImportError:
             QStyle, QSizePolicy, QGridLayout, QProgressDialog, QInputDialog,
             QMenu, QWidgetAction, QProgressBar
         )
-        from PyQt5.QtCore import Qt, QSize, pyqtSignal, QThread, QTimer, QByteArray, QUrl
-        from PyQt5.QtGui import QFont, QColor, QPalette, QIcon, QPixmap, QPainter, QImage, QTextDocument
+        from PyQt5.QtCore import Qt, QSize, pyqtSignal, QThread, QTimer, QByteArray
+        from PyQt5.QtGui import QFont, QColor, QPalette, QIcon, QPixmap, QPainter, QImage
         from PyQt5.QtWidgets import QAction
         PYQT_VERSION = 5
     except ImportError:
@@ -1680,8 +1680,25 @@ class ModDescriptionFetchThread(QThread):
         with urllib.request.urlopen(req, timeout=30) as response:
             data = json.loads(response.read())
             description = data.get('data', '')
-            # Keep HTML for rich text display with images
+            # Sanitize HTML by removing potentially dangerous tags/attributes
+            # Allow only safe HTML tags for display
+            description = self._sanitize_html(description)
             return description
+    
+    def _sanitize_html(self, html_content: str) -> str:
+        """Sanitize HTML content by removing script tags and event handlers."""
+        if not html_content:
+            return html_content
+        # Remove script tags completely - match opening tag, content, and closing tag
+        # Using a more robust pattern that handles whitespace and attributes in closing tags
+        html_content = re.sub(r'<script\b[^>]*>[\s\S]*?<\s*/\s*script[^>]*>', '', html_content, flags=re.IGNORECASE)
+        # Also remove any remaining standalone script tags
+        html_content = re.sub(r'<\s*/?script\b[^>]*>', '', html_content, flags=re.IGNORECASE)
+        # Remove event handlers (onclick, onload, etc.)
+        html_content = re.sub(r'\s+on\w+\s*=\s*["\'][^"\']*["\']', '', html_content, flags=re.IGNORECASE)
+        # Remove javascript: URLs
+        html_content = re.sub(r'href\s*=\s*["\']javascript:[^"\']*["\']', '', html_content, flags=re.IGNORECASE)
+        return html_content
     
     def _fetch_modrinth_description(self) -> str:
         """Fetch full description from Modrinth."""
@@ -2155,8 +2172,12 @@ class ModBrowserDialog(QDialog):
     
     def on_description_fetched(self, description: str):
         """Handle full description fetch."""
-        # Check if description is HTML or plain text (Markdown from Modrinth)
-        if description.strip().startswith('<') or '<' in description:
+        # Check if description is HTML by looking for common HTML tags
+        # CurseForge returns HTML, Modrinth returns Markdown
+        html_pattern = r'<\s*(p|div|span|br|img|a|h[1-6]|ul|ol|li|strong|em|b|i)\b'
+        is_html = bool(re.search(html_pattern, description, re.IGNORECASE))
+        
+        if is_html:
             self.description_browser.setHtml(description)
         else:
             # Convert markdown-style text to basic HTML
@@ -2783,6 +2804,7 @@ class ModEditorPanel(QWidget):
         self.blockSignals(False)
         
         # Auto-fill hash if from curseforge/modrinth and no hash is set
+        # Use short delay to allow UI to update first before starting the hash calculation
         if (source_type in ['curseforge', 'modrinth']) and not mod.hash:
             QTimer.singleShot(100, self.auto_fill_hash)
     
