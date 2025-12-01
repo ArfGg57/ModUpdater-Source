@@ -78,16 +78,27 @@ DEFAULT_VERSION = "1.0.0"  # Default version for new mods/files
 
 # Search/pagination settings
 SEARCH_PAGE_SIZE = 50  # Number of mods to load per page
-PAGE_ICON_CACHE_SIZE = 8  # Number of icons to cache per page when navigating away
-MAX_CACHED_PAGES = 10  # Maximum number of pages to keep in cache
+
+# === Icon Preloading Configuration ===
+# Configurable preload sizes
+LARGE_LOAD_AMOUNT = 25   # How many icons count as a "large" preload
+SMALL_LOAD_AMOUNT = 8    # How many icons count as a "small" preload
+
+# Configurable preload range (number of pages before/after current page)
+MAX_LARGE_PROFILE_RANGE = 1   # How many pages before/after get LARGE_LOAD_AMOUNT preloaded
+MAX_SMALL_PROFILE_RANGE = 1   # How many pages before/after get SMALL_LOAD_AMOUNT preloaded
+
+# Legacy settings (kept for backward compatibility)
+PAGE_ICON_CACHE_SIZE = SMALL_LOAD_AMOUNT  # Alias for backward compatibility
+MAX_CACHED_PAGES = 2 * (MAX_LARGE_PROFILE_RANGE + MAX_SMALL_PROFILE_RANGE) + 1  # Total pages in cache range
 
 # Image scaling settings
 MAX_DESCRIPTION_IMAGE_WIDTH = 400  # Maximum width for images in mod descriptions
 
 # Icon loading settings
-ICON_MAX_CONCURRENT_LOADS = 4  # Maximum number of concurrent icon downloads (reduced for stability)
+ICON_MAX_CONCURRENT_LOADS = 6  # Maximum number of concurrent icon downloads (increased for faster preloading)
 ICON_LOAD_DEBOUNCE_MS = 50  # Debounce delay for scroll events (ms)
-ICON_PRELOAD_DELAY_MS = 300  # Delay before starting background preload (ms)
+ICON_PRELOAD_DELAY_MS = 100  # Delay before starting background preload (ms) - reduced for faster initial load
 ICON_CASCADE_THRESHOLD_DIVISOR = 2  # Divisor for max concurrent loads to determine cascade trigger threshold
 ICON_LOAD_RETRY_DELAY_MS = 100  # Delay before retrying icon loads (ms)
 ICON_LOAD_INITIAL_DELAY_MS = 10  # Small delay before starting icon loads (ms)
@@ -1995,7 +2006,218 @@ class ModDescriptionFetchThread(QThread):
 
 
 class ModBrowserDialog(QDialog):
-    """Dialog for browsing and selecting mods from CurseForge/Modrinth (like Prism Launcher)."""
+    """Dialog for browsing and selecting mods from CurseForge/Modrinth (like Prism Launcher).
+    
+    Icon Preloading System:
+    - CurseForge and Modrinth have INDEPENDENT icon caches
+    - On dialog open: Page 1 icons are already preloaded (LARGE_LOAD_AMOUNT)
+    - Preload strategy per source:
+      - Page 1: LARGE_LOAD_AMOUNT icons preloaded at startup
+      - Page 2: LARGE_LOAD_AMOUNT icons preloaded 
+      - Page 3: SMALL_LOAD_AMOUNT icons preloaded
+    - When navigating to page X:
+      - Load remaining (SEARCH_PAGE_SIZE - LARGE_LOAD_AMOUNT) icons for page X
+      - Preload LARGE_LOAD_AMOUNT for pages X-1 and X+1
+      - Preload SMALL_LOAD_AMOUNT for pages X-2 and X+2
+      - Unload pages outside the configured range
+    """
+    
+    # Class-level shared icon caches (persist across dialog instances)
+    # Separate caches for each source to maintain isolation
+    _shared_icon_cache = {
+        'curseforge': {},  # mod_id -> icon_bytes
+        'modrinth': {}     # mod_id -> icon_bytes
+    }
+    
+    # Track which pages have been preloaded for each source
+    # Structure: {source: {page: preload_count}} where preload_count = number of icons loaded
+    _page_preload_state = {
+        'curseforge': {},
+        'modrinth': {}
+    }
+    
+    # Store mod data for pages (needed to apply icons when displaying)
+    # Structure: {source: {page: [mod_data_list]}}
+    _page_mod_data = {
+        'curseforge': {},
+        'modrinth': {}
+    }
+    
+    # Track active preload threads per source
+    _preload_threads = {
+        'curseforge': [],
+        'modrinth': []
+    }
+    
+    # Loading state per source
+    _loading_mod_ids_per_source = {
+        'curseforge': set(),
+        'modrinth': set()
+    }
+    
+    # Flag to track if startup preloading has been initiated
+    _startup_preload_started = False
+    
+    @classmethod
+    def start_startup_preload(cls):
+        """Start preloading icons for both CurseForge and Modrinth at program startup.
+        
+        This should be called when the program first launches (not when the user opens the dialog).
+        Preloads:
+        - Page 1: LARGE_LOAD_AMOUNT icons for both sources
+        - Page 2: LARGE_LOAD_AMOUNT icons for both sources
+        - Page 3: SMALL_LOAD_AMOUNT icons for both sources
+        """
+        if cls._startup_preload_started:
+            return  # Already started
+        
+        cls._startup_preload_started = True
+        
+        # Preload for both sources independently
+        for source in ['curseforge', 'modrinth']:
+            # Page 0 (first page): LARGE_LOAD_AMOUNT
+            cls._fetch_and_preload_page_static(source, 0, LARGE_LOAD_AMOUNT)
+            # Page 1 (second page): LARGE_LOAD_AMOUNT 
+            cls._fetch_and_preload_page_static(source, 1, LARGE_LOAD_AMOUNT)
+            # Page 2 (third page): SMALL_LOAD_AMOUNT
+            cls._fetch_and_preload_page_static(source, 2, SMALL_LOAD_AMOUNT)
+    
+    @classmethod
+    def _fetch_and_preload_page_static(cls, source: str, page: int, preload_amount: int):
+        """Fetch page data and start preloading icons (class method for startup use)."""
+        # Create a search thread to fetch page data
+        thread = ModSearchThread(source, "", "")
+        thread.offset = page * SEARCH_PAGE_SIZE
+        thread.search_complete.connect(
+            lambda results, total, s=source, p=page, pa=preload_amount:
+                cls._on_startup_page_fetched(results, s, p, pa))
+        thread.finished.connect(thread.deleteLater)
+        
+        if source not in cls._preload_threads:
+            cls._preload_threads[source] = []
+        cls._preload_threads[source].append(thread)
+        thread.start()
+    
+    @classmethod
+    def _on_startup_page_fetched(cls, results: list, source: str, page: int, preload_amount: int):
+        """Handle page data fetched during startup preloading."""
+        if not results:
+            return
+        
+        # Store page data
+        if source not in cls._page_mod_data:
+            cls._page_mod_data[source] = {}
+        cls._page_mod_data[source][page] = results
+        
+        # Start preloading icons for this page
+        cls._preload_icons_for_page_static(source, page, preload_amount, 0)
+    
+    @classmethod
+    def _preload_icons_for_page_static(cls, source: str, page: int, target_count: int, start_index: int):
+        """Preload icons for a page (class method for startup use)."""
+        mods = cls._page_mod_data.get(source, {}).get(page, [])
+        if not mods:
+            return
+        
+        icons_cache = cls._shared_icon_cache.get(source, {})
+        loading_ids = cls._loading_mod_ids_per_source.get(source, set())
+        current_preload_count = cls._page_preload_state.get(source, {}).get(page, 0)
+        
+        # Check if we've reached target
+        if current_preload_count >= target_count:
+            return
+        
+        icons_started = 0
+        max_concurrent = ICON_MAX_CONCURRENT_LOADS
+        
+        for i in range(start_index, min(len(mods), target_count)):
+            mod = mods[i]
+            mod_id = mod.get('id', mod.get('slug', ''))
+            icon_url = mod.get('icon_url', '')
+            
+            if not mod_id or not icon_url:
+                continue
+            
+            # Skip if already cached
+            if mod_id in icons_cache:
+                continue
+            
+            # Skip if already loading
+            if mod_id in loading_ids:
+                continue
+            
+            # Check concurrent load limit
+            active_threads = cls._preload_threads.get(source, [])
+            active_count = sum(1 for t in active_threads if cls._thread_is_running_static(t))
+            
+            if active_count >= max_concurrent:
+                # Schedule retry
+                QTimer.singleShot(100, lambda s=source, p=page, tc=target_count, si=i: 
+                    cls._preload_icons_for_page_static(s, p, tc, si))
+                return
+            
+            # Start loading this icon
+            if source not in cls._loading_mod_ids_per_source:
+                cls._loading_mod_ids_per_source[source] = set()
+            cls._loading_mod_ids_per_source[source].add(mod_id)
+            
+            try:
+                thread = SimpleIconFetcher(mod_id, icon_url, source)
+                thread.icon_fetched.connect(cls._on_startup_icon_fetched)
+                thread.finished_loading.connect(
+                    lambda mid=mod_id, s=source, p=page, tc=target_count, ci=i:
+                        cls._on_startup_icon_complete(mid, s, p, tc, ci))
+                thread.finished.connect(thread.deleteLater)
+                
+                if source not in cls._preload_threads:
+                    cls._preload_threads[source] = []
+                cls._preload_threads[source].append(thread)
+                thread.start()
+                icons_started += 1
+            except Exception:
+                cls._loading_mod_ids_per_source[source].discard(mod_id)
+            
+            # Allow multiple parallel loads up to the limit
+            if icons_started >= max_concurrent:
+                return
+    
+    @staticmethod
+    def _on_startup_icon_fetched(mod_id: str, source: str, data: bytes):
+        """Handle icon fetched during startup preloading."""
+        ModBrowserDialog._shared_icon_cache[source][mod_id] = data
+    
+    @classmethod
+    def _on_startup_icon_complete(cls, mod_id: str, source: str, page: int, target_count: int, current_index: int):
+        """Handle completion of a startup preload icon fetch."""
+        if source in cls._loading_mod_ids_per_source:
+            cls._loading_mod_ids_per_source[source].discard(mod_id)
+        
+        # Update preload state
+        if source not in cls._page_preload_state:
+            cls._page_preload_state[source] = {}
+        current_count = cls._page_preload_state[source].get(page, 0)
+        cls._page_preload_state[source][page] = current_count + 1
+        
+        # Clean up finished threads
+        if source in cls._preload_threads:
+            cls._preload_threads[source] = [
+                t for t in cls._preload_threads[source] 
+                if cls._thread_is_running_static(t)
+            ]
+        
+        # Continue preloading remaining icons for this page
+        mods = cls._page_mod_data.get(source, {}).get(page, [])
+        if mods and current_index + 1 < len(mods) and current_count + 1 < target_count:
+            QTimer.singleShot(20, lambda: cls._preload_icons_for_page_static(
+                source, page, target_count, current_index + 1))
+    
+    @staticmethod
+    def _thread_is_running_static(t) -> bool:
+        """Return True if QThread is running, without crashing on deleted C++ objects."""
+        try:
+            return t is not None and t.isRunning()
+        except RuntimeError:
+            return False
     
     def __init__(self, existing_ids: List[str], current_version: str = "1.0.0", parent=None):
         super().__init__(parent)
@@ -2004,41 +2226,41 @@ class ModBrowserDialog(QDialog):
         self.search_thread: Optional[ModSearchThread] = None
         self.version_thread: Optional[ModVersionFetchThread] = None
         self.description_thread: Optional[ModDescriptionFetchThread] = None  # Thread for fetching description
-        self.icon_threads: List[QThread] = []  # Track icon loading threads
+        self.icon_threads: List[QThread] = []  # Track icon loading threads for current page
         self.selected_mod = None
         self.selected_version = None
         self.all_search_results = []  # Store all results for current search
         
-        # Pagination state
+        # Pagination state (per source)
         self.current_page = 0  # Current page index (0-based)
         self.total_results = 0  # Total results from API (if available)
         self.has_more_results = True  # Whether more results exist on the server
         self._is_loading_page = False  # Whether a page is currently loading
         
-        # Simplified icon loading system
-        # Global icon cache: source -> {mod_id -> icon_bytes}
-        self._icon_cache = {}  # Cache: source -> {mod_id -> icon_bytes}
+        # Track page state per source
+        self._source_page_state = {
+            'curseforge': {'page': 0, 'total': 0, 'has_more': True},
+            'modrinth': {'page': 0, 'total': 0, 'has_more': True}
+        }
         
-        # Page-based icon caching: keeps track of icons loaded per page
-        # Structure: {page_number: [list of mod_ids cached from that page]}
-        self._page_icon_cache = {}  # page -> list of mod_ids for that page's cache
-        self._page_load_order = []  # Order in which pages were loaded (for LRU eviction)
-
-        # Loading state tracking (simplified)
-        self._loading_mod_ids = set()  # Set of mod_ids currently being loaded
+        # Local reference to shared cache for easier access
+        self._icon_cache = ModBrowserDialog._shared_icon_cache
+        
+        # Loading state tracking (use class-level for source isolation)
         self._max_concurrent_loads = ICON_MAX_CONCURRENT_LOADS
 
         # Debounce timer for scroll events
         self._scroll_debounce_timer = None
 
-        # Background preload
+        # Background preload state
         self._preload_source = None
+        self._preload_thread = None
 
         self.search_in_progress = False
 
         self.setup_ui()
-        # Load popular mods on startup and preload both tabs
-        QTimer.singleShot(100, self._load_and_preload_both_tabs)
+        # Load popular mods on startup - icons should already be preloaded
+        QTimer.singleShot(100, self._initialize_with_preloaded_data)
 
     def setup_ui(self):
         """Set up the UI for the mod browser dialog with pagination controls."""
@@ -2379,6 +2601,7 @@ class ModBrowserDialog(QDialog):
 
         first_visible, last_visible = self._get_visible_range()
         source = self._get_selected_source()
+        loading_ids = self._get_loading_mod_ids(source)
 
         # Calculate buffer zone
         visible_count = last_visible - first_visible + 1
@@ -2422,7 +2645,7 @@ class ModBrowserDialog(QDialog):
                 continue
 
             # Skip if already loading
-            if mod_id in self._loading_mod_ids:
+            if mod_id in loading_ids:
                 continue
 
             # Check cache
@@ -2444,7 +2667,7 @@ class ModBrowserDialog(QDialog):
             source: Source platform (curseforge/modrinth)
             item_idx: Index of the item in the list (for visibility tracking)
         """
-        self._loading_mod_ids.add(mod_id)
+        self._add_loading_mod_id(source, mod_id)
 
         # Set placeholder icon immediately
         item.setIcon(get_placeholder_icon())
@@ -2452,7 +2675,7 @@ class ModBrowserDialog(QDialog):
         try:
             thread = SimpleIconFetcher(mod_id, icon_url, source)
             thread.icon_fetched.connect(self._on_simple_icon_fetched)
-            thread.finished_loading.connect(self._on_icon_load_complete)
+            thread.finished_loading.connect(lambda mid=mod_id, s=source: self._on_icon_load_complete(mid, s))
             thread.finished.connect(thread.deleteLater)
             # Store item reference and index for callback and cancellation
             thread.item = item
@@ -2460,14 +2683,12 @@ class ModBrowserDialog(QDialog):
             self.icon_threads.append(thread)
             thread.start()
         except Exception:
-            self._loading_mod_ids.discard(mod_id)
+            self._remove_loading_mod_id(source, mod_id)
 
     def _on_simple_icon_fetched(self, mod_id: str, source: str, data: bytes):
         """Handle icon fetched from background thread."""
-        # Cache the icon
-        if source not in self._icon_cache:
-            self._icon_cache[source] = {}
-        self._icon_cache[source][mod_id] = data
+        # Cache the icon in the shared cache
+        ModBrowserDialog._shared_icon_cache[source][mod_id] = data
 
         # Find and update the item (sender may be deleted, so use try-except)
         try:
@@ -2478,9 +2699,9 @@ class ModBrowserDialog(QDialog):
             # Handle case where Qt C++ object was deleted
             pass
 
-    def _on_icon_load_complete(self, mod_id: str):
+    def _on_icon_load_complete(self, mod_id: str, source: str):
         """Handle when an icon load completes (success or failure)."""
-        self._loading_mod_ids.discard(mod_id)
+        self._remove_loading_mod_id(source, mod_id)
 
         # Clean up finished threads (safely)
         self.icon_threads = [t for t in self.icon_threads if self._thread_is_running(t)]
@@ -2589,56 +2810,50 @@ class ModBrowserDialog(QDialog):
             self._navigate_to_page(target_page)
 
     def _navigate_to_page(self, target_page: int):
-        """Navigate to a specific page."""
+        """Navigate to a specific page with intelligent preloading.
+        
+        Implements the new preload strategy:
+        - Current page X: Fully loaded
+        - Pages X±1: LARGE_LOAD_AMOUNT preloaded
+        - Pages X±2: SMALL_LOAD_AMOUNT preloaded
+        - Pages outside range: Unloaded
+        """
         if self._is_loading_page:
             return
 
-        # Save icons from current page to cache before navigating away
-        self._cache_current_page_icons()
+        source = self._get_selected_source()
+        old_page = self.current_page
+        
+        # Save source page state
+        self._source_page_state[source] = {
+            'page': target_page,
+            'total': self.total_results,
+            'has_more': self.has_more_results
+        }
 
         self.current_page = target_page
+        
+        # Check if we have preloaded data for the target page
+        if source in ModBrowserDialog._page_mod_data and target_page in ModBrowserDialog._page_mod_data[source]:
+            results = ModBrowserDialog._page_mod_data[source][target_page]
+            if results:
+                # Use preloaded data
+                self._display_preloaded_page(results, source, target_page)
+                # Trigger preloading for pages around this one
+                QTimer.singleShot(ICON_PRELOAD_DELAY_MS, lambda: self._preload_around_page(source, target_page))
+                return
+        
+        # Load the page fresh
         self._load_page(target_page)
+        
+        # Trigger preloading for pages around this one after a delay
+        QTimer.singleShot(ICON_PRELOAD_DELAY_MS, lambda: self._preload_around_page(source, target_page))
 
     def _cache_current_page_icons(self):
-        """Cache top icons from current page before navigating away."""
-        source = self._get_selected_source()
-
-        # Get the first PAGE_ICON_CACHE_SIZE mod IDs from current page
-        cached_ids = []
-        for i in range(min(PAGE_ICON_CACHE_SIZE, self.results_list.count())):
-            item = self.results_list.item(i)
-            if item:
-                mod = item.data(Qt.ItemDataRole.UserRole)
-                if mod:
-                    mod_id = mod.get('id', mod.get('slug', ''))
-                    if mod_id and source in self._icon_cache and mod_id in self._icon_cache[source]:
-                        cached_ids.append(mod_id)
-
-        # Store in page cache
-        if cached_ids:
-            self._page_icon_cache[self.current_page] = cached_ids
-
-            # Update LRU order
-            if self.current_page in self._page_load_order:
-                self._page_load_order.remove(self.current_page)
-            self._page_load_order.append(self.current_page)
-
-            # Evict oldest pages if we have too many cached
-            while len(self._page_load_order) > MAX_CACHED_PAGES:
-                oldest_page = self._page_load_order.pop(0)
-                if oldest_page in self._page_icon_cache:
-                    # Remove icons for evicted page from cache (except if also in other pages)
-                    evicted_ids = self._page_icon_cache.pop(oldest_page, [])
-                    # Check if icons are used by other cached pages
-                    all_cached_ids = set()
-                    for page_ids in self._page_icon_cache.values():
-                        all_cached_ids.update(page_ids)
-
-                    # Remove icons not used by other pages
-                    if source in self._icon_cache:
-                        for evict_id in evicted_ids:
-                            if evict_id not in all_cached_ids:
-                                self._icon_cache[source].pop(evict_id, None)
+        """Cache icons from current page - now handled by the shared cache system."""
+        # The new system uses ModBrowserDialog._shared_icon_cache which persists
+        # across page navigations, so explicit caching is no longer needed
+        pass
 
     def _load_page(self, page: int):
         """Load a specific page of results."""
@@ -2694,11 +2909,20 @@ class ModBrowserDialog(QDialog):
         # Store total results from API
         if total_count > 0:
             self.total_results = total_count
+            # Update source page state
+            state = self._source_page_state.get(source, {})
+            state['total'] = total_count
+            self._source_page_state[source] = state
 
         # Check if there are more results
         self.has_more_results = len(results) >= SEARCH_PAGE_SIZE
 
-        # Store results
+        # Store results in shared page data cache
+        if source not in ModBrowserDialog._page_mod_data:
+            ModBrowserDialog._page_mod_data[source] = {}
+        ModBrowserDialog._page_mod_data[source][self.current_page] = results
+        
+        # Store results locally
         self.all_search_results = results
 
         # Display results with icons
@@ -2715,8 +2939,9 @@ class ModBrowserDialog(QDialog):
             status_text += f" of {self.total_results}"
         self.search_status.setText(status_text)
 
-        # Start loading icons from top to bottom
-        QTimer.singleShot(ICON_LOAD_INITIAL_DELAY_MS, self._load_page_icons_sequential)
+        # Load remaining icons (beyond what was preloaded) and trigger preloading for nearby pages
+        QTimer.singleShot(ICON_LOAD_INITIAL_DELAY_MS, lambda: self._load_remaining_icons_for_page(source))
+        QTimer.singleShot(ICON_PRELOAD_DELAY_MS, lambda: self._preload_around_page(source, self.current_page))
 
     def _on_page_load_error(self, error: str):
         """Handle page load error."""
@@ -2745,62 +2970,9 @@ class ModBrowserDialog(QDialog):
             self.results_list.addItem(item)
 
     def _load_page_icons_sequential(self):
-        """Load icons for current page from top to bottom.
-        
-        For the first PAGE_ICON_CACHE_SIZE (8) icons, loads them in parallel for speed.
-        For remaining icons, loads them one at a time.
-        """
-        if self.results_list.count() == 0:
-            return
-
+        """Legacy method - redirects to new implementation."""
         source = self._get_selected_source()
-        icons_started = 0
-        first_batch_size = PAGE_ICON_CACHE_SIZE  # Load first 8 in parallel
-
-        # Find the first item without a loaded icon
-        for i in range(self.results_list.count()):
-            item = self.results_list.item(i)
-            if not item:
-                continue
-
-            mod = item.data(Qt.ItemDataRole.UserRole)
-            if not mod:
-                continue
-
-            mod_id = mod.get('id', mod.get('slug', ''))
-            icon_url = mod.get('icon_url', '')
-
-            if not icon_url or not mod_id:
-                continue
-
-            # Skip if already cached
-            if source in self._icon_cache and mod_id in self._icon_cache[source]:
-                continue
-
-            # Skip if already loading
-            if mod_id in self._loading_mod_ids:
-                continue
-
-            # For the first batch, allow more parallel loads
-            # For subsequent items, limit to max concurrent loads
-            active_count = sum(1 for t in self.icon_threads if self._thread_is_running(t))
-            max_parallel = first_batch_size if i < first_batch_size else self._max_concurrent_loads
-            
-            if active_count >= max_parallel:
-                # Schedule retry later
-                QTimer.singleShot(ICON_LOAD_RETRY_DELAY_MS, self._load_page_icons_sequential)
-                return
-
-            # Start loading this icon
-            self._start_icon_load(item, mod_id, icon_url, source, item_idx=i)
-            icons_started += 1
-            
-            # For first batch, continue to start more in parallel
-            # For subsequent items, only start one at a time
-            if i >= first_batch_size and icons_started > 0:
-                # Schedule retry for more icons
-                QTimer.singleShot(ICON_LOAD_RETRY_DELAY_MS, self._load_page_icons_sequential)
-                return
+        self._load_remaining_icons_for_page(source)
 
     def _cancel_all_icon_loads(self):
         """Cancel all pending icon load threads and wait for them to finish."""
@@ -2812,15 +2984,16 @@ class ModBrowserDialog(QDialog):
             except Exception:
                 pass
         self.icon_threads.clear()
-        self._loading_mod_ids.clear()
+        # Note: We don't clear the shared loading state as it's per-source
 
     def _load_mod_icon(self, item: QListWidgetItem, icon_url: str):
         """Queue mod icon for lazy loading (legacy method - redirects to new system)."""
         source = self._get_selected_source()
         mod = item.data(Qt.ItemDataRole.UserRole) if item else None
         mod_id = mod.get('id', mod.get('slug', '')) if mod else None
+        loading_ids = self._get_loading_mod_ids(source)
 
-        if mod_id and mod_id not in self._loading_mod_ids:
+        if mod_id and mod_id not in loading_ids:
             self._start_icon_load(item, mod_id, icon_url, source)
 
     def _apply_icon_to_item(self, item: QListWidgetItem, data: bytes):
@@ -2848,197 +3021,304 @@ class ModBrowserDialog(QDialog):
         # Apply icon to item
         self._apply_icon_to_item(item, data)
 
-    def _load_and_preload_both_tabs(self):
-        """Load the active tab and preload the other tab's mods in background."""
-        # First load the active tab
-        self.load_popular_mods()
-
-        # Schedule preloading of the other tab after a short delay
-        QTimer.singleShot(ICON_PRELOAD_DELAY_MS, self._start_background_preload)
-
-        # Schedule background preloading of icons for next pages
-        QTimer.singleShot(ICON_PRELOAD_DELAY_MS * 2, self._preload_next_pages_icons)
-
-    def _start_background_preload(self):
-        """Start preloading the inactive tab's mods."""
-        current_source = self._get_selected_source()
-        other_source = 'modrinth' if current_source == 'curseforge' else 'curseforge'
-
-        # Start a background search for the other source
-        self._preload_source = other_source
-        self._preload_thread = ModSearchThread(other_source, "", "")
-        self._preload_thread.search_complete.connect(self._on_preload_complete)
-        self._preload_thread.finished.connect(self._preload_thread.deleteLater)
-        self._preload_thread.start()
-
-    def _on_preload_complete(self, results: list, total_count: int = 0):
-        """Handle preloaded results from background search."""
-        source = self._preload_source
-        if not source:
-            return
-
-        # Store total count for this source
-        if not hasattr(self, '_source_total_results'):
-            self._source_total_results = {'curseforge': 0, 'modrinth': 0}
-        if total_count > 0:
-            self._source_total_results[source] = total_count
-
-        # Store results for this source (for later display)
-        if not hasattr(self, '_source_results'):
-            self._source_results = {'curseforge': [], 'modrinth': []}
-        self._source_results[source] = results
-
-        # Preload icons gradually using SimpleIconFetcher
-        self._preload_icons_gradually(results, source)
-
-    def _preload_icons_gradually(self, results: list, source: str):
-        """Preload icons in the background.
+    def _initialize_with_preloaded_data(self):
+        """Initialize dialog using preloaded data if available."""
+        source = self._get_selected_source()
         
-        For the first PAGE_ICON_CACHE_SIZE (8) icons, loads them in parallel for speed.
-        For remaining icons, loads them one at a time.
-        """
-        if not results:
+        # Check if we have preloaded page data
+        if source in ModBrowserDialog._page_mod_data and 0 in ModBrowserDialog._page_mod_data[source]:
+            # We have preloaded data for page 0, use it
+            results = ModBrowserDialog._page_mod_data[source][0]
+            if results:
+                self._display_preloaded_page(results, source, 0)
+                return
+        
+        # Fallback to loading data fresh
+        self.load_popular_mods()
+    
+    def _display_preloaded_page(self, results: list, source: str, page: int):
+        """Display a page with preloaded icons."""
+        self.all_search_results = results
+        self.current_page = page
+        self.has_more_results = len(results) >= SEARCH_PAGE_SIZE
+        
+        # Display results with cached icons
+        self._display_page_results(results, source)
+        
+        # Update pagination
+        self._update_pagination_controls()
+        
+        # Update status
+        page_start = page * SEARCH_PAGE_SIZE + 1
+        page_end = page_start + len(results) - 1
+        status_text = f"Showing {page_start}-{page_end}"
+        if self.total_results > 0:
+            status_text += f" of {self.total_results}"
+        self.search_status.setText(status_text)
+        
+        # Load any remaining icons that weren't preloaded
+        self._load_remaining_icons_for_page(source)
+    
+    def _get_loading_mod_ids(self, source: str) -> set:
+        """Get the set of mod_ids currently loading for a source."""
+        return ModBrowserDialog._loading_mod_ids_per_source.get(source, set())
+    
+    def _add_loading_mod_id(self, source: str, mod_id: str):
+        """Mark a mod_id as loading for a source."""
+        if source not in ModBrowserDialog._loading_mod_ids_per_source:
+            ModBrowserDialog._loading_mod_ids_per_source[source] = set()
+        ModBrowserDialog._loading_mod_ids_per_source[source].add(mod_id)
+    
+    def _remove_loading_mod_id(self, source: str, mod_id: str):
+        """Mark a mod_id as no longer loading for a source."""
+        if source in ModBrowserDialog._loading_mod_ids_per_source:
+            ModBrowserDialog._loading_mod_ids_per_source[source].discard(mod_id)
+    
+    def _load_remaining_icons_for_page(self, source: str):
+        """Load icons for items on current page that weren't preloaded."""
+        if self.results_list.count() == 0:
             return
-
-        first_batch_size = PAGE_ICON_CACHE_SIZE
-        icons_started = 0
-
-        # Find the next icon to preload
-        for i, mod in enumerate(results):
+        
+        icons_cache = self._icon_cache.get(source, {})
+        loading_ids = self._get_loading_mod_ids(source)
+        
+        for i in range(self.results_list.count()):
+            item = self.results_list.item(i)
+            if not item:
+                continue
+            
+            mod = item.data(Qt.ItemDataRole.UserRole)
+            if not mod:
+                continue
+            
             mod_id = mod.get('id', mod.get('slug', ''))
             icon_url = mod.get('icon_url', '')
-
+            
             if not mod_id or not icon_url:
                 continue
-
-            # Skip if already cached or loading
-            if source in self._icon_cache and mod_id in self._icon_cache[source]:
+            
+            # Skip if already cached
+            if mod_id in icons_cache:
+                self._apply_icon_to_item(item, icons_cache[mod_id])
                 continue
-            if mod_id in self._loading_mod_ids:
+            
+            # Skip if already loading
+            if mod_id in loading_ids:
                 continue
-
-            # For the first batch, allow more parallel loads
-            # For subsequent items, limit to max concurrent loads
+            
+            # Check concurrent load limit
             active_count = sum(1 for t in self.icon_threads if self._thread_is_running(t))
-            max_parallel = first_batch_size if i < first_batch_size else self._max_concurrent_loads
-            
-            if active_count >= max_parallel:
-                # Schedule retry later - use default params to capture current values
-                QTimer.singleShot(200, lambda r=results, s=source: self._preload_icons_gradually(r, s))
+            if active_count >= self._max_concurrent_loads:
+                # Schedule retry
+                QTimer.singleShot(ICON_LOAD_RETRY_DELAY_MS, lambda s=source: self._load_remaining_icons_for_page(s))
                 return
-
-            # Start preloading this icon
-            self._loading_mod_ids.add(mod_id)
-            try:
-                thread = SimpleIconFetcher(mod_id, icon_url, source)
-                thread.icon_fetched.connect(self._on_background_icon_fetched)
-                thread.finished_loading.connect(lambda mid=mod_id, r=results, s=source: self._on_preload_icon_complete(mid, r, s))
-                thread.finished.connect(thread.deleteLater)
-                self.icon_threads.append(thread)
-                thread.start()
-                icons_started += 1
-            except Exception:
-                self._loading_mod_ids.discard(mod_id)
             
-            # For first batch, continue to start more in parallel
-            # For subsequent items, only start one at a time
-            if i >= first_batch_size and icons_started > 0:
-                # Schedule retry for more icons
-                QTimer.singleShot(100, lambda r=results, s=source: self._preload_icons_gradually(r, s))
-                return
-
-    def _on_preload_icon_complete(self, mod_id: str, results: list, source: str):
-        """Handle completion of a preload icon fetch."""
-        self._loading_mod_ids.discard(mod_id)
-        # Clean up threads
-        self.icon_threads = [t for t in self.icon_threads if self._thread_is_running(t)]
-        # Continue preloading - use default params to capture current values
-        QTimer.singleShot(50, lambda r=results, s=source: self._preload_icons_gradually(r, s))
-
+            # Start loading this icon
+            self._start_icon_load(item, mod_id, icon_url, source, item_idx=i)
+    
     def _on_background_icon_fetched(self, mod_id: str, source: str, data: bytes):
-        """Handle background icon fetch completion."""
-        if source not in self._icon_cache:
-            self._icon_cache[source] = {}
-        self._icon_cache[source][mod_id] = data
-
-    def _preload_next_pages_icons(self):
-        """Preload icons for the first 8 mods on the next MAX_CACHED_PAGES pages.
-
-        This runs in the background after the initial page load to provide
-        instant icon display when navigating to nearby pages.
-        """
-        source = self._get_selected_source()
-
-        # Track pages we're preloading
-        if not hasattr(self, '_preloading_pages'):
-            self._preloading_pages = set()
-
-        # Preload pages 1 through MAX_CACHED_PAGES (page 0 is already loaded)
-        for page in range(1, MAX_CACHED_PAGES + 1):
-            if page not in self._preloading_pages:
-                self._preloading_pages.add(page)
-                # Start preload thread for this page with a staggered delay
-                QTimer.singleShot(page * 500, lambda p=page, s=source: self._preload_page_icons(p, s))
-
-    def _preload_page_icons(self, page: int, source: str):
-        """Preload icons for a specific page in the background."""
-        if not hasattr(self, '_preload_page_threads'):
-            self._preload_page_threads = []
-
-        # Create a search thread for this page
-        thread = ModSearchThread(source, "", "")
-        thread.offset = page * SEARCH_PAGE_SIZE
-        thread.search_complete.connect(lambda results, total, p=page, s=source:
-                                        self._on_page_preload_complete(results, p, s))
-        thread.finished.connect(thread.deleteLater)
-        self._preload_page_threads.append(thread)
-        thread.start()
-
-    def _on_page_mod_icon_complete(self, mod_id: str, mods: list, source: str, page: int, index: int):
-        """Handle completion of a page mod icon preload."""
-        self._loading_mod_ids.discard(mod_id)
+        """Handle background icon fetch completion - store in shared cache."""
+        ModBrowserDialog._shared_icon_cache[source][mod_id] = data
+    
+    def _on_preload_icon_complete(self, mod_id: str, source: str, page: int, target_count: int, current_index: int):
+        """Handle completion of a preload icon fetch."""
+        self._remove_loading_mod_id(source, mod_id)
+        
+        # Update preload state
+        if source not in ModBrowserDialog._page_preload_state:
+            ModBrowserDialog._page_preload_state[source] = {}
+        current_count = ModBrowserDialog._page_preload_state[source].get(page, 0)
+        ModBrowserDialog._page_preload_state[source][page] = current_count + 1
+        
         # Clean up threads
+        self._cleanup_finished_threads(source)
+        
+        # Continue preloading remaining icons for this page
+        mods = ModBrowserDialog._page_mod_data.get(source, {}).get(page, [])
+        if mods and current_index + 1 < len(mods) and current_count + 1 < target_count:
+            QTimer.singleShot(20, lambda: self._preload_page_icons_batch(
+                source, page, target_count, current_index + 1))
+    
+    def _cleanup_finished_threads(self, source: str):
+        """Clean up finished threads for a source."""
+        if source in ModBrowserDialog._preload_threads:
+            ModBrowserDialog._preload_threads[source] = [
+                t for t in ModBrowserDialog._preload_threads[source] 
+                if self._thread_is_running(t)
+            ]
         self.icon_threads = [t for t in self.icon_threads if self._thread_is_running(t)]
-        # Continue to next mod
-        QTimer.singleShot(50, lambda: self._preload_page_mods_icons(mods, source, page, index + 1))
-
-    def _preload_page_mods_icons(self, mods: list, source: str, page: int, index: int = 0):
-        """Gradually preload icons for mods from a page."""
-        if index >= len(mods):
+    
+    def _preload_page_icons_batch(self, source: str, page: int, target_count: int, start_index: int = 0):
+        """Preload icons for a page up to target_count.
+        
+        Args:
+            source: 'curseforge' or 'modrinth'
+            page: Page number (0-based)
+            target_count: Number of icons to preload (LARGE_LOAD_AMOUNT or SMALL_LOAD_AMOUNT)
+            start_index: Index to start loading from
+        """
+        mods = ModBrowserDialog._page_mod_data.get(source, {}).get(page, [])
+        if not mods:
             return
-
-        mod = mods[index]
-        mod_id = mod.get('id', mod.get('slug', ''))
-        icon_url = mod.get('icon_url', '')
-
-        # Check if already cached or loading
-        if source in self._icon_cache and mod_id in self._icon_cache[source]:
-            # Already cached, continue to next
-            QTimer.singleShot(10, lambda: self._preload_page_mods_icons(mods, source, page, index + 1))
+        
+        icons_cache = ModBrowserDialog._shared_icon_cache.get(source, {})
+        loading_ids = self._get_loading_mod_ids(source)
+        current_preload_count = ModBrowserDialog._page_preload_state.get(source, {}).get(page, 0)
+        
+        # Check if we've reached target
+        if current_preload_count >= target_count:
             return
-
-        if mod_id in self._loading_mod_ids:
-            # Currently loading, continue to next
-            QTimer.singleShot(100, lambda: self._preload_page_mods_icons(mods, source, page, index + 1))
-            return
-
-        if icon_url:
-            self._loading_mod_ids.add(mod_id)
+        
+        icons_started = 0
+        
+        for i in range(start_index, min(len(mods), target_count)):
+            mod = mods[i]
+            mod_id = mod.get('id', mod.get('slug', ''))
+            icon_url = mod.get('icon_url', '')
+            
+            if not mod_id or not icon_url:
+                continue
+            
+            # Skip if already cached
+            if mod_id in icons_cache:
+                continue
+            
+            # Skip if already loading
+            if mod_id in loading_ids:
+                continue
+            
+            # Check concurrent load limit
+            active_threads = ModBrowserDialog._preload_threads.get(source, [])
+            active_count = sum(1 for t in active_threads if self._thread_is_running(t))
+            
+            if active_count >= self._max_concurrent_loads:
+                # Schedule retry
+                QTimer.singleShot(100, lambda s=source, p=page, tc=target_count, si=i: 
+                    self._preload_page_icons_batch(s, p, tc, si))
+                return
+            
+            # Start loading this icon
+            self._add_loading_mod_id(source, mod_id)
             try:
                 thread = SimpleIconFetcher(mod_id, icon_url, source)
                 thread.icon_fetched.connect(self._on_background_icon_fetched)
                 thread.finished_loading.connect(
-                    lambda mid=mod_id, m=mods, s=source, p=page, i=index:
-                        self._on_page_mod_icon_complete(mid, m, s, p, i))
+                    lambda mid=mod_id, s=source, p=page, tc=target_count, ci=i:
+                        self._on_preload_icon_complete(mid, s, p, tc, ci))
                 thread.finished.connect(thread.deleteLater)
-                self.icon_threads.append(thread)
+                
+                if source not in ModBrowserDialog._preload_threads:
+                    ModBrowserDialog._preload_threads[source] = []
+                ModBrowserDialog._preload_threads[source].append(thread)
                 thread.start()
+                icons_started += 1
             except Exception:
-                self._loading_mod_ids.discard(mod_id)
-                QTimer.singleShot(50, lambda: self._preload_page_mods_icons(mods, source, page, index + 1))
-        else:
-            # No icon URL, continue to next
-            QTimer.singleShot(10, lambda: self._preload_page_mods_icons(mods, source, page, index + 1))
+                self._remove_loading_mod_id(source, mod_id)
+            
+            # Allow multiple parallel loads up to the limit
+            if icons_started >= self._max_concurrent_loads:
+                return
+    
+    def _on_page_data_fetched(self, results: list, total_count: int, source: str, page: int, preload_amount: int):
+        """Handle fetched page data for preloading."""
+        # Store the mod data for this page
+        if source not in ModBrowserDialog._page_mod_data:
+            ModBrowserDialog._page_mod_data[source] = {}
+        ModBrowserDialog._page_mod_data[source][page] = results
+        
+        # Store total count
+        if total_count > 0:
+            state = self._source_page_state.get(source, {})
+            state['total'] = total_count
+            self._source_page_state[source] = state
+        
+        # Start preloading icons for this page
+        self._preload_page_icons_batch(source, page, preload_amount, 0)
+    
+    def _fetch_page_for_preload(self, source: str, page: int, preload_amount: int):
+        """Fetch page data and preload icons."""
+        # Check if we already have data for this page
+        if source in ModBrowserDialog._page_mod_data and page in ModBrowserDialog._page_mod_data[source]:
+            # Already have data, just preload icons
+            self._preload_page_icons_batch(source, page, preload_amount, 0)
+            return
+        
+        # Fetch page data
+        thread = ModSearchThread(source, "", "")
+        thread.offset = page * SEARCH_PAGE_SIZE
+        thread.search_complete.connect(
+            lambda results, total, s=source, p=page, pa=preload_amount:
+                self._on_page_data_fetched(results, total, s, p, pa))
+        thread.finished.connect(thread.deleteLater)
+        
+        if source not in ModBrowserDialog._preload_threads:
+            ModBrowserDialog._preload_threads[source] = []
+        ModBrowserDialog._preload_threads[source].append(thread)
+        thread.start()
+    
+    def _preload_around_page(self, source: str, current_page: int):
+        """Preload icons for pages around the current page based on configured ranges.
+        
+        This implements the new preload strategy:
+        - Current page: already loaded fully
+        - Pages within MAX_LARGE_PROFILE_RANGE: preload LARGE_LOAD_AMOUNT icons
+        - Pages within MAX_SMALL_PROFILE_RANGE (beyond large range): preload SMALL_LOAD_AMOUNT icons
+        - Pages outside the range: unload from cache
+        """
+        # Calculate page ranges
+        total_range = MAX_LARGE_PROFILE_RANGE + MAX_SMALL_PROFILE_RANGE
+        
+        # Preload large range (pages immediately before/after)
+        for offset in range(1, MAX_LARGE_PROFILE_RANGE + 1):
+            for page in [current_page - offset, current_page + offset]:
+                if page >= 0:
+                    self._fetch_page_for_preload(source, page, LARGE_LOAD_AMOUNT)
+        
+        # Preload small range (pages further out)
+        for offset in range(MAX_LARGE_PROFILE_RANGE + 1, total_range + 1):
+            for page in [current_page - offset, current_page + offset]:
+                if page >= 0:
+                    self._fetch_page_for_preload(source, page, SMALL_LOAD_AMOUNT)
+        
+        # Unload pages outside the range (to save memory)
+        self._unload_pages_outside_range(source, current_page, total_range)
+    
+    def _unload_pages_outside_range(self, source: str, current_page: int, total_range: int):
+        """Unload mod data and icons for pages outside the configured range."""
+        if source not in ModBrowserDialog._page_mod_data:
+            return
+        
+        pages_to_keep = set()
+        for offset in range(-total_range, total_range + 1):
+            page = current_page + offset
+            if page >= 0:
+                pages_to_keep.add(page)
+        
+        # Remove pages outside range
+        pages_to_remove = [p for p in ModBrowserDialog._page_mod_data[source].keys() 
+                          if p not in pages_to_keep]
+        
+        for page in pages_to_remove:
+            # Get mod IDs for this page before removing
+            mods = ModBrowserDialog._page_mod_data[source].get(page, [])
+            mod_ids_to_check = [m.get('id', m.get('slug', '')) for m in mods]
+            
+            # Remove page data
+            del ModBrowserDialog._page_mod_data[source][page]
+            
+            # Remove from preload state
+            if source in ModBrowserDialog._page_preload_state:
+                ModBrowserDialog._page_preload_state[source].pop(page, None)
+            
+            # Only remove icons if they're not used by other cached pages
+            all_cached_mod_ids = set()
+            for p, page_mods in ModBrowserDialog._page_mod_data.get(source, {}).items():
+                for m in page_mods:
+                    all_cached_mod_ids.add(m.get('id', m.get('slug', '')))
+            
+            for mod_id in mod_ids_to_check:
+                if mod_id and mod_id not in all_cached_mod_ids:
+                    ModBrowserDialog._shared_icon_cache[source].pop(mod_id, None)
 
     def load_popular_mods(self):
         """Load popular mods without search query - using pagination."""
@@ -3048,7 +3328,7 @@ class ModBrowserDialog(QDialog):
         self.has_more_results = True
         self.all_search_results = []
 
-        # Cancel any pending icon loads from previous source/page
+        # Cancel any pending icon loads for this dialog instance
         self._cancel_all_icon_loads()
 
         self.results_list.clear()
@@ -3074,14 +3354,14 @@ class ModBrowserDialog(QDialog):
 
         source = self._get_selected_source()
 
-        # Check if we have preloaded results for this source
-        if hasattr(self, '_source_results') and source in self._source_results and self._source_results[source]:
-            # Use preloaded results and total count if available
-            total_count = 0
-            if hasattr(self, '_source_total_results') and source in self._source_total_results:
-                total_count = self._source_total_results[source]
-            self._on_page_loaded(self._source_results[source], total_count)
-            return
+        # Check if we have preloaded data for page 0
+        if source in ModBrowserDialog._page_mod_data and 0 in ModBrowserDialog._page_mod_data[source]:
+            results = ModBrowserDialog._page_mod_data[source][0]
+            if results:
+                state = self._source_page_state.get(source, {})
+                total_count = state.get('total', 0)
+                self._on_page_loaded(results, total_count)
+                return
 
         # Load first page
         self._load_page(0)
@@ -3090,14 +3370,18 @@ class ModBrowserDialog(QDialog):
         """Handle source tab change with improved icon caching.
 
         When switching tabs:
-        - Preserves icon cache for both sources
+        - Preserves icon cache for both sources (they're independent)
         - Applies cached icons immediately for better UX
         - Only loads icons that aren't already cached
+        - Does NOT affect the other source's preloads
         """
-        # Reset pagination state
-        self.current_page = 0
-        self.total_results = 0
-        self.has_more_results = True
+        source = self._get_selected_source()
+        
+        # Restore page state for this source
+        state = self._source_page_state.get(source, {'page': 0, 'total': 0, 'has_more': True})
+        self.current_page = state.get('page', 0)
+        self.total_results = state.get('total', 0)
+        self.has_more_results = state.get('has_more', True)
         self.all_search_results = []
 
         self.results_list.clear()
@@ -3108,13 +3392,10 @@ class ModBrowserDialog(QDialog):
         self.mod_info_header.setText("Select a mod to view its description")
         self.description_browser.setHtml("")
 
-        # Reset loading state (keep cache)
-        self._loading_mod_ids.clear()
-
         # Update pagination controls
         self._update_pagination_controls()
 
-        # Reload mods for new source
+        # Reload mods for new source (will use preloaded data if available)
         self.load_popular_mods()
 
     def search_mods(self):
@@ -3395,8 +3676,9 @@ class ModBrowserDialog(QDialog):
             except Exception:
                 pass
 
-        # Clear loading state
-        self._loading_mod_ids.clear()
+        # Clear loading state (not per-source since we don't know current source at shutdown)
+        for source_set in ModBrowserDialog._loading_mod_ids_per_source.values():
+            source_set.clear()
 
     def _thread_is_running(self, t) -> bool:
         """Return True if QThread is running, without crashing on deleted C++ objects."""
@@ -3420,15 +3702,28 @@ class ModBrowserDialog(QDialog):
 
     def _on_page_preload_complete(self, results: list, page: int, source: str):
         """Handle background preload results for a specific page without touching the UI.
-
-        We only kick off icon preloading for a small subset to warm the cache.
+        
+        This is now integrated into the new preloading system.
         """
         if not results:
             return
 
-        # Preload icons for a small subset from this page
-        subset = results[:PAGE_ICON_CACHE_SIZE]
-        self._preload_page_mods_icons(subset, source, page, 0)
+        # Store page data
+        if source not in ModBrowserDialog._page_mod_data:
+            ModBrowserDialog._page_mod_data[source] = {}
+        ModBrowserDialog._page_mod_data[source][page] = results
+
+        # Preload icons for this page based on the preload amount
+        # Determine preload amount based on distance from current page
+        current_page = self.current_page
+        distance = abs(page - current_page)
+        
+        if distance <= MAX_LARGE_PROFILE_RANGE:
+            preload_amount = LARGE_LOAD_AMOUNT
+        else:
+            preload_amount = SMALL_LOAD_AMOUNT
+        
+        self._preload_page_icons_batch(source, page, preload_amount, 0)
 
 
 # === Grid Item Widget ===
@@ -6004,6 +6299,10 @@ class MainWindow(QMainWindow):
         self.load_editor_config()
         self.setup_ui()
         self.apply_theme(self.current_theme)
+        
+        # Start preloading mod browser icons in background (runs before user opens dialog)
+        # This ensures icons are ready when user opens "Find and Add Mods"
+        QTimer.singleShot(500, ModBrowserDialog.start_startup_preload)
         
         # Check for first-time setup
         QTimer.singleShot(100, self.check_setup)
