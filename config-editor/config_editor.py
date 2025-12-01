@@ -1417,6 +1417,7 @@ class ModSearchThread(QThread):
         self.source = source
         self.query = query
         self.version_filter = version_filter
+        self.offset = 0  # For pagination/infinite scroll
         self._running = True
     
     def run(self):
@@ -1440,7 +1441,8 @@ class ModSearchThread(QThread):
             'classId': '6',   # Mods
             'sortField': '2',  # Popularity (download count)
             'sortOrder': 'desc',
-            'pageSize': '50'
+            'pageSize': '50',
+            'index': str(self.offset)  # For pagination
         }
         # Only add search filter if query is not empty
         if self.query:
@@ -1479,6 +1481,7 @@ class ModSearchThread(QThread):
         params = {
             'facets': json.dumps(facets),
             'limit': '50',
+            'offset': str(self.offset),  # For pagination
             'index': 'downloads'  # Sort by downloads
         }
         # Only add query if not empty
@@ -1596,32 +1599,31 @@ class ModBrowserDialog(QDialog):
         self.version_thread: Optional[ModVersionFetchThread] = None
         self.selected_mod = None
         self.selected_version = None
+        self.all_search_results = []  # Store all results for infinite scroll
+        self.current_offset = 0
+        self.is_loading_more = False
+        self.has_more_results = True
         self.setup_ui()
         # Load popular mods on startup
         QTimer.singleShot(100, self.load_popular_mods)
     
     def setup_ui(self):
         self.setWindowTitle("Browse Mods - CurseForge / Modrinth")
-        self.setMinimumSize(950, 650)
+        self.setMinimumSize(1000, 700)
         self.setModal(True)
         
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
         layout.setContentsMargins(16, 16, 16, 16)
         
-        # Header with instructions
-        header_layout = QVBoxLayout()
+        # Header with title only (removed instructions)
         title = QLabel("🔍 Find and Add Mods")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        header_layout.addWidget(title)
+        layout.addWidget(title)
         
         theme = get_current_theme()
-        instructions = QLabel("1. Select a source → 2. Search or browse popular mods → 3. Select a mod → 4. Choose a file version → 5. Click Add")
-        instructions.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 12px; padding: 4px 0;")
-        header_layout.addWidget(instructions)
-        layout.addLayout(header_layout)
         
-        # Source selection tabs (more intuitive than dropdown)
+        # Source selection tabs
         source_layout = QHBoxLayout()
         
         source_label = QLabel("Source:")
@@ -1642,24 +1644,23 @@ class ModBrowserDialog(QDialog):
         source_layout.addWidget(self.modrinth_source_btn)
         
         source_layout.addStretch()
-        
-        # MC Version filter
-        self.version_filter = QLineEdit()
-        self.version_filter.setPlaceholderText("MC Version (e.g., 1.12.2)")
-        self.version_filter.setFixedWidth(150)
-        self.version_filter.returnPressed.connect(self.search_mods)
-        source_layout.addWidget(QLabel("MC Version:"))
-        source_layout.addWidget(self.version_filter)
-        
         layout.addLayout(source_layout)
         
-        # Search bar
+        # Search bar with MC Version on the same line
         search_layout = QHBoxLayout()
         
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("🔍 Search mods... (press Enter or leave empty for most popular)")
+        self.search_edit.setPlaceholderText("🔍 Search mods... (leave empty for most popular)")
         self.search_edit.returnPressed.connect(self.search_mods)
         search_layout.addWidget(self.search_edit, 1)
+        
+        # MC Version filter (between search and button)
+        search_layout.addWidget(QLabel("MC Version:"))
+        self.version_filter = QLineEdit()
+        self.version_filter.setPlaceholderText("e.g., 1.12.2")
+        self.version_filter.setFixedWidth(100)
+        self.version_filter.returnPressed.connect(self.search_mods)
+        search_layout.addWidget(self.version_filter)
         
         search_btn = QPushButton("Search")
         search_btn.setObjectName("primaryButton")
@@ -1683,6 +1684,10 @@ class ModBrowserDialog(QDialog):
         self.results_list = QListWidget()
         self.results_list.itemClicked.connect(self.on_mod_selected)
         self.results_list.setAlternatingRowColors(True)
+        self.results_list.setIconSize(QSize(40, 40))  # Larger icons
+        self.results_list.setSpacing(4)  # More spacing between items
+        # Connect scroll event for infinite scroll
+        self.results_list.verticalScrollBar().valueChanged.connect(self._on_scroll)
         left_layout.addWidget(self.results_list)
         
         self.search_status = QLabel("")
@@ -1691,47 +1696,69 @@ class ModBrowserDialog(QDialog):
         
         splitter.addWidget(left_panel)
         
-        # Right: Mod details and versions
+        # Right: Mod details and versions - expanded
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Mod info
+        # Mod info - expanded with scrollable description
         self.mod_info_group = QGroupBox("📌 Selected Mod Details")
-        mod_info_layout = QFormLayout(self.mod_info_group)
+        mod_info_layout = QVBoxLayout(self.mod_info_group)
+        
+        # Header info (name, author, downloads, summary) - always visible at top
+        header_widget = QWidget()
+        header_layout = QFormLayout(header_widget)
+        header_layout.setContentsMargins(0, 0, 0, 0)
         
         self.mod_name_label = QLabel("(Select a mod from the list)")
         self.mod_name_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-        mod_info_layout.addRow("Name:", self.mod_name_label)
+        header_layout.addRow("Name:", self.mod_name_label)
         
         self.mod_author_label = QLabel("")
-        mod_info_layout.addRow("Author:", self.mod_author_label)
+        header_layout.addRow("Author:", self.mod_author_label)
         
         self.mod_downloads_label = QLabel("")
-        mod_info_layout.addRow("Downloads:", self.mod_downloads_label)
+        header_layout.addRow("Downloads:", self.mod_downloads_label)
         
         self.mod_summary_label = QLabel("")
         self.mod_summary_label.setWordWrap(True)
-        mod_info_layout.addRow("Summary:", self.mod_summary_label)
+        header_layout.addRow("Summary:", self.mod_summary_label)
         
-        right_layout.addWidget(self.mod_info_group)
+        mod_info_layout.addWidget(header_widget)
         
-        # Version selection
-        versions_label = QLabel("📁 Available Files (most recent auto-selected):")
-        versions_label.setStyleSheet("font-weight: bold; padding: 4px 0;")
-        right_layout.addWidget(versions_label)
+        # Scrollable description area
+        self.description_label = QLabel("")
+        self.description_label.setWordWrap(True)
+        self.description_label.setAlignment(Qt.AlignmentFlag.AlignTop)
         
-        self.versions_list = QListWidget()
-        self.versions_list.itemClicked.connect(self.on_version_selected)
-        self.versions_list.setAlternatingRowColors(True)
-        right_layout.addWidget(self.versions_list)
+        description_scroll = QScrollArea()
+        description_scroll.setWidgetResizable(True)
+        description_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        description_scroll.setWidget(self.description_label)
+        description_scroll.setMinimumHeight(150)
+        mod_info_layout.addWidget(description_scroll, 1)
+        
+        right_layout.addWidget(self.mod_info_group, 1)
+        
+        # Version selection - dropdown instead of list
+        version_layout = QHBoxLayout()
+        versions_label = QLabel("📁 Available File:")
+        versions_label.setStyleSheet("font-weight: bold;")
+        version_layout.addWidget(versions_label)
+        
+        self.versions_combo = QComboBox()
+        self.versions_combo.setMinimumWidth(300)
+        self.versions_combo.currentIndexChanged.connect(self.on_version_combo_changed)
+        version_layout.addWidget(self.versions_combo, 1)
+        
+        right_layout.addLayout(version_layout)
         
         splitter.addWidget(right_panel)
-        splitter.setSizes([450, 450])
+        splitter.setSizes([400, 550])
         
         layout.addWidget(splitter)
         
-        # Bottom buttons
+        # Bottom buttons - simplified (removed status text)
         button_layout = QHBoxLayout()
         
         cancel_btn = QPushButton("Cancel")
@@ -1740,24 +1767,47 @@ class ModBrowserDialog(QDialog):
         
         button_layout.addStretch()
         
-        # Status indicator
-        self.selection_status = QLabel("Select a mod and file version to continue")
-        self.selection_status.setStyleSheet(f"color: {theme['warning']}; font-style: italic;")
-        button_layout.addWidget(self.selection_status)
-        
-        button_layout.addStretch()
-        
         self.add_btn = QPushButton("✓ Add Mod")
         self.add_btn.setObjectName("primaryButton")
         self.add_btn.clicked.connect(self.add_selected_mod)
         self.add_btn.setEnabled(False)
-        self.add_btn.setMinimumWidth(100)
+        self.add_btn.setMinimumWidth(120)
+        # Grey out styling when disabled
+        self.add_btn.setStyleSheet("")
         button_layout.addWidget(self.add_btn)
         
         layout.addLayout(button_layout)
         
         # Update source button styles
         self._update_source_button_styles()
+    
+    def _on_scroll(self, value):
+        """Handle scroll event for infinite scrolling."""
+        scrollbar = self.results_list.verticalScrollBar()
+        # Load more when near the bottom (90% scrolled)
+        if scrollbar.maximum() > 0 and value >= scrollbar.maximum() * 0.9:
+            self._load_more_results()
+    
+    def _load_more_results(self):
+        """Load more results for infinite scrolling."""
+        if self.is_loading_more or not self.has_more_results:
+            return
+        
+        self.is_loading_more = True
+        self.current_offset += 50
+        
+        source = self._get_selected_source()
+        query = self.search_edit.text().strip()
+        version_filter = self.version_filter.text().strip()
+        
+        self.search_status.setText("Loading more...")
+        
+        # Create a new search thread with offset
+        self.search_thread = ModSearchThread(source, query, version_filter)
+        self.search_thread.offset = self.current_offset
+        self.search_thread.search_complete.connect(self._on_more_results)
+        self.search_thread.error_occurred.connect(self._on_load_more_error)
+        self.search_thread.start()
     
     def _get_selected_source(self) -> str:
         """Get the currently selected source."""
@@ -1780,19 +1830,78 @@ class ModBrowserDialog(QDialog):
         self.curseforge_source_btn.setStyleSheet(selected_style if self.curseforge_source_btn.isChecked() else normal_style)
         self.modrinth_source_btn.setStyleSheet(selected_style if self.modrinth_source_btn.isChecked() else normal_style)
     
+    def _on_more_results(self, results: list):
+        """Handle additional results from infinite scroll."""
+        self.is_loading_more = False
+        
+        if not results:
+            self.has_more_results = False
+            self.search_status.setText(f"Found {self.results_list.count()} mods (no more results)")
+            return
+        
+        # Add results to the list
+        for mod in results:
+            item = QListWidgetItem()
+            item.setText(f"{mod['name']}\nby {mod['author']} • {mod['downloads']:,} downloads")
+            item.setData(Qt.ItemDataRole.UserRole, mod)
+            # Load icon if available
+            if mod.get('icon_url'):
+                self._load_mod_icon(item, mod['icon_url'])
+            self.results_list.addItem(item)
+        
+        self.all_search_results.extend(results)
+        self.search_status.setText(f"Found {self.results_list.count()} mods (scroll for more)")
+    
+    def _on_load_more_error(self, error: str):
+        """Handle error when loading more results."""
+        self.is_loading_more = False
+        self.search_status.setText(f"Error loading more: {error}")
+    
+    def _load_mod_icon(self, item: QListWidgetItem, icon_url: str):
+        """Load mod icon from URL."""
+        try:
+            def fetch_icon():
+                try:
+                    req = urllib.request.Request(icon_url, headers={"User-Agent": USER_AGENT})
+                    with urllib.request.urlopen(req, timeout=5) as response:
+                        data = response.read()
+                        return data
+                except:
+                    return None
+            
+            # Use a simple thread for icon loading
+            import threading
+            def load():
+                data = fetch_icon()
+                if data:
+                    pixmap = QPixmap()
+                    if pixmap.loadFromData(data):
+                        icon = QIcon(pixmap)
+                        item.setIcon(icon)
+            
+            thread = threading.Thread(target=load, daemon=True)
+            thread.start()
+        except:
+            pass
+    
     def load_popular_mods(self):
         """Load popular mods without search query."""
         source = self._get_selected_source()
         version_filter = self.version_filter.text().strip()
         
+        # Reset infinite scroll state
+        self.all_search_results = []
+        self.current_offset = 0
+        self.is_loading_more = False
+        self.has_more_results = True
+        
         self.results_list.clear()
-        self.versions_list.clear()
+        self.versions_combo.clear()
         self.selected_mod = None
         self.selected_version = None
         self.add_btn.setEnabled(False)
         self.search_status.setText("Loading popular mods...")
         self.results_header.setText(f"📋 Popular Mods from {source.capitalize()} (sorted by downloads):")
-        self.selection_status.setText("Select a mod and file version to continue")
         
         if self.search_thread and self.search_thread.isRunning():
             self.search_thread.stop()
@@ -1807,7 +1916,7 @@ class ModBrowserDialog(QDialog):
     def on_source_changed(self):
         """Clear results when source changes and reload popular mods."""
         self.results_list.clear()
-        self.versions_list.clear()
+        self.versions_combo.clear()
         self.selected_mod = None
         self.selected_version = None
         self.add_btn.setEnabled(False)
@@ -1815,6 +1924,11 @@ class ModBrowserDialog(QDialog):
         self.mod_author_label.setText("")
         self.mod_downloads_label.setText("")
         self.mod_summary_label.setText("")
+        self.description_label.setText("")
+        # Reset infinite scroll
+        self.all_search_results = []
+        self.current_offset = 0
+        self.has_more_results = True
         # Reload popular mods for new source
         self.load_popular_mods()
     
@@ -1825,12 +1939,17 @@ class ModBrowserDialog(QDialog):
         source = self._get_selected_source()
         version_filter = self.version_filter.text().strip()
         
+        # Reset infinite scroll state
+        self.all_search_results = []
+        self.current_offset = 0
+        self.is_loading_more = False
+        self.has_more_results = True
+        
         self.results_list.clear()
-        self.versions_list.clear()
+        self.versions_combo.clear()
         self.selected_mod = None
         self.selected_version = None
         self.add_btn.setEnabled(False)
-        self.selection_status.setText("Select a mod and file version to continue")
         
         if query:
             self.search_status.setText("Searching...")
@@ -1851,11 +1970,16 @@ class ModBrowserDialog(QDialog):
     def on_search_complete(self, results: list):
         """Handle search results."""
         self.results_list.clear()
-        self.search_status.setText(f"Found {len(results)} mods")
+        self.all_search_results = results
+        self.search_status.setText(f"Found {len(results)} mods (scroll for more)")
         
         for mod in results:
-            item = QListWidgetItem(f"{mod['name']} by {mod['author']}")
+            item = QListWidgetItem()
+            item.setText(f"{mod['name']}\nby {mod['author']} • {mod['downloads']:,} downloads")
             item.setData(Qt.ItemDataRole.UserRole, mod)
+            # Load icon if available
+            if mod.get('icon_url'):
+                self._load_mod_icon(item, mod['icon_url'])
             self.results_list.addItem(item)
     
     def on_search_error(self, error: str):
@@ -1876,11 +2000,12 @@ class ModBrowserDialog(QDialog):
         self.mod_name_label.setText(mod['name'])
         self.mod_author_label.setText(mod['author'])
         self.mod_downloads_label.setText(f"{mod['downloads']:,}")
-        self.mod_summary_label.setText(mod['summary'][:200] + '...' if len(mod['summary']) > 200 else mod['summary'])
+        self.mod_summary_label.setText(mod['summary'])
+        self.description_label.setText(mod.get('description', mod['summary']))
         
         # Fetch versions
-        self.versions_list.clear()
-        self.versions_list.addItem("Loading versions...")
+        self.versions_combo.clear()
+        self.versions_combo.addItem("Loading versions...")
         
         if self.version_thread and self.version_thread.isRunning():
             self.version_thread.stop()
@@ -1894,49 +2019,35 @@ class ModBrowserDialog(QDialog):
     
     def on_versions_fetched(self, versions: list):
         """Handle version list."""
-        self.versions_list.clear()
+        self.versions_combo.clear()
         
         for v in versions:
             game_vers = ', '.join(v['game_versions'][:3])
             if len(v['game_versions']) > 3:
                 game_vers += '...'
-            item = QListWidgetItem(f"[{v['release_type']}] {v['name']} ({game_vers})")
-            item.setData(Qt.ItemDataRole.UserRole, v)
-            self.versions_list.addItem(item)
+            self.versions_combo.addItem(f"[{v['release_type']}] {v['name']} ({game_vers})", v)
         
         # Auto-select the first (most recent) version
-        if self.versions_list.count() > 0:
-            self.versions_list.setCurrentRow(0)
-            first_item = self.versions_list.item(0)
-            if first_item:
-                version = first_item.data(Qt.ItemDataRole.UserRole)
-                if version:
-                    self.selected_version = version
-                    self.add_btn.setEnabled(True)
-                    self.selection_status.setText("✓ Ready to add! Click 'Add Mod' to continue")
-                    # Use theme success color
-                    theme = get_current_theme()
-                    self.selection_status.setStyleSheet(f"color: {theme['success']}; font-style: normal; font-weight: bold;")
+        if self.versions_combo.count() > 0:
+            self.versions_combo.setCurrentIndex(0)
+            version = self.versions_combo.currentData()
+            if version:
+                self.selected_version = version
+                self.add_btn.setEnabled(True)
     
     def on_versions_error(self, error: str):
         """Handle version fetch error."""
-        self.versions_list.clear()
-        self.versions_list.addItem(f"Error: {error}")
-        self.selection_status.setText("⚠ Failed to load file versions")
-        # Use theme danger color
-        theme = get_current_theme()
-        self.selection_status.setStyleSheet(f"color: {theme['danger']}; font-style: italic;")
+        self.versions_combo.clear()
+        self.versions_combo.addItem(f"Error: {error}")
     
-    def on_version_selected(self, item: QListWidgetItem):
-        """Handle version selection."""
-        version = item.data(Qt.ItemDataRole.UserRole)
+    def on_version_combo_changed(self, index: int):
+        """Handle version combo box selection change."""
+        if index < 0:
+            return
+        version = self.versions_combo.currentData()
         if version:
             self.selected_version = version
             self.add_btn.setEnabled(True)
-            self.selection_status.setText("✓ Ready to add! Click 'Add Mod' to continue")
-            # Use theme success color
-            theme = get_current_theme()
-            self.selection_status.setStyleSheet(f"color: {theme['success']}; font-style: normal; font-weight: bold;")
     
     def add_selected_mod(self):
         """Add the selected mod."""
@@ -2247,11 +2358,14 @@ class ModEditorPanel(QWidget):
         id_layout.addRow("ID:", self.id_edit)
         scroll_layout.addWidget(id_group)
         
-        # Hash Section
+        # Hash Section - Read only, automatically filled
         hash_group = QGroupBox("Hash")
         hash_layout = QVBoxLayout(hash_group)
         self.hash_edit = QLineEdit()
         self.hash_edit.setPlaceholderText("SHA-256 hash (auto-filled)")
+        self.hash_edit.setReadOnly(True)  # Make hash field read-only
+        theme = get_current_theme()
+        self.hash_edit.setToolTip("Hash is automatically calculated when you click 'Auto-fill Hash'")
         hash_layout.addWidget(self.hash_edit)
         
         hash_btn_layout = QHBoxLayout()
@@ -2626,11 +2740,13 @@ class FileEditorPanel(QWidget):
         
         scroll_layout.addWidget(info_group)
         
-        # Hash Section
+        # Hash Section - Read only, automatically filled
         hash_group = QGroupBox("Hash")
         hash_layout = QVBoxLayout(hash_group)
         self.hash_edit = QLineEdit()
         self.hash_edit.setPlaceholderText("SHA-256 hash (auto-filled)")
+        self.hash_edit.setReadOnly(True)  # Make hash field read-only
+        self.hash_edit.setToolTip("Hash is automatically calculated when you click 'Auto-fill Hash'")
         hash_layout.addWidget(self.hash_edit)
         
         hash_btn_layout = QHBoxLayout()
@@ -2927,16 +3043,33 @@ class VersionEditorPage(QWidget):
         
         left_layout.addWidget(self.mods_scroll)
         
-        # Right: Editor panel
+        # Right: Stacked widget for editor panel and placeholder
+        self.mod_right_stack = QStackedWidget()
+        
+        # Placeholder for when no mod is selected
+        self.mod_placeholder = QWidget()
+        placeholder_layout = QVBoxLayout(self.mod_placeholder)
+        placeholder_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        theme = get_current_theme()
+        placeholder_label = QLabel("No option selected")
+        placeholder_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 16px; font-style: italic;")
+        placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder_layout.addWidget(placeholder_label)
+        self.mod_right_stack.addWidget(self.mod_placeholder)
+        
+        # Editor panel
         self.mod_editor = ModEditorPanel()
         self.mod_editor.mod_changed.connect(self.on_mod_changed)
         self.mod_editor.mod_saved.connect(self.on_mod_saved)
         self.mod_editor.mod_deleted.connect(self.on_mod_deleted)
-        self.mod_editor.setVisible(False)  # Hidden until a mod is selected
+        self.mod_right_stack.addWidget(self.mod_editor)
+        
+        # Show placeholder by default
+        self.mod_right_stack.setCurrentWidget(self.mod_placeholder)
         
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_panel)
-        splitter.addWidget(self.mod_editor)
+        splitter.addWidget(self.mod_right_stack)
         splitter.setSizes([400, 400])
         
         layout.addWidget(splitter)
@@ -2961,16 +3094,33 @@ class VersionEditorPage(QWidget):
         
         left_layout.addWidget(self.files_scroll)
         
-        # Right: Editor panel
+        # Right: Stacked widget for editor panel and placeholder
+        self.file_right_stack = QStackedWidget()
+        
+        # Placeholder for when no file is selected
+        self.file_placeholder = QWidget()
+        placeholder_layout = QVBoxLayout(self.file_placeholder)
+        placeholder_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        theme = get_current_theme()
+        placeholder_label = QLabel("No option selected")
+        placeholder_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 16px; font-style: italic;")
+        placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder_layout.addWidget(placeholder_label)
+        self.file_right_stack.addWidget(self.file_placeholder)
+        
+        # Editor panel
         self.file_editor = FileEditorPanel()
         self.file_editor.file_changed.connect(self.on_file_changed)
         self.file_editor.file_saved.connect(self.on_file_saved)
         self.file_editor.file_deleted.connect(self.on_file_deleted)
-        self.file_editor.setVisible(False)  # Hidden until a file is selected
+        self.file_right_stack.addWidget(self.file_editor)
+        
+        # Show placeholder by default
+        self.file_right_stack.setCurrentWidget(self.file_placeholder)
         
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_panel)
-        splitter.addWidget(self.file_editor)
+        splitter.addWidget(self.file_right_stack)
         splitter.setSizes([400, 400])
         
         layout.addWidget(splitter)
@@ -2993,16 +3143,33 @@ class VersionEditorPage(QWidget):
         add_delete_btn.clicked.connect(self.add_delete)
         left_layout.addWidget(add_delete_btn)
         
-        # Right: Editor panel
+        # Right: Stacked widget for editor panel and placeholder
+        self.delete_right_stack = QStackedWidget()
+        
+        # Placeholder for when no delete entry is selected
+        self.delete_placeholder = QWidget()
+        placeholder_layout = QVBoxLayout(self.delete_placeholder)
+        placeholder_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        theme = get_current_theme()
+        placeholder_label = QLabel("No option selected")
+        placeholder_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 16px; font-style: italic;")
+        placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder_layout.addWidget(placeholder_label)
+        self.delete_right_stack.addWidget(self.delete_placeholder)
+        
+        # Editor panel
         self.delete_editor = DeleteEditorPanel()
         self.delete_editor.delete_changed.connect(self.on_delete_changed)
         self.delete_editor.delete_saved.connect(self.on_delete_entry_saved)
         self.delete_editor.delete_entry_deleted.connect(self.on_delete_entry_deleted)
-        self.delete_editor.setVisible(False)  # Hidden until a delete entry is selected
+        self.delete_right_stack.addWidget(self.delete_editor)
+        
+        # Show placeholder by default
+        self.delete_right_stack.setCurrentWidget(self.delete_placeholder)
         
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_panel)
-        splitter.addWidget(self.delete_editor)
+        splitter.addWidget(self.delete_right_stack)
         splitter.setSizes([300, 400])
         
         layout.addWidget(splitter)
@@ -3048,13 +3215,13 @@ class VersionEditorPage(QWidget):
         self.refresh_files_grid()
         self.refresh_deletes_list()
         
-        # Clear and hide editor panels
+        # Clear editor panels and show placeholders
         self.mod_editor.clear()
-        self.mod_editor.setVisible(False)
+        self.mod_right_stack.setCurrentWidget(self.mod_placeholder)
         self.file_editor.clear()
-        self.file_editor.setVisible(False)
+        self.file_right_stack.setCurrentWidget(self.file_placeholder)
         self.delete_editor.clear()
-        self.delete_editor.setVisible(False)
+        self.delete_right_stack.setCurrentWidget(self.delete_placeholder)
         
         self.selected_mod_index = -1
         self.selected_file_index = -1
@@ -3249,7 +3416,7 @@ class VersionEditorPage(QWidget):
             return
         self.selected_mod_index = index
         self.mod_editor.load_mod(self.version_config.mods[index])
-        self.mod_editor.setVisible(True)  # Show editor panel
+        self.mod_right_stack.setCurrentWidget(self.mod_editor)  # Show editor panel
         
         # Update selection visuals
         for i in range(self.mods_grid.count()):
@@ -3262,7 +3429,7 @@ class VersionEditorPage(QWidget):
             return
         self.selected_file_index = index
         self.file_editor.load_file(self.version_config.files[index])
-        self.file_editor.setVisible(True)  # Show editor panel
+        self.file_right_stack.setCurrentWidget(self.file_editor)  # Show editor panel
         
         # Update selection visuals
         for i in range(self.files_grid.count()):
@@ -3276,7 +3443,7 @@ class VersionEditorPage(QWidget):
             return
         self.selected_delete_index = index
         self.delete_editor.load_delete(self.version_config.deletes[index])
-        self.delete_editor.setVisible(True)  # Show editor panel
+        self.delete_right_stack.setCurrentWidget(self.delete_editor)  # Show editor panel
     
     def add_mod(self):
         if not self.version_config:
@@ -3318,7 +3485,7 @@ class VersionEditorPage(QWidget):
             # Show in editor but don't add to list yet
             self._pending_mod = mod
             self.mod_editor.load_mod(mod)
-            self.mod_editor.setVisible(True)
+            self.mod_right_stack.setCurrentWidget(self.mod_editor)
             # Connect save to add the pending mod
     
     def _add_mod_browse(self):
@@ -3336,7 +3503,7 @@ class VersionEditorPage(QWidget):
                 # Show in editor but don't add to list yet
                 self._pending_mod = mod
                 self.mod_editor.load_mod(mod)
-                self.mod_editor.setVisible(True)
+                self.mod_right_stack.setCurrentWidget(self.mod_editor)
     
     def add_file(self):
         if not self.version_config:
@@ -3346,7 +3513,7 @@ class VersionEditorPage(QWidget):
         file_entry._is_pending = True  # Mark as pending until saved
         self._pending_file = file_entry
         self.file_editor.load_file(file_entry)
-        self.file_editor.setVisible(True)
+        self.file_right_stack.setCurrentWidget(self.file_editor)
     
     def add_delete(self):
         if not self.version_config:
@@ -3356,7 +3523,7 @@ class VersionEditorPage(QWidget):
         delete_entry._is_pending = True  # Mark as pending until saved
         self._pending_delete = delete_entry
         self.delete_editor.load_delete(delete_entry)
-        self.delete_editor.setVisible(True)
+        self.delete_right_stack.setCurrentWidget(self.delete_editor)
     
     def on_mod_changed(self):
         self.version_config.modified = True
@@ -3374,10 +3541,36 @@ class VersionEditorPage(QWidget):
         self.version_modified.emit()
     
     def on_mod_saved(self):
-        """Handle when mod save button is clicked - add pending mod and hide editor panel."""
+        """Handle when mod save button is clicked - add pending mod and show placeholder."""
         # Check if we have a pending mod to add
         if hasattr(self, '_pending_mod') and self._pending_mod is not None:
             mod = self._pending_mod
+            
+            # Check for duplicate ID
+            mod_id = mod.id
+            existing_mod = None
+            for m in self.version_config.mods:
+                if m.id == mod_id:
+                    existing_mod = m
+                    break
+            
+            if existing_mod:
+                # Compare hashes
+                if mod.hash and existing_mod.hash and mod.hash == existing_mod.hash:
+                    # Same hash - this file has already been added
+                    QMessageBox.warning(self, "Duplicate Mod", 
+                        f"This file has already been added.\n\n"
+                        f"A mod with ID '{mod_id}' and the same hash already exists.")
+                    return  # Don't add the mod
+                else:
+                    # Different hash or hash not available - warn about possible duplicate
+                    reply = QMessageBox.warning(self, "Possible Duplicate", 
+                        f"There is already a mod with ID '{mod_id}'.\n\n"
+                        f"It might be a duplicate mod. Double check before adding.\n"
+                        f"If you are sure it is not a duplicate, please change the ID and try again.",
+                        QMessageBox.StandardButton.Ok)
+                    return  # Don't add the mod - user must change ID
+            
             mod._is_pending = False
             mod.since = self.version_config.version
             self.version_config.mods.append(mod)
@@ -3386,7 +3579,7 @@ class VersionEditorPage(QWidget):
             self.refresh_mods_grid()
             self.version_modified.emit()
         
-        self.mod_editor.setVisible(False)
+        self.mod_right_stack.setCurrentWidget(self.mod_placeholder)
         self.selected_mod_index = -1
     
     def on_mod_deleted(self, mod):
@@ -3395,7 +3588,7 @@ class VersionEditorPage(QWidget):
         if hasattr(self, '_pending_mod') and self._pending_mod == mod:
             self._pending_mod = None
             self.mod_editor.clear()
-            self.mod_editor.setVisible(False)
+            self.mod_right_stack.setCurrentWidget(self.mod_placeholder)
             self.selected_mod_index = -1
             return
         
@@ -3415,14 +3608,14 @@ class VersionEditorPage(QWidget):
         self.version_config.mods.remove(mod)
         self.version_config.modified = True
         self.mod_editor.clear()
-        self.mod_editor.setVisible(False)
+        self.mod_right_stack.setCurrentWidget(self.mod_placeholder)
         self.selected_mod_index = -1
         self.refresh_mods_grid()
         self.refresh_deletes_list()
         self.version_modified.emit()
     
     def on_file_saved(self):
-        """Handle when file save button is clicked - add pending file and hide editor panel."""
+        """Handle when file save button is clicked - add pending file and show placeholder."""
         # Check if we have a pending file to add
         if hasattr(self, '_pending_file') and self._pending_file is not None:
             file_entry = self._pending_file
@@ -3434,7 +3627,7 @@ class VersionEditorPage(QWidget):
             self.refresh_files_grid()
             self.version_modified.emit()
         
-        self.file_editor.setVisible(False)
+        self.file_right_stack.setCurrentWidget(self.file_placeholder)
         self.selected_file_index = -1
     
     def on_file_deleted(self, file_entry):
@@ -3443,7 +3636,7 @@ class VersionEditorPage(QWidget):
         if hasattr(self, '_pending_file') and self._pending_file == file_entry:
             self._pending_file = None
             self.file_editor.clear()
-            self.file_editor.setVisible(False)
+            self.file_right_stack.setCurrentWidget(self.file_placeholder)
             self.selected_file_index = -1
             return
         
@@ -3463,14 +3656,14 @@ class VersionEditorPage(QWidget):
         self.version_config.files.remove(file_entry)
         self.version_config.modified = True
         self.file_editor.clear()
-        self.file_editor.setVisible(False)
+        self.file_right_stack.setCurrentWidget(self.file_placeholder)
         self.selected_file_index = -1
         self.refresh_files_grid()
         self.refresh_deletes_list()
         self.version_modified.emit()
     
     def on_delete_entry_saved(self):
-        """Handle when delete save button is clicked - add pending delete and hide editor panel."""
+        """Handle when delete save button is clicked - add pending delete and show placeholder."""
         # Check if we have a pending delete to add
         if hasattr(self, '_pending_delete') and self._pending_delete is not None:
             delete_entry = self._pending_delete
@@ -3482,7 +3675,7 @@ class VersionEditorPage(QWidget):
             self.refresh_deletes_list()
             self.version_modified.emit()
         
-        self.delete_editor.setVisible(False)
+        self.delete_right_stack.setCurrentWidget(self.delete_placeholder)
         self.selected_delete_index = -1
     
     def on_delete_entry_deleted(self, delete_entry):
@@ -3491,7 +3684,7 @@ class VersionEditorPage(QWidget):
         if hasattr(self, '_pending_delete') and self._pending_delete == delete_entry:
             self._pending_delete = None
             self.delete_editor.clear()
-            self.delete_editor.setVisible(False)
+            self.delete_right_stack.setCurrentWidget(self.delete_placeholder)
             self.selected_delete_index = -1
             return
         
@@ -3501,7 +3694,7 @@ class VersionEditorPage(QWidget):
         self.version_config.deletes.remove(delete_entry)
         self.version_config.modified = True
         self.delete_editor.clear()
-        self.delete_editor.setVisible(False)
+        self.delete_right_stack.setCurrentWidget(self.delete_placeholder)
         self.selected_delete_index = -1
         self.refresh_deletes_list()
         self.version_modified.emit()
