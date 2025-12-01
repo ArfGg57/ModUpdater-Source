@@ -2034,6 +2034,8 @@ class ModBrowserDialog(QDialog):
         # Background preload
         self._preload_source = None
 
+        self.search_in_progress = False
+
         self.setup_ui()
         # Load popular mods on startup and preload both tabs
         QTimer.singleShot(100, self._load_and_preload_both_tabs)
@@ -2384,8 +2386,8 @@ class ModBrowserDialog(QDialog):
         load_start = max(0, first_visible - buffer_size)
         load_end = min(self.results_list.count() - 1, last_visible + buffer_size)
 
-        # Count active threads
-        active_count = sum(1 for t in self.icon_threads if t.isRunning())
+        # Count active threads safely
+        active_count = sum(1 for t in self.icon_threads if self._thread_is_running(t))
 
         # Process items in visible range first, then buffer
         items_to_load = []
@@ -2476,11 +2478,10 @@ class ModBrowserDialog(QDialog):
         """Handle when an icon load completes (success or failure)."""
         self._loading_mod_ids.discard(mod_id)
 
-        # Clean up finished threads
-        self.icon_threads = [t for t in self.icon_threads if t.isRunning()]
+        # Clean up finished threads (safely)
+        self.icon_threads = [t for t in self.icon_threads if self._thread_is_running(t)]
 
         # Only trigger loading more icons if we have few active loads
-        # This prevents excessive cascade when many icons complete at once
         active_count = len(self.icon_threads)
         cascade_threshold = self._max_concurrent_loads // ICON_CASCADE_THRESHOLD_DIVISOR
         if active_count < cascade_threshold:
@@ -2658,16 +2659,26 @@ class ModBrowserDialog(QDialog):
 
         self.search_status.setText(f"Loading page {page + 1}...")
 
-        # Stop any running search thread
-        if self.search_thread and self.search_thread.isRunning():
-            self.search_thread.stop()
-            self.search_thread.wait()
+        # Stop any running search thread (safely)
+        if self.search_thread:
+            try:
+                if self._thread_is_running(self.search_thread):
+                    self.search_thread.stop()
+                    self.search_thread.wait()
+            except Exception:
+                pass
+            # Always drop the reference; the object may be deleted by Qt
+            self.search_thread = None
+            self.search_in_progress = False
 
         # Create search thread with offset for the target page
         self.search_thread = ModSearchThread(source, query, version_filter)
         self.search_thread.offset = page * SEARCH_PAGE_SIZE
+        # Track running state without calling into the thread later
+        self.search_thread.started.connect(lambda: setattr(self, "search_in_progress", True))
         self.search_thread.search_complete.connect(self._on_page_loaded)
         self.search_thread.error_occurred.connect(self._on_page_load_error)
+        self.search_thread.finished.connect(self._on_search_thread_finished)
         self.search_thread.finished.connect(self.search_thread.deleteLater)
         self.search_thread.start()
 
@@ -2760,8 +2771,8 @@ class ModBrowserDialog(QDialog):
             if mod_id in self._loading_mod_ids:
                 continue
 
-            # Count active threads
-            active_count = sum(1 for t in self.icon_threads if t.isRunning())
+            # Count active threads safely
+            active_count = sum(1 for t in self.icon_threads if self._thread_is_running(t))
             if active_count >= self._max_concurrent_loads:
                 # Schedule retry later
                 QTimer.singleShot(ICON_LOAD_RETRY_DELAY_MS, self._load_page_icons_sequential)
@@ -2772,9 +2783,9 @@ class ModBrowserDialog(QDialog):
 
     def _cancel_all_icon_loads(self):
         """Cancel all pending icon load threads and wait for them to finish."""
-        for thread in self.icon_threads:
+        for thread in list(self.icon_threads):
             try:
-                if thread.isRunning():
+                if self._thread_is_running(thread):
                     thread.stop()
                     thread.wait(500)  # Wait up to 500ms for each thread
             except Exception:
@@ -2878,8 +2889,8 @@ class ModBrowserDialog(QDialog):
             if mod_id in self._loading_mod_ids:
                 continue
 
-            # Count active threads
-            active_count = sum(1 for t in self.icon_threads if t.isRunning())
+            # Count active threads safely
+            active_count = sum(1 for t in self.icon_threads if self._thread_is_running(t))
             if active_count >= self._max_concurrent_loads:
                 # Schedule retry later - use default params to capture current values
                 QTimer.singleShot(200, lambda r=results, s=source: self._preload_icons_gradually(r, s))
@@ -2902,7 +2913,7 @@ class ModBrowserDialog(QDialog):
         """Handle completion of a preload icon fetch."""
         self._loading_mod_ids.discard(mod_id)
         # Clean up threads
-        self.icon_threads = [t for t in self.icon_threads if t.isRunning()]
+        self.icon_threads = [t for t in self.icon_threads if self._thread_is_running(t)]
         # Continue preloading - use default params to capture current values
         QTimer.singleShot(50, lambda r=results, s=source: self._preload_icons_gradually(r, s))
 
@@ -2945,22 +2956,13 @@ class ModBrowserDialog(QDialog):
         self._preload_page_threads.append(thread)
         thread.start()
 
-    def _on_page_preload_complete(self, results: list, page: int, source: str):
-        """Handle completion of a page preload - cache icons for first 8 mods."""
-        if not results:
-            return
-
-        # Cache the first PAGE_ICON_CACHE_SIZE icons from this page
-        mods_to_cache = results[:PAGE_ICON_CACHE_SIZE]
-
-        # Store page info for LRU tracking (ensure attribute exists)
-        if not hasattr(self, '_page_load_order'):
-            self._page_load_order = []
-        if page not in self._page_load_order:
-            self._page_load_order.append(page)
-
-        # Load icons for these mods gradually
-        self._preload_page_mods_icons(mods_to_cache, source, page)
+    def _on_page_mod_icon_complete(self, mod_id: str, mods: list, source: str, page: int, index: int):
+        """Handle completion of a page mod icon preload."""
+        self._loading_mod_ids.discard(mod_id)
+        # Clean up threads
+        self.icon_threads = [t for t in self.icon_threads if self._thread_is_running(t)]
+        # Continue to next mod
+        QTimer.singleShot(50, lambda: self._preload_page_mods_icons(mods, source, page, index + 1))
 
     def _preload_page_mods_icons(self, mods: list, source: str, page: int, index: int = 0):
         """Gradually preload icons for mods from a page."""
@@ -3030,9 +3032,15 @@ class ModBrowserDialog(QDialog):
         # Update pagination controls
         self._update_pagination_controls()
 
-        if self.search_thread and self.search_thread.isRunning():
-            self.search_thread.stop()
-            self.search_thread.wait()
+        if self.search_thread:
+            try:
+                if self._thread_is_running(self.search_thread):
+                    self.search_thread.stop()
+                    self.search_thread.wait()
+            except Exception:
+                pass
+            self.search_thread = None
+            self.search_in_progress = False
 
         source = self._get_selected_source()
 
@@ -3108,9 +3116,15 @@ class ModBrowserDialog(QDialog):
         # Update pagination controls
         self._update_pagination_controls()
 
-        if self.search_thread and self.search_thread.isRunning():
-            self.search_thread.stop()
-            self.search_thread.wait()
+        if self.search_thread:
+            try:
+                if self._thread_is_running(self.search_thread):
+                    self.search_thread.stop()
+                    self.search_thread.wait()
+            except Exception:
+                pass
+            self.search_thread = None
+            self.search_in_progress = False
 
         # Load first page with current query
         self._load_page(0)
@@ -3276,43 +3290,52 @@ class ModBrowserDialog(QDialog):
             self._scroll_debounce_timer.stop()
 
         # Stop search thread
-        if self.search_thread and self.search_thread.isRunning():
-            try:
+        try:
+            if self._thread_is_running(self.search_thread):
                 self.search_thread.stop()
                 self.search_thread.wait(1000)  # Wait up to 1 second
-            except Exception:
-                pass
+        except Exception:
+            pass
+        finally:
+            self.search_thread = None
+            self.search_in_progress = False
 
         # Stop version thread
-        if self.version_thread and self.version_thread.isRunning():
-            try:
+        try:
+            if self._thread_is_running(self.version_thread):
                 self.version_thread.stop()
                 self.version_thread.wait(1000)
-            except Exception:
-                pass
+        except Exception:
+            pass
+        finally:
+            self.version_thread = None
 
         # Stop description thread
-        if self.description_thread and self.description_thread.isRunning():
-            try:
+        try:
+            if self._thread_is_running(self.description_thread):
                 self.description_thread.stop()
                 self.description_thread.wait(1000)
-            except Exception:
-                pass
+        except Exception:
+            pass
+        finally:
+            self.description_thread = None
 
         # Stop preload thread
         if hasattr(self, '_preload_thread') and self._preload_thread:
             try:
-                if self._preload_thread.isRunning():
+                if self._thread_is_running(self._preload_thread):
                     self._preload_thread.stop()
                     self._preload_thread.wait(1000)
             except Exception:
                 pass
+            finally:
+                self._preload_thread = None
 
         # Stop preload page threads
         if hasattr(self, '_preload_page_threads'):
             for thread in self._preload_page_threads:
                 try:
-                    if thread.isRunning():
+                    if self._thread_is_running(thread):
                         thread.stop()
                         thread.wait(500)
                 except Exception:
@@ -3322,7 +3345,7 @@ class ModBrowserDialog(QDialog):
         # Stop icon threads
         for thread in self.icon_threads:
             try:
-                if thread.isRunning():
+                if self._thread_is_running(thread):
                     thread.stop()
                     thread.wait(100)  # Brief wait per thread
             except Exception:
@@ -3339,6 +3362,17 @@ class ModBrowserDialog(QDialog):
         # Clear loading state
         self._loading_mod_ids.clear()
 
+def _thread_is_running(self, t) -> bool:
+    """Return True if QThread is running, without crashing on deleted C++ objects."""
+    try:
+        return t is not None and t.isRunning()
+    except RuntimeError:
+        return False
+
+def _on_search_thread_finished(self):
+    """Reset state when the search thread finishes or is destroyed."""
+    self.search_in_progress = False
+    self.search_thread = None
 
 
 # === Grid Item Widget ===
