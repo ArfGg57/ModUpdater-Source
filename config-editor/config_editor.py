@@ -2233,7 +2233,7 @@ class ItemCard(QFrame):
     """Clickable card widget for grid display."""
     clicked = pyqtSignal()
     double_clicked = pyqtSignal()
-    
+
     def __init__(self, name: str, icon_path: str = "", is_add_button: bool = False, icon_data: bytes = None, parent=None):
         super().__init__(parent)
         self.name = name
@@ -2242,22 +2242,22 @@ class ItemCard(QFrame):
         self.selected = False
         self._icon_data = icon_data
         self.setup_ui()
-    
+
     def setup_ui(self):
         self.setFixedSize(120, 120)  # Made slightly bigger
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.update_style()
-        
+        # Do not call update_style() here because some widgets (like name_label) are not created yet.
+
         theme = get_current_theme()
-        
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(4)
-        
+
         self.icon_label = QLabel()
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.icon_label.setFixedSize(56, 56)  # Made icon slightly bigger
-        
+
         if self.is_add_button:
             self.icon_label.setText("+")
             # Use a more visible color that works on both light and dark themes
@@ -2275,21 +2275,24 @@ class ItemCard(QFrame):
                 self._set_default_icon()
         else:
             self._set_default_icon()
-        
+
         layout.addWidget(self.icon_label, alignment=Qt.AlignmentFlag.AlignCenter)
-        
+
         self.name_label = QLabel(self.name if not self.is_add_button else "Add")
         self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.name_label.setWordWrap(True)
         self.name_label.setStyleSheet(f"font-size: 11px; background-color: transparent; color: {theme['text_primary']};")
         layout.addWidget(self.name_label)
-    
+
+        # Now that the UI elements are created, set the initial style.
+        self.update_style()
+
     def _set_default_icon(self):
         """Set the default package icon."""
         theme = get_current_theme()
         self.icon_label.setText("📦")
         self.icon_label.setStyleSheet(f"font-size: 28px; background-color: transparent; color: {theme['text_primary']};")  # Slightly bigger icon
-    
+
     def _load_icon_from_bytes(self, data: bytes):
         """Load icon from bytes data."""
         try:
@@ -2301,7 +2304,7 @@ class ItemCard(QFrame):
                 self._set_default_icon()
         except Exception:
             self._set_default_icon()
-    
+
     def update_style(self):
         # Use theme colors directly for proper theming
         theme = get_current_theme()
@@ -2313,8 +2316,9 @@ class ItemCard(QFrame):
                     border-radius: 8px;
                 }}
             """)
-            # Update label colors for selected state
-            self.name_label.setStyleSheet(f"font-size: 11px; background-color: transparent; color: {theme['bg_primary']};")
+            # Update label colors for selected state, if label exists
+            if hasattr(self, "name_label"):
+                self.name_label.setStyleSheet(f"font-size: 11px; background-color: transparent; color: {theme['bg_primary']};")
         else:
             self.setStyleSheet(f"""
                 ItemCard {{
@@ -2326,24 +2330,25 @@ class ItemCard(QFrame):
                     border-color: {theme['accent']};
                 }}
             """)
-            # Update label colors for normal state
-            self.name_label.setStyleSheet(f"font-size: 11px; background-color: transparent; color: {theme['text_primary']};")
-    
+            # Update label colors for normal state, if label exists
+            if hasattr(self, "name_label"):
+                self.name_label.setStyleSheet(f"font-size: 11px; background-color: transparent; color: {theme['text_primary']};")
+
     def set_selected(self, selected: bool):
         self.selected = selected
         self.update_style()
-    
+
     def set_icon(self, pixmap: QPixmap):
         if not pixmap.isNull():
             self.icon_label.setPixmap(pixmap.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-    
+
     def set_icon_from_bytes(self, data: bytes):
         """Set icon from bytes data."""
         self._load_icon_from_bytes(data)
-    
+
     def mousePressEvent(self, event):
         self.clicked.emit()
-    
+
     def mouseDoubleClickEvent(self, event):
         self.double_clicked.emit()
 
