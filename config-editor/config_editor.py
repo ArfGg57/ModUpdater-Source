@@ -1881,166 +1881,174 @@ class ModBrowserDialog(QDialog):
         self.setup_ui()
         # Load popular mods on startup
         QTimer.singleShot(100, self.load_popular_mods)
-    
+
     def setup_ui(self):
+        """Set up the UI for the mod browser dialog with minimal vertical blank space."""
         self.setWindowTitle("Browse Mods - CurseForge / Modrinth")
         self.setMinimumSize(1000, 700)
         self.setModal(True)
-        
+
+        # Main vertical layout with very tight spacing/margins to remove blank space
         layout = QVBoxLayout(self)
-        layout.setSpacing(12)
-        layout.setContentsMargins(16, 16, 16, 16)
-        
-        # Header with title only (removed instructions)
+        layout.setSpacing(4)
+        layout.setContentsMargins(2, 2, 2, 2)
+        self.setContentsMargins(0, 0, 0, 0)
+
+        # Title (remove extra padding)
         title = QLabel("🔍 Find and Add Mods")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        layout.addWidget(title)
-        
+        title.setStyleSheet("font-size:16px; font-weight:600; margin:0; padding:0;")
+        layout.addWidget(title, alignment=Qt.AlignmentFlag.AlignLeft)
+
+        # Theme for later styling
         theme = get_current_theme()
-        
-        # Source selection tabs
+
+        # Source selection row
         source_layout = QHBoxLayout()
-        
+        source_layout.setSpacing(6)
+        source_layout.setContentsMargins(0, 0, 0, 0)
+
         source_label = QLabel("Source:")
-        source_label.setStyleSheet("font-weight: bold;")
+        source_label.setStyleSheet("font-weight: bold; margin:0; padding:0;")
         source_layout.addWidget(source_label)
-        
+
         self.curseforge_source_btn = QPushButton("🔥 CurseForge")
         self.curseforge_source_btn.setCheckable(True)
         self.curseforge_source_btn.setChecked(True)
         self.curseforge_source_btn.setMinimumWidth(120)
         self.curseforge_source_btn.clicked.connect(lambda: self._select_source('curseforge'))
         source_layout.addWidget(self.curseforge_source_btn)
-        
+
         self.modrinth_source_btn = QPushButton("📦 Modrinth")
         self.modrinth_source_btn.setCheckable(True)
         self.modrinth_source_btn.setMinimumWidth(120)
         self.modrinth_source_btn.clicked.connect(lambda: self._select_source('modrinth'))
         source_layout.addWidget(self.modrinth_source_btn)
-        
+
         source_layout.addStretch()
         layout.addLayout(source_layout)
-        
-        # Search bar with MC Version on the same line
+
+        # Search bar row
         search_layout = QHBoxLayout()
-        
+        search_layout.setSpacing(6)
+        search_layout.setContentsMargins(0, 0, 0, 0)
+
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("🔍 Search mods... (leave empty for most popular)")
         self.search_edit.returnPressed.connect(self.search_mods)
         search_layout.addWidget(self.search_edit, 1)
-        
-        # MC Version filter (between search and button)
-        search_layout.addWidget(QLabel("MC Version:"))
+
+        version_lbl = QLabel("MC Version:")
+        version_lbl.setStyleSheet("margin:0; padding:0;")
+        search_layout.addWidget(version_lbl)
+
         self.version_filter = QLineEdit()
         self.version_filter.setPlaceholderText("e.g., 1.12.2")
         self.version_filter.setFixedWidth(100)
         self.version_filter.returnPressed.connect(self.search_mods)
         search_layout.addWidget(self.version_filter)
-        
+
         search_btn = QPushButton("Search")
         search_btn.setObjectName("primaryButton")
         search_btn.clicked.connect(self.search_mods)
         search_layout.addWidget(search_btn)
-        
+
         layout.addLayout(search_layout)
-        
-        # Main content area with splitter
+
+        # Splitter for results / description
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        
-        # Left: Search results
+
+        # Left panel (results)
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        
+        left_layout.setSpacing(4)
+
         self.results_header = QLabel("📋 Popular Mods (sorted by downloads):")
-        self.results_header.setStyleSheet("font-weight: bold; padding: 4px 0;")
+        self.results_header.setStyleSheet("font-weight: bold; margin:0; padding:0;")
         left_layout.addWidget(self.results_header)
-        
+
         self.results_list = QListWidget()
         self.results_list.itemClicked.connect(self.on_mod_selected)
         self.results_list.setAlternatingRowColors(True)
-        self.results_list.setIconSize(QSize(40, 40))  # Larger icons
-        self.results_list.setSpacing(4)  # More spacing between items
-        self.results_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)  # Remove horizontal scrollbar
-        self.results_list.setWordWrap(True)  # Enable word wrap for long text
-        # Connect scroll event for infinite scroll
+        self.results_list.setIconSize(QSize(40, 40))
+        self.results_list.setSpacing(4)
+        self.results_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.results_list.setWordWrap(True)
         self.results_list.verticalScrollBar().valueChanged.connect(self._on_scroll)
         left_layout.addWidget(self.results_list)
-        
+
         self.search_status = QLabel("")
-        self.search_status.setStyleSheet(f"font-size: 11px; color: {theme['text_secondary']};")
+        self.search_status.setStyleSheet(f"font-size:11px; color:{theme['text_secondary']}; margin:0; padding:0;")
         left_layout.addWidget(self.search_status)
-        
+
         splitter.addWidget(left_panel)
-        
-        # Right: Full description area (removed selected mod details box)
+
+        # Right panel (description + versions)
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(8)
-        
-        # Description header with mod name
+        right_layout.setSpacing(4)
+
         self.mod_info_header = QLabel("📖 Select a mod to view its description")
-        self.mod_info_header.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {theme['accent']}; padding: 4px 0;")
+        self.mod_info_header.setStyleSheet(f"font-weight:bold; font-size:14px; color:{theme['accent']}; margin:0; padding:0;")
         self.mod_info_header.setWordWrap(True)
         right_layout.addWidget(self.mod_info_header)
-        
-        # Use RemoteImageTextBrowser for rich HTML content with images (loads remote images)
-        # This now takes up the full area for description
+
         self.description_browser = RemoteImageTextBrowser()
-        self.description_browser.setOpenExternalLinks(True)  # Allow clicking links
+        self.description_browser.setOpenExternalLinks(True)
         self.description_browser.setMinimumHeight(200)
-        theme = get_current_theme()
         self.description_browser.setStyleSheet(f"""
             QTextBrowser {{
                 background-color: {theme['bg_secondary']};
                 border: 1px solid {theme['border']};
                 border-radius: 6px;
-                padding: 8px;
+                padding:6px;
+                margin:0;
             }}
         """)
         right_layout.addWidget(self.description_browser, 1)
-        
-        # Version selection - dropdown instead of list
+
         version_layout = QHBoxLayout()
+        version_layout.setSpacing(6)
+        version_layout.setContentsMargins(0, 0, 0, 0)
+
         versions_label = QLabel("📁 Available File:")
-        versions_label.setStyleSheet("font-weight: bold;")
+        versions_label.setStyleSheet("font-weight: bold; margin:0; padding:0;")
         version_layout.addWidget(versions_label)
-        
+
         self.versions_combo = QComboBox()
         self.versions_combo.setMinimumWidth(300)
-        self.versions_combo.setMaxVisibleItems(10)  # Make dropdown scrollable
+        self.versions_combo.setMaxVisibleItems(10)
         self.versions_combo.currentIndexChanged.connect(self.on_version_combo_changed)
         version_layout.addWidget(self.versions_combo, 1)
-        
+
         right_layout.addLayout(version_layout)
-        
+
         splitter.addWidget(right_panel)
         splitter.setSizes([400, 550])
-        
-        layout.addWidget(splitter)
-        
-        # Bottom buttons - simplified (removed status text)
+        layout.addWidget(splitter, 1)
+
+        # Bottom buttons
         button_layout = QHBoxLayout()
-        
+        button_layout.setSpacing(6)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(cancel_btn)
-        
+
         button_layout.addStretch()
-        
+
         self.add_btn = QPushButton("✓ Add Mod")
         self.add_btn.setObjectName("primaryButton")
         self.add_btn.clicked.connect(self.add_selected_mod)
         self.add_btn.setEnabled(False)
         self.add_btn.setMinimumWidth(120)
-        # Grey out styling when disabled
-        self.add_btn.setStyleSheet("")
         button_layout.addWidget(self.add_btn)
-        
+
         layout.addLayout(button_layout)
-        
-        # Update source button styles
+
+        # Update source button styles (after creation)
         self._update_source_button_styles()
     
     def _on_scroll(self, value):
