@@ -153,7 +153,110 @@ THEMES = {
         "warning": "#ffb74d",
         "border": "#3d4731",
     },
+    "ocean": {
+        "name": "Ocean Blue",
+        "bg_primary": "#0a1929",
+        "bg_secondary": "#132f4c",
+        "bg_tertiary": "#1e4976",
+        "bg_sidebar": "#051220",
+        "text_primary": "#b2bac2",
+        "text_secondary": "#8c959f",
+        "accent": "#5090d3",
+        "accent_hover": "#66a3e0",
+        "success": "#4caf50",
+        "danger": "#f44336",
+        "warning": "#ffb300",
+        "border": "#1e4976",
+    },
+    "sunset": {
+        "name": "Sunset Orange",
+        "bg_primary": "#1a1a2e",
+        "bg_secondary": "#16213e",
+        "bg_tertiary": "#0f3460",
+        "bg_sidebar": "#0f0f1e",
+        "text_primary": "#eaeaea",
+        "text_secondary": "#b8b8b8",
+        "accent": "#e94560",
+        "accent_hover": "#ff6b6b",
+        "success": "#4ecca3",
+        "danger": "#ff4757",
+        "warning": "#ffa502",
+        "border": "#0f3460",
+    },
+    "purple": {
+        "name": "Purple Night",
+        "bg_primary": "#1a1a2e",
+        "bg_secondary": "#25274d",
+        "bg_tertiary": "#464866",
+        "bg_sidebar": "#111122",
+        "text_primary": "#aaabb8",
+        "text_secondary": "#8889a0",
+        "accent": "#9b59b6",
+        "accent_hover": "#b975d4",
+        "success": "#2ecc71",
+        "danger": "#e74c3c",
+        "warning": "#f1c40f",
+        "border": "#464866",
+    },
+    "rose": {
+        "name": "Rose Pink",
+        "bg_primary": "#2d132c",
+        "bg_secondary": "#3d1a3c",
+        "bg_tertiary": "#4e234d",
+        "bg_sidebar": "#1e0d1d",
+        "text_primary": "#f5e6e8",
+        "text_secondary": "#c9b1c4",
+        "accent": "#ee6c4d",
+        "accent_hover": "#f58d7a",
+        "success": "#52b788",
+        "danger": "#f07167",
+        "warning": "#ffd166",
+        "border": "#4e234d",
+    },
+    "nord": {
+        "name": "Nord",
+        "bg_primary": "#2e3440",
+        "bg_secondary": "#3b4252",
+        "bg_tertiary": "#434c5e",
+        "bg_sidebar": "#242933",
+        "text_primary": "#eceff4",
+        "text_secondary": "#d8dee9",
+        "accent": "#88c0d0",
+        "accent_hover": "#8fbcbb",
+        "success": "#a3be8c",
+        "danger": "#bf616a",
+        "warning": "#ebcb8b",
+        "border": "#4c566a",
+    },
+    "dracula": {
+        "name": "Dracula",
+        "bg_primary": "#282a36",
+        "bg_secondary": "#44475a",
+        "bg_tertiary": "#6272a4",
+        "bg_sidebar": "#1e1f29",
+        "text_primary": "#f8f8f2",
+        "text_secondary": "#6272a4",
+        "accent": "#bd93f9",
+        "accent_hover": "#d4b6ff",
+        "success": "#50fa7b",
+        "danger": "#ff5555",
+        "warning": "#f1fa8c",
+        "border": "#6272a4",
+    },
 }
+
+# Store current theme globally for access by widgets
+_current_theme = THEMES["dark"]
+
+def get_current_theme() -> dict:
+    """Get the currently active theme."""
+    return _current_theme
+
+def set_current_theme(theme_key: str):
+    """Set the current theme."""
+    global _current_theme
+    if theme_key in THEMES:
+        _current_theme = THEMES[theme_key]
 
 
 def generate_stylesheet(theme: dict) -> str:
@@ -176,21 +279,32 @@ QListWidget {{
     border-radius: 8px;
     padding: 5px;
     outline: none;
+    alternate-background-color: {theme['bg_primary']};
 }}
 
 QListWidget::item {{
-    background-color: transparent;
+    background-color: {theme['bg_secondary']};
     border-radius: 6px;
     padding: 12px 16px;
     margin: 2px 4px;
-}}
-
-QListWidget::item:selected {{
-    background-color: {theme['bg_tertiary']};
     color: {theme['text_primary']};
 }}
 
-QListWidget::item:hover {{
+QListWidget::item:alternate {{
+    background-color: {theme['bg_primary']};
+}}
+
+QListWidget::item:selected {{
+    background-color: {theme['accent']};
+    color: {theme['bg_primary']};
+}}
+
+QListWidget::item:selected:alternate {{
+    background-color: {theme['accent']};
+    color: {theme['bg_primary']};
+}}
+
+QListWidget::item:hover:!selected {{
     background-color: {theme['bg_tertiary']};
 }}
 
@@ -785,6 +899,77 @@ class VersionConfig:
 
 
 # === Dialogs ===
+class APITokenGuideDialog(QDialog):
+    """Dialog showing how to create a GitHub API token."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setup_ui()
+    
+    def setup_ui(self):
+        self.setWindowTitle("How to Create a GitHub API Token")
+        self.setMinimumSize(600, 500)
+        self.setModal(True)
+        
+        layout = QVBoxLayout(self)
+        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
+        
+        header = QLabel("🔑 Creating a GitHub Personal Access Token")
+        header.setStyleSheet("font-size: 18px; font-weight: bold;")
+        layout.addWidget(header)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setSpacing(12)
+        
+        steps = [
+            ("Step 1: Go to GitHub Settings", 
+             "Open GitHub.com and log in. Click your profile picture in the top-right corner, then click 'Settings'."),
+            ("Step 2: Access Developer Settings", 
+             "Scroll down the left sidebar and click 'Developer settings' at the bottom."),
+            ("Step 3: Create a Personal Access Token", 
+             "Click 'Personal access tokens' → 'Tokens (classic)' → 'Generate new token' → 'Generate new token (classic)'."),
+            ("Step 4: Configure Token Settings", 
+             "• Give your token a descriptive name (e.g., 'ModUpdater Config Editor')\n"
+             "• Set an expiration date (or 'No expiration' for convenience)\n"
+             "• Select the 'repo' scope to give full repository access"),
+            ("Step 5: Generate and Copy", 
+             "Click 'Generate token' at the bottom. IMPORTANT: Copy the token immediately - you won't be able to see it again!"),
+            ("Step 6: Use the Token", 
+             "Paste the token (starts with 'ghp_') into the API Token field in the setup dialog.")
+        ]
+        
+        for title, description in steps:
+            step_group = QGroupBox(title)
+            step_layout = QVBoxLayout(step_group)
+            desc_label = QLabel(description)
+            desc_label.setWordWrap(True)
+            step_layout.addWidget(desc_label)
+            content_layout.addWidget(step_group)
+        
+        # Warning
+        warning = QLabel("⚠️ Keep your token secure! Never share it publicly or commit it to repositories.")
+        theme = get_current_theme()
+        warning.setStyleSheet(f"color: {theme['warning']}; font-weight: bold; padding: 12px; background-color: rgba(249, 226, 175, 0.1); border-radius: 8px;")
+        warning.setWordWrap(True)
+        content_layout.addWidget(warning)
+        
+        content_layout.addStretch()
+        scroll.setWidget(content)
+        layout.addWidget(scroll)
+        
+        # Close button
+        close_btn = QPushButton("Got it!")
+        close_btn.setObjectName("primaryButton")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+
+
 class SetupDialog(QDialog):
     """First-time setup dialog for GitHub configuration."""
     
@@ -795,7 +980,7 @@ class SetupDialog(QDialog):
     
     def setup_ui(self):
         self.setWindowTitle("GitHub Repository Setup")
-        self.setMinimumSize(550, 450)
+        self.setMinimumSize(550, 400)
         self.setModal(True)
         
         layout = QVBoxLayout(self)
@@ -821,21 +1006,32 @@ class SetupDialog(QDialog):
         self.repo_url_edit.setPlaceholderText("https://github.com/username/repo")
         form_layout.addRow("Repository URL:", self.repo_url_edit)
         
+        # Token with help button
+        token_layout = QHBoxLayout()
         self.token_edit = QLineEdit(self.config.get('token', ''))
         self.token_edit.setPlaceholderText("ghp_xxxxxxxxxxxx (REQUIRED)")
         self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        token_layout.addWidget(self.token_edit)
+        
+        token_help_btn = QPushButton("?")
+        token_help_btn.setFixedSize(30, 30)
+        token_help_btn.setToolTip("How to create an API token")
+        token_help_btn.clicked.connect(self.show_token_guide)
+        token_layout.addWidget(token_help_btn)
+        form_layout.addRow("API Token*:", token_layout)
+        
         token_note = QLabel("API Token is required to edit the repository")
-        token_note.setStyleSheet("font-size: 11px; color: #f9e2af;")
-        form_layout.addRow("API Token*:", self.token_edit)
+        theme = get_current_theme()
+        token_note.setStyleSheet(f"font-size: 11px; color: {theme['warning']};")
         form_layout.addRow("", token_note)
         
         self.branch_edit = QLineEdit(self.config.get('branch', 'main'))
         self.branch_edit.setPlaceholderText("main")
         form_layout.addRow("Branch:", self.branch_edit)
         
+        # Hidden config_path field for backward compatibility
         self.config_path_edit = QLineEdit(self.config.get('config_path', ''))
-        self.config_path_edit.setPlaceholderText("configs/ (path to configs in repo)")
-        form_layout.addRow("Config Path:", self.config_path_edit)
+        self.config_path_edit.setVisible(False)
         
         layout.addWidget(form_group)
         
@@ -860,22 +1056,30 @@ class SetupDialog(QDialog):
         button_layout.addWidget(save_btn)
         layout.addLayout(button_layout)
     
+    def show_token_guide(self):
+        """Show the API token creation guide."""
+        dialog = APITokenGuideDialog(self)
+        dialog.exec()
+    
     def test_connection(self):
         repo_url = self.repo_url_edit.text().strip()
         token = self.token_edit.text().strip()
         
         if not repo_url:
             self.status_label.setText("Please enter a repository URL")
-            self.status_label.setStyleSheet("color: #f38ba8;")
+            theme = get_current_theme()
+            self.status_label.setStyleSheet(f"color: {theme['danger']};")
             return
         
         if not token:
             self.status_label.setText("API Token is required")
-            self.status_label.setStyleSheet("color: #f38ba8;")
+            theme = get_current_theme()
+            self.status_label.setStyleSheet(f"color: {theme['danger']};")
             return
         
         self.status_label.setText("Testing connection...")
-        self.status_label.setStyleSheet("color: #f9e2af;")
+        theme = get_current_theme()
+        self.status_label.setStyleSheet(f"color: {theme['warning']};")
         QApplication.processEvents()
         
         try:
@@ -883,23 +1087,27 @@ class SetupDialog(QDialog):
             api.branch = self.branch_edit.text().strip() or "main"
             if api.test_connection():
                 self.status_label.setText("Connection successful!")
-                self.status_label.setStyleSheet("color: #a6e3a1;")
+                theme = get_current_theme()
+                self.status_label.setStyleSheet(f"color: {theme['success']};")
             else:
                 self.status_label.setText("Could not connect to repository")
-                self.status_label.setStyleSheet("color: #f38ba8;")
+                theme = get_current_theme()
+                self.status_label.setStyleSheet(f"color: {theme['danger']};")
         except Exception as e:
             self.status_label.setText(f"Error: {str(e)[:50]}")
-            self.status_label.setStyleSheet("color: #f38ba8;")
+            theme = get_current_theme()
+            self.status_label.setStyleSheet(f"color: {theme['danger']};")
     
     def validate_and_accept(self):
         """Validate that API token is provided before accepting."""
+        theme = get_current_theme()
         if not self.repo_url_edit.text().strip():
             self.status_label.setText("Repository URL is required")
-            self.status_label.setStyleSheet("color: #f38ba8;")
+            self.status_label.setStyleSheet(f"color: {theme['danger']};")
             return
         if not self.token_edit.text().strip():
             self.status_label.setText("API Token is required to edit the repository")
-            self.status_label.setStyleSheet("color: #f38ba8;")
+            self.status_label.setStyleSheet(f"color: {theme['danger']};")
             return
         self.accept()
     
@@ -1560,8 +1768,9 @@ class ModBrowserDialog(QDialog):
     
     def _update_source_button_styles(self):
         """Update source button styles to show selected state."""
-        # Use palette-based styling that works with any theme
-        selected_style = "background-color: palette(highlight); border: 2px solid palette(highlight); font-weight: bold;"
+        # Use theme colors directly for proper theming
+        theme = get_current_theme()
+        selected_style = f"background-color: {theme['accent']}; border: 2px solid {theme['accent']}; font-weight: bold; color: {theme['bg_primary']};"
         normal_style = ""
         
         self.curseforge_source_btn.setStyleSheet(selected_style if self.curseforge_source_btn.isChecked() else normal_style)
@@ -1701,16 +1910,18 @@ class ModBrowserDialog(QDialog):
                     self.selected_version = version
                     self.add_btn.setEnabled(True)
                     self.selection_status.setText("✓ Ready to add! Click 'Add Mod' to continue")
-                    # Note: Using semantic colors for success/error states
-                    # These are intentionally distinct from theme colors for accessibility
-                    self.selection_status.setStyleSheet("color: green; font-style: normal; font-weight: bold;")
+                    # Use theme success color
+                    theme = get_current_theme()
+                    self.selection_status.setStyleSheet(f"color: {theme['success']}; font-style: normal; font-weight: bold;")
     
     def on_versions_error(self, error: str):
         """Handle version fetch error."""
         self.versions_list.clear()
         self.versions_list.addItem(f"Error: {error}")
         self.selection_status.setText("⚠ Failed to load file versions")
-        self.selection_status.setStyleSheet("color: red; font-style: italic;")
+        # Use theme danger color
+        theme = get_current_theme()
+        self.selection_status.setStyleSheet(f"color: {theme['danger']}; font-style: italic;")
     
     def on_version_selected(self, item: QListWidgetItem):
         """Handle version selection."""
@@ -1719,7 +1930,9 @@ class ModBrowserDialog(QDialog):
             self.selected_version = version
             self.add_btn.setEnabled(True)
             self.selection_status.setText("✓ Ready to add! Click 'Add Mod' to continue")
-            self.selection_status.setStyleSheet("color: green; font-style: normal; font-weight: bold;")
+            # Use theme success color
+            theme = get_current_theme()
+            self.selection_status.setStyleSheet(f"color: {theme['success']}; font-style: normal; font-weight: bold;")
     
     def add_selected_mod(self):
         """Add the selected mod."""
@@ -1832,32 +2045,34 @@ class ItemCard(QFrame):
             self._set_default_icon()
     
     def update_style(self):
-        # Use relative styling that works with any theme
-        # The parent stylesheet will provide base colors
+        # Use theme colors directly for proper theming
+        theme = get_current_theme()
         if self.selected:
-            self.setStyleSheet("""
-                ItemCard {
-                    background-color: palette(highlight);
-                    border: 2px solid palette(highlight);
+            self.setStyleSheet(f"""
+                ItemCard {{
+                    background-color: {theme['accent']};
+                    border: 2px solid {theme['accent']};
                     border-radius: 8px;
-                }
-                ItemCard QLabel {
+                }}
+                ItemCard QLabel {{
                     background-color: transparent;
-                }
+                    color: {theme['bg_primary']};
+                }}
             """)
         else:
-            self.setStyleSheet("""
-                ItemCard {
-                    background-color: palette(base);
-                    border: 2px solid palette(mid);
+            self.setStyleSheet(f"""
+                ItemCard {{
+                    background-color: {theme['bg_secondary']};
+                    border: 2px solid {theme['border']};
                     border-radius: 8px;
-                }
-                ItemCard:hover {
-                    border-color: palette(highlight);
-                }
-                ItemCard QLabel {
+                }}
+                ItemCard:hover {{
+                    border-color: {theme['accent']};
+                }}
+                ItemCard QLabel {{
                     background-color: transparent;
-                }
+                    color: {theme['text_primary']};
+                }}
             """)
     
     def set_selected(self, selected: bool):
@@ -2039,8 +2254,9 @@ class ModEditorPanel(QWidget):
     
     def _update_source_button_styles(self):
         """Update source button styles to show selected state with darker tint."""
-        # Use palette-based styling that works with any theme
-        selected_style = "background-color: palette(highlight); border: 2px solid palette(highlight);"
+        # Use theme colors directly for proper theming
+        theme = get_current_theme()
+        selected_style = f"background-color: {theme['accent']}; border: 2px solid {theme['accent']}; color: {theme['bg_primary']};"
         normal_style = ""
         
         self.curseforge_btn.setStyleSheet(selected_style if self.curseforge_btn.isChecked() else normal_style)
@@ -2548,6 +2764,7 @@ class VersionEditorPage(QWidget):
         
         # Tab widget
         self.tabs = QTabWidget()
+        self.tabs.currentChanged.connect(self.on_tab_changed)
         
         # Mods Tab
         self.mods_tab = QWidget()
@@ -2794,6 +3011,28 @@ class VersionEditorPage(QWidget):
         """Handle back button click."""
         self.back_requested.emit()
     
+    def on_tab_changed(self, index: int):
+        """Handle tab change - auto-select first item in mods, files, or deletes tabs."""
+        if not self.version_config:
+            return
+        
+        # Tab indices: 0=Mods, 1=Files, 2=Delete, 3=Settings
+        if index == 0:  # Mods tab
+            if self.version_config.mods and self.selected_mod_index < 0:
+                # Auto-select first mod
+                self.select_mod(0)
+        elif index == 1:  # Files tab
+            if self.version_config.files and self.selected_file_index < 0:
+                # Auto-select first file
+                self.select_file(0)
+        elif index == 2:  # Delete tab
+            if self.version_config.deletes and self.selected_delete_index < 0:
+                # Auto-select first delete entry
+                self.deletes_list.setCurrentRow(0)
+                first_item = self.deletes_list.item(0)
+                if first_item:
+                    self.on_delete_selected(first_item)
+    
     def on_create_clicked(self):
         """Handle Create button click - save version to repo."""
         if not self.version_config:
@@ -2904,6 +3143,12 @@ class VersionEditorPage(QWidget):
         self.selected_file_index = index
         self.file_editor.load_file(self.version_config.files[index])
         self.file_editor.setVisible(True)  # Show editor panel
+        
+        # Update selection visuals
+        for i in range(self.files_grid.count()):
+            widget = self.files_grid.itemAt(i).widget()
+            if isinstance(widget, ItemCard) and not widget.is_add_button:
+                widget.set_selected(i == index)
     
     def on_delete_selected(self, item):
         index = self.deletes_list.row(item)
@@ -3185,7 +3430,13 @@ class VersionSelectionPage(QWidget):
         desc = QLabel("Choose a version to edit or create a new one.")
         layout.addWidget(desc)
         
-        layout.addSpacing(20)
+        # Latest version indicator
+        self.latest_version_label = QLabel("")
+        theme = get_current_theme()
+        self.latest_version_label.setStyleSheet(f"color: {theme['accent']}; font-weight: bold; font-size: 14px; padding: 8px 0;")
+        layout.addWidget(self.latest_version_label)
+        
+        layout.addSpacing(10)
         
         # Grid of versions
         self.scroll = QScrollArea()
@@ -3237,11 +3488,24 @@ class VersionSelectionPage(QWidget):
         # Sort versions (newest first)
         sorted_versions = sorted(self.versions.keys(), key=version_sort_key, reverse=True)
         
+        # Update latest version label
+        if sorted_versions:
+            latest = sorted_versions[0]
+            theme = get_current_theme()
+            self.latest_version_label.setText(f"📌 Latest Version: {latest}")
+            self.latest_version_label.setStyleSheet(f"color: {theme['accent']}; font-weight: bold; font-size: 14px; padding: 8px 0;")
+        else:
+            self.latest_version_label.setText("")
+        
         # Add version cards
-        for version in sorted_versions:
+        for i, version in enumerate(sorted_versions):
             config = self.versions[version]
             icon_path = config.icon_path if hasattr(config, 'icon_path') else ""
-            card = ItemCard(version, icon_path)
+            
+            # Add "(Latest)" suffix to the first (latest) version
+            display_name = f"{version}\n(Latest)" if i == 0 else version
+            
+            card = ItemCard(display_name, icon_path)
             card.clicked.connect(lambda v=version: self.version_selected.emit(v))
             card.double_clicked.connect(lambda v=version: self.version_selected.emit(v))
             self.grid.addWidget(card, row, col)
@@ -3339,65 +3603,24 @@ class ConfigurationPage(QWidget):
         scroll_layout = QVBoxLayout(scroll_widget)
         scroll_layout.setSpacing(16)
         
-        # Version Info (automatic - read-only)
-        version_group = QGroupBox("Version Information (Automatic)")
-        version_layout = QFormLayout(version_group)
-        
+        # Hidden fields for internal use (not visible to user)
         self.modpack_version_edit = QLineEdit()
-        self.modpack_version_edit.setPlaceholderText("Set automatically based on latest version")
-        self.modpack_version_edit.setReadOnly(True)
-        self.modpack_version_edit.setStyleSheet("background-color: rgba(255,255,255,0.05);")
-        version_layout.addRow("Modpack Version:", self.modpack_version_edit)
-        
-        version_note = QLabel("Version is set automatically to the latest created version")
-        version_note.setStyleSheet("font-size: 11px; color: #a6adc8;")
-        version_layout.addRow("", version_note)
-        
-        scroll_layout.addWidget(version_group)
-        
-        # URL Configuration (automatic - read-only)
-        url_group = QGroupBox("URL Configuration (Automatic)")
-        url_layout = QFormLayout(url_group)
+        self.modpack_version_edit.setVisible(False)
         
         self.configs_base_url_edit = QLineEdit()
-        self.configs_base_url_edit.setPlaceholderText("Set automatically from repository settings")
-        self.configs_base_url_edit.setReadOnly(True)
-        self.configs_base_url_edit.setStyleSheet("background-color: rgba(255,255,255,0.05);")
-        url_layout.addRow("Configs Base URL:", self.configs_base_url_edit)
-        
-        url_note = QLabel("URL is generated automatically from your GitHub repository settings")
-        url_note.setStyleSheet("font-size: 11px; color: #a6adc8;")
-        url_layout.addRow("", url_note)
-        
-        scroll_layout.addWidget(url_group)
-        
-        # File Names (automatic - read-only)
-        files_group = QGroupBox("Config File Names (Automatic)")
-        files_layout = QFormLayout(files_group)
+        self.configs_base_url_edit.setVisible(False)
         
         self.mods_json_edit = QLineEdit()
         self.mods_json_edit.setText("mods.json")
-        self.mods_json_edit.setReadOnly(True)
-        self.mods_json_edit.setStyleSheet("background-color: rgba(255,255,255,0.05);")
-        files_layout.addRow("Mods File:", self.mods_json_edit)
+        self.mods_json_edit.setVisible(False)
         
         self.files_json_edit = QLineEdit()
         self.files_json_edit.setText("files.json")
-        self.files_json_edit.setReadOnly(True)
-        self.files_json_edit.setStyleSheet("background-color: rgba(255,255,255,0.05);")
-        files_layout.addRow("Files File:", self.files_json_edit)
+        self.files_json_edit.setVisible(False)
         
         self.deletes_json_edit = QLineEdit()
         self.deletes_json_edit.setText("deletes.json")
-        self.deletes_json_edit.setReadOnly(True)
-        self.deletes_json_edit.setStyleSheet("background-color: rgba(255,255,255,0.05);")
-        files_layout.addRow("Deletes File:", self.deletes_json_edit)
-        
-        files_note = QLabel("File names are set to standard values")
-        files_note.setStyleSheet("font-size: 11px; color: #a6adc8;")
-        files_layout.addRow("", files_note)
-        
-        scroll_layout.addWidget(files_group)
+        self.deletes_json_edit.setVisible(False)
         
         # Advanced Options
         advanced_group = QGroupBox("Advanced Options")
@@ -4012,6 +4235,9 @@ class MainWindow(QMainWindow):
         self.current_theme = theme_key
         theme = THEMES[theme_key]
         
+        # Update global theme for widget access
+        set_current_theme(theme_key)
+        
         # Generate and apply stylesheet
         stylesheet = generate_stylesheet(theme)
         
@@ -4024,6 +4250,12 @@ class MainWindow(QMainWindow):
         
         QApplication.instance().setStyleSheet(stylesheet)
         self.settings_page.set_theme(theme_key)
+        
+        # Refresh any visible grids to update their styling
+        self.version_selection_page.refresh_grid()
+        if hasattr(self.version_editor_page, 'version_config') and self.version_editor_page.version_config:
+            self.version_editor_page.refresh_mods_grid()
+            self.version_editor_page.refresh_files_grid()
     
     def on_nav_changed(self, index: int):
         """Handle navigation list selection change."""
