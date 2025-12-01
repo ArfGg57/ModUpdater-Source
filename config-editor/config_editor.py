@@ -1885,7 +1885,7 @@ class ModBrowserDialog(QDialog):
     def setup_ui(self):
         """Set up the UI for the mod browser dialog with minimal vertical blank space."""
         self.setWindowTitle("Browse Mods - CurseForge / Modrinth")
-        self.setMinimumSize(1000, 700)
+        self.setMinimumSize(1220, 820)
         self.setModal(True)
 
         # Main vertical layout with very tight spacing/margins to remove blank space
@@ -1989,7 +1989,7 @@ class ModBrowserDialog(QDialog):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(4)
 
-        self.mod_info_header = QLabel("📖 Select a mod to view its description")
+        self.mod_info_header = QLabel("Select a mod to view its description")
         self.mod_info_header.setStyleSheet(f"font-weight:bold; font-size:14px; color:{theme['accent']}; margin:0; padding:0;")
         self.mod_info_header.setWordWrap(True)
         right_layout.addWidget(self.mod_info_header)
@@ -2012,7 +2012,7 @@ class ModBrowserDialog(QDialog):
         version_layout.setSpacing(6)
         version_layout.setContentsMargins(0, 0, 0, 0)
 
-        versions_label = QLabel("📁 Available File:")
+        versions_label = QLabel("📁 Selected File:")
         versions_label.setStyleSheet("font-weight: bold; margin:0; padding:0;")
         version_layout.addWidget(versions_label)
 
@@ -2163,8 +2163,8 @@ class ModBrowserDialog(QDialog):
         self.selected_mod = None
         self.selected_version = None
         self.add_btn.setEnabled(False)
-        self.search_status.setText("Loading popular mods...")
-        self.results_header.setText(f"📋 Popular Mods from {source.capitalize()} (sorted by downloads):")
+        self.search_status.setText("Loading mods...")
+        self.results_header.setText(f"Mods:")
         
         if self.search_thread and self.search_thread.isRunning():
             self.search_thread.stop()
@@ -2183,7 +2183,7 @@ class ModBrowserDialog(QDialog):
         self.selected_mod = None
         self.selected_version = None
         self.add_btn.setEnabled(False)
-        self.mod_info_header.setText("📖 Select a mod to view its description")
+        self.mod_info_header.setText("Select a mod to view its description")
         self.description_browser.setHtml("")
         # Reset infinite scroll
         self.all_search_results = []
@@ -2215,8 +2215,8 @@ class ModBrowserDialog(QDialog):
             self.search_status.setText("Searching...")
             self.results_header.setText(f"🔍 Search Results for '{query}':")
         else:
-            self.search_status.setText("Loading popular mods...")
-            self.results_header.setText(f"📋 Popular Mods from {source.capitalize()}:")
+            self.search_status.setText("Loading mods...")
+            self.results_header.setText(f"Mods:")
         
         if self.search_thread and self.search_thread.isRunning():
             self.search_thread.stop()
@@ -2257,7 +2257,7 @@ class ModBrowserDialog(QDialog):
         self.add_btn.setEnabled(False)
         
         # Update mod info header with name, author, downloads info
-        self.mod_info_header.setText(f"📖 {mod['name']} by {mod['author']} • {mod['downloads']:,} downloads")
+        self.mod_info_header.setText(f"{mod['name']} by {mod['author']} • {mod['downloads']:,} downloads")
         self.description_browser.setHtml("<i>Loading full description...</i>")
         
         # Fetch full description
@@ -4314,9 +4314,14 @@ class VersionEditorPage(QWidget):
 
 # === Version Selection Page ===
 class VersionSelectionPage(QWidget):
-    """Page for selecting/creating versions."""
     version_selected = pyqtSignal(str)
-    version_deleted = pyqtSignal(str)  # Signal for version deletion
+    version_deleted = pyqtSignal(str)
+    def refresh_grid(self):
+        # Clear grid
+        while self.grid.count():
+            item = self.grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -4423,9 +4428,28 @@ class VersionSelectionPage(QWidget):
         add_card = VersionCard("", is_add_button=True)
         add_card.clicked.connect(lambda v="": self.add_version())
         self.grid.addWidget(add_card, row, col)
-    
+
     def on_delete_version(self, version: str):
         """Handle version delete request."""
+        # Prevent deleting the latest version
+        def version_sort_key(v: str):
+            parts = v.split('-', 1)
+            base = parts[0]
+            tag = parts[1] if len(parts) > 1 else ''
+            nums = []
+            for x in base.split('.'):
+                try:
+                    nums.append(int(x))
+                except ValueError:
+                    nums.append(0)
+            tag_priority = 0 if tag else 1
+            return (nums, tag_priority, tag)
+        if self.versions:
+            latest_version = max(self.versions.keys(), key=version_sort_key)
+            if version == latest_version:
+                QMessageBox.warning(self, "Cannot Delete Latest Version",
+                                    "The latest version cannot be deleted.")
+                return
         # Show confirmation dialog
         dialog = ConfirmDeleteDialog(version, "version", self)
         if dialog.exec():
