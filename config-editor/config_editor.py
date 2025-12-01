@@ -2741,11 +2741,17 @@ class ModBrowserDialog(QDialog):
             self.results_list.addItem(item)
 
     def _load_page_icons_sequential(self):
-        """Load icons for current page from top to bottom."""
+        """Load icons for current page from top to bottom.
+        
+        For the first PAGE_ICON_CACHE_SIZE (8) icons, loads them in parallel for speed.
+        For remaining icons, loads them one at a time.
+        """
         if self.results_list.count() == 0:
             return
 
         source = self._get_selected_source()
+        icons_started = 0
+        first_batch_size = PAGE_ICON_CACHE_SIZE  # Load first 8 in parallel
 
         # Find the first item without a loaded icon
         for i in range(self.results_list.count()):
@@ -2771,15 +2777,26 @@ class ModBrowserDialog(QDialog):
             if mod_id in self._loading_mod_ids:
                 continue
 
-            # Count active threads safely
+            # For the first batch, allow more parallel loads
+            # For subsequent items, limit to max concurrent loads
             active_count = sum(1 for t in self.icon_threads if self._thread_is_running(t))
-            if active_count >= self._max_concurrent_loads:
+            max_parallel = first_batch_size if i < first_batch_size else self._max_concurrent_loads
+            
+            if active_count >= max_parallel:
                 # Schedule retry later
                 QTimer.singleShot(ICON_LOAD_RETRY_DELAY_MS, self._load_page_icons_sequential)
                 return
 
             # Start loading this icon
             self._start_icon_load(item, mod_id, icon_url, source, item_idx=i)
+            icons_started += 1
+            
+            # For first batch, continue to start more in parallel
+            # For subsequent items, only start one at a time
+            if i >= first_batch_size and icons_started > 0:
+                # Schedule retry for more icons
+                QTimer.singleShot(ICON_LOAD_RETRY_DELAY_MS, self._load_page_icons_sequential)
+                return
 
     def _cancel_all_icon_loads(self):
         """Cancel all pending icon load threads and wait for them to finish."""
@@ -2871,12 +2888,19 @@ class ModBrowserDialog(QDialog):
         self._preload_icons_gradually(results, source)
 
     def _preload_icons_gradually(self, results: list, source: str):
-        """Preload icons one at a time in the background."""
+        """Preload icons in the background.
+        
+        For the first PAGE_ICON_CACHE_SIZE (8) icons, loads them in parallel for speed.
+        For remaining icons, loads them one at a time.
+        """
         if not results:
             return
 
+        first_batch_size = PAGE_ICON_CACHE_SIZE
+        icons_started = 0
+
         # Find the next icon to preload
-        for mod in results:
+        for i, mod in enumerate(results):
             mod_id = mod.get('id', mod.get('slug', ''))
             icon_url = mod.get('icon_url', '')
 
@@ -2889,9 +2913,12 @@ class ModBrowserDialog(QDialog):
             if mod_id in self._loading_mod_ids:
                 continue
 
-            # Count active threads safely
+            # For the first batch, allow more parallel loads
+            # For subsequent items, limit to max concurrent loads
             active_count = sum(1 for t in self.icon_threads if self._thread_is_running(t))
-            if active_count >= self._max_concurrent_loads:
+            max_parallel = first_batch_size if i < first_batch_size else self._max_concurrent_loads
+            
+            if active_count >= max_parallel:
                 # Schedule retry later - use default params to capture current values
                 QTimer.singleShot(200, lambda r=results, s=source: self._preload_icons_gradually(r, s))
                 return
@@ -2905,9 +2932,16 @@ class ModBrowserDialog(QDialog):
                 thread.finished.connect(thread.deleteLater)
                 self.icon_threads.append(thread)
                 thread.start()
+                icons_started += 1
             except Exception:
                 self._loading_mod_ids.discard(mod_id)
-            return  # Only start one at a time for preload
+            
+            # For first batch, continue to start more in parallel
+            # For subsequent items, only start one at a time
+            if i >= first_batch_size and icons_started > 0:
+                # Schedule retry for more icons
+                QTimer.singleShot(100, lambda r=results, s=source: self._preload_icons_gradually(r, s))
+                return
 
     def _on_preload_icon_complete(self, mod_id: str, results: list, source: str):
         """Handle completion of a preload icon fetch."""
@@ -3147,14 +3181,17 @@ class ModBrowserDialog(QDialog):
         self.versions_combo.clear()
         self.versions_combo.addItem("Loading versions...")
 
-        if self.version_thread and self.version_thread.isRunning():
+        # Use safe thread check to avoid RuntimeError on deleted C++ objects
+        if self._thread_is_running(self.version_thread):
             self.version_thread.stop()
             self.version_thread.wait()
+        self.version_thread = None  # Clear reference after stopping
 
         game_version = self.version_filter.text().strip()
         self.version_thread = ModVersionFetchThread(mod['source'], mod['id'], game_version)
         self.version_thread.versions_fetched.connect(self.on_versions_fetched)
         self.version_thread.error_occurred.connect(self.on_versions_error)
+        self.version_thread.finished.connect(self._on_version_thread_finished)
         self.version_thread.finished.connect(self.version_thread.deleteLater)
         self.version_thread.start()
 
@@ -3162,13 +3199,16 @@ class ModBrowserDialog(QDialog):
         self.description_browser.setHtml("<i>Loading description...</i>")
 
         # Fetch full description AFTER starting version fetch
-        if self.description_thread and self.description_thread.isRunning():
+        # Use safe thread check to avoid RuntimeError on deleted C++ objects
+        if self._thread_is_running(self.description_thread):
             self.description_thread.stop()
             self.description_thread.wait(1000)  # Wait up to 1 second
+        self.description_thread = None  # Clear reference after stopping
 
         self.description_thread = ModDescriptionFetchThread(mod['source'], mod['id'])
         self.description_thread.description_fetched.connect(self.on_description_fetched)
         self.description_thread.error_occurred.connect(self.on_description_error)
+        self.description_thread.finished.connect(self._on_description_thread_finished)
         self.description_thread.finished.connect(self.description_thread.deleteLater)
         self.description_thread.start()
 
@@ -3365,6 +3405,14 @@ class ModBrowserDialog(QDialog):
         """Reset state when the search thread finishes or is destroyed."""
         self.search_in_progress = False
         self.search_thread = None
+
+    def _on_version_thread_finished(self):
+        """Reset state when the version thread finishes or is destroyed."""
+        self.version_thread = None
+
+    def _on_description_thread_finished(self):
+        """Reset state when the description thread finishes or is destroyed."""
+        self.description_thread = None
 
     def _on_page_preload_complete(self, results: list, page: int, source: str):
         """Handle background preload results for a specific page without touching the UI.
@@ -4102,7 +4150,12 @@ class ModEditorPanel(QWidget):
         self.auto_hash_btn.setEnabled(True)
 
     def on_hash_error(self, error: str):
-        QMessageBox.warning(self, "Hash Error", f"Failed to calculate hash:\n{error}")
+        error_msg = f"Failed to calculate hash:\n{error}"
+        # Add helpful hint for common CurseForge errors
+        if "400" in error or "403" in error:
+            error_msg += "\n\nNote: Some CurseForge files may not be directly downloadable. " \
+                        "Try using a direct download link from the CurseForge website."
+        QMessageBox.warning(self, "Hash Error", error_msg)
         self.hash_progress.setVisible(False)
         self.auto_hash_btn.setEnabled(True)
 
@@ -4267,6 +4320,11 @@ class FileEditorPanel(QWidget):
         if not url:
             QMessageBox.warning(self, "No URL", "Please enter a URL first.")
             return
+        
+        # Validate URL format
+        if not url.startswith(('http://', 'https://')):
+            QMessageBox.warning(self, "Invalid URL", "URL must start with http:// or https://")
+            return
 
         self.hash_progress.setVisible(True)
         self.hash_progress.setValue(0)
@@ -4285,7 +4343,12 @@ class FileEditorPanel(QWidget):
         self.auto_hash_btn.setEnabled(True)
 
     def on_hash_error(self, error: str):
-        QMessageBox.warning(self, "Hash Error", f"Failed to calculate hash:\n{error}")
+        error_msg = f"Failed to calculate hash:\n{error}"
+        # Add helpful hint for common CurseForge errors
+        if "400" in error or "403" in error:
+            error_msg += "\n\nNote: Some CurseForge files may not be directly downloadable. " \
+                        "Try using a direct download link from the CurseForge website."
+        QMessageBox.warning(self, "Hash Error", error_msg)
         self.hash_progress.setVisible(False)
         self.auto_hash_btn.setEnabled(True)
 
@@ -5312,12 +5375,25 @@ class VersionEditorPage(QWidget):
                 background-color: {theme['accent']};
             }}
         """
+        placeholder_style = f"color: {theme['text_secondary']}; font-size: 16px; font-style: italic; background-color: transparent; padding: 16px;"
+        
         if hasattr(self, 'mod_right_container'):
             self.mod_right_container.setStyleSheet(container_style)
         if hasattr(self, 'file_right_container'):
             self.file_right_container.setStyleSheet(container_style)
         if hasattr(self, 'delete_right_container'):
             self.delete_right_container.setStyleSheet(container_style)
+        
+        # Update placeholder label styles
+        if hasattr(self, 'mod_placeholder'):
+            for label in self.mod_placeholder.findChildren(QLabel):
+                label.setStyleSheet(placeholder_style)
+        if hasattr(self, 'file_placeholder'):
+            for label in self.file_placeholder.findChildren(QLabel):
+                label.setStyleSheet(placeholder_style)
+        if hasattr(self, 'delete_placeholder'):
+            for label in self.delete_placeholder.findChildren(QLabel):
+                label.setStyleSheet(placeholder_style)
 
     # === Lazy Icon Loading Methods ===
 
@@ -5567,7 +5643,7 @@ class VersionSelectionPage(QWidget):
 
     def on_delete_version(self, version: str):
         """Handle version delete request."""
-        # Show confirmation dialog
+        # Show confirmation dialog with note about saving
         dialog = ConfirmDeleteDialog(version, "version", self)
         if dialog.exec():
             # Remove version from local storage
@@ -5575,6 +5651,12 @@ class VersionSelectionPage(QWidget):
                 del self.versions[version]
                 self.refresh_grid()
                 self.version_deleted.emit(version)
+                # Inform user that they need to save changes to persist the deletion
+                QMessageBox.information(
+                    self, "Version Deleted",
+                    f"Version '{version}' has been deleted locally.\n\n"
+                    "Click 'Save All' in the sidebar to permanently remove it from the repository."
+                )
     
     def add_version(self):
         existing = list(self.versions.keys())
@@ -5895,6 +5977,7 @@ class MainWindow(QMainWindow):
         self.versions: Dict[str, VersionConfig] = {}
         self.current_theme = "dark"
         self.pending_changes: List[Tuple[str, str, str]] = []  # (path, content, sha)
+        self._has_unsaved_deletions = False  # Track if any versions/mods/files were deleted
         
         # New data model: single files for all versions
         self.all_mods: List[ModEntry] = []
@@ -6135,6 +6218,7 @@ class MainWindow(QMainWindow):
             self.modpack_config = None
             self.file_shas = {}
             self.versions = {}
+            self._has_unsaved_deletions = False  # Reset deletion flag
             
             # Fetch config.json (main config file)
             config_file = f"{config_path}/config.json" if config_path else "config.json"
@@ -6349,6 +6433,9 @@ class MainWindow(QMainWindow):
         # Remove from versions dict
         if version in self.versions:
             del self.versions[version]
+        
+        # Mark that we have unsaved deletions
+        self._has_unsaved_deletions = True
         
         # Note: We don't delete from GitHub here - that would be done in save_all or a separate operation
         # For now, just remove from local state and let the user save changes
@@ -6628,6 +6715,8 @@ class MainWindow(QMainWindow):
             # Mark all versions as not modified
             for config in self.versions.values():
                 config.modified = False
+            # Clear the unsaved deletions flag
+            self._has_unsaved_deletions = False
             QMessageBox.information(self, "Saved", "All changes saved to GitHub successfully!")
     
     def validate_all(self):
@@ -6713,7 +6802,7 @@ class MainWindow(QMainWindow):
         self._shutdown_threads()
         
         # Check for unsaved changes
-        has_unsaved = any(v.modified for v in self.versions.values())
+        has_unsaved = any(v.modified for v in self.versions.values()) or self._has_unsaved_deletions
         
         if has_unsaved:
             # Create custom message box with only Back and Exit buttons
