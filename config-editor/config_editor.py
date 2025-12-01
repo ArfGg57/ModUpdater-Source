@@ -2817,7 +2817,7 @@ class ModBrowserDialog(QDialog):
 
         # First page button (far left)
         self.first_page_btn = QPushButton("⏮")
-        self.first_page_btn.setFixedSize(32, 28)
+        self.first_page_btn.setFixedSize(28, 26)
         self.first_page_btn.setToolTip("Go to first page")
         self.first_page_btn.clicked.connect(self._go_to_first_page)
         pagination_layout.addWidget(self.first_page_btn)
@@ -2884,7 +2884,7 @@ class ModBrowserDialog(QDialog):
 
         # Last page button (far right)
         self.last_page_btn = QPushButton("⏭")
-        self.last_page_btn.setFixedSize(32, 28)
+        self.last_page_btn.setFixedSize(28, 26)
         self.last_page_btn.setToolTip("Go to last page")
         self.last_page_btn.clicked.connect(self._go_to_last_page)
         pagination_layout.addWidget(self.last_page_btn)
