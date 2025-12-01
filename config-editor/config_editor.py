@@ -1050,7 +1050,7 @@ class SetupDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(cancel_btn)
         button_layout.addStretch()
-        save_btn = QPushButton("Save & Continue")
+        save_btn = QPushButton("Save")
         save_btn.setObjectName("primaryButton")
         save_btn.clicked.connect(self.validate_and_accept)
         button_layout.addWidget(save_btn)
