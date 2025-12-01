@@ -2075,11 +2075,11 @@ class ModBrowserDialog(QDialog):
         
         # Preload for both sources independently
         for source in ['curseforge', 'modrinth']:
-            # Page 0 (first page): LARGE_LOAD_AMOUNT
+            # Page 0: LARGE_LOAD_AMOUNT icons
             cls._fetch_and_preload_page_static(source, 0, LARGE_LOAD_AMOUNT)
-            # Page 1 (second page): LARGE_LOAD_AMOUNT 
+            # Page 1: LARGE_LOAD_AMOUNT icons
             cls._fetch_and_preload_page_static(source, 1, LARGE_LOAD_AMOUNT)
-            # Page 2 (third page): SMALL_LOAD_AMOUNT
+            # Page 2: SMALL_LOAD_AMOUNT icons
             cls._fetch_and_preload_page_static(source, 2, SMALL_LOAD_AMOUNT)
     
     @classmethod
