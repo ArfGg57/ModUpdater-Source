@@ -89,6 +89,8 @@ ICON_MAX_CONCURRENT_LOADS = 4  # Maximum number of concurrent icon downloads (re
 ICON_LOAD_DEBOUNCE_MS = 50  # Debounce delay for scroll events (ms)
 ICON_PRELOAD_DELAY_MS = 300  # Delay before starting background preload (ms)
 ICON_CASCADE_THRESHOLD_DIVISOR = 2  # Divisor for max concurrent loads to determine cascade trigger threshold
+ICON_LOAD_RETRY_DELAY_MS = 100  # Delay before retrying icon loads (ms)
+ICON_LOAD_INITIAL_DELAY_MS = 10  # Small delay before starting icon loads (ms)
 
 # Placeholder icon (base64-encoded gray box with package emoji concept)
 # This is a simple 48x48 gray placeholder that indicates "loading"
@@ -2482,6 +2484,8 @@ class ModBrowserDialog(QDialog):
         self.first_page_btn.setEnabled(self.current_page > 0)
         self.prev_page_btn.setEnabled(self.current_page > 0)
         self.next_page_btn.setEnabled(self.has_more_results or self.current_page < total_pages - 1)
+        # Last button is only enabled when we know the total pages (has_more_results is False)
+        # because we can't navigate to the last page if we don't know what it is
         self.last_page_btn.setEnabled(not self.has_more_results and self.current_page < total_pages - 1)
     
     def _estimate_total_pages(self) -> int:
@@ -2635,7 +2639,7 @@ class ModBrowserDialog(QDialog):
         self.search_status.setText(status_text)
         
         # Start loading icons from top to bottom
-        QTimer.singleShot(10, self._load_page_icons_sequential)
+        QTimer.singleShot(ICON_LOAD_INITIAL_DELAY_MS, self._load_page_icons_sequential)
     
     def _on_page_load_error(self, error: str):
         """Handle page load error."""
@@ -2698,7 +2702,7 @@ class ModBrowserDialog(QDialog):
             active_count = sum(1 for t in self.icon_threads if t.isRunning())
             if active_count >= self._max_concurrent_loads:
                 # Schedule retry later
-                QTimer.singleShot(100, self._load_page_icons_sequential)
+                QTimer.singleShot(ICON_LOAD_RETRY_DELAY_MS, self._load_page_icons_sequential)
                 return
             
             # Start loading this icon
