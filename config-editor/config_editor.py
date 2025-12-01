@@ -80,6 +80,9 @@ DEFAULT_VERSION = "1.0.0"  # Default version for new mods/files
 SEARCH_PAGE_SIZE = 50  # Number of mods to load per page
 INFINITE_SCROLL_THRESHOLD = 0.9  # Load more when scrolled to 90% of list
 
+# Image scaling settings
+MAX_DESCRIPTION_IMAGE_WIDTH = 400  # Maximum width for images in mod descriptions
+
 # CurseForge API configuration
 # Using the curse.tools proxy for CurseForge API (doesn't require API key)
 CF_PROXY_BASE_URL = "https://api.curse.tools/v1/cf"
@@ -734,6 +737,28 @@ class RemoteImageTextBrowser(QTextBrowser):
         self._pending_loads.clear()
         self._pending_urls.clear()
         
+        # Scale images to fit within the browser width
+        # Add max-width and height:auto to all img tags to make them responsive
+        def add_img_style(match):
+            img_tag = match.group(0)
+            style_to_add = 'max-width: 100%; height: auto;'
+            # Check if style already exists
+            style_match = re.search(r'style=["\']([^"\']*)["\']', img_tag, re.IGNORECASE)
+            if style_match:
+                # Append to existing style
+                existing_style = style_match.group(1).rstrip(';')
+                new_style = f'{existing_style}; {style_to_add}'
+                img_tag = img_tag[:style_match.start(1)] + new_style + img_tag[style_match.end(1):]
+            else:
+                # Add new style attribute before the closing > or />
+                if img_tag.rstrip().endswith('/>'):
+                    img_tag = img_tag.rstrip()[:-2] + f' style="{style_to_add}" />'
+                else:
+                    img_tag = img_tag.rstrip()[:-1] + f' style="{style_to_add}">'
+            return img_tag
+        
+        html = re.sub(r'<img[^>]*/?>', add_img_style, html, flags=re.IGNORECASE)
+        
         # Find all image URLs in the HTML
         img_pattern = r'<img[^>]+src=["\']([^"\']+)["\']'
         urls = re.findall(img_pattern, html, re.IGNORECASE)
@@ -766,6 +791,9 @@ class RemoteImageTextBrowser(QTextBrowser):
     
     def _on_image_loaded(self, url: str, image: QImage):
         """Handle image loaded from thread."""
+        # Scale large images to fit within the browser width
+        if image.width() > MAX_DESCRIPTION_IMAGE_WIDTH:
+            image = image.scaledToWidth(MAX_DESCRIPTION_IMAGE_WIDTH, Qt.TransformationMode.SmoothTransformation)
         self._image_cache[url] = image
         # Add the resource to the document directly to avoid full reload
         if PYQT_VERSION == 6:
@@ -1945,59 +1973,23 @@ class ModBrowserDialog(QDialog):
         
         splitter.addWidget(left_panel)
         
-        # Right: Mod details and versions - expanded
+        # Right: Full description area (removed selected mod details box)
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(8)
         
-        # Mod info - expanded with scrollable description
-        self.mod_info_group = QGroupBox("📌 Selected Mod Details")
-        mod_info_layout = QVBoxLayout(self.mod_info_group)
-        
-        # Header info (name, author, downloads, summary) - compact at top
-        header_widget = QFrame()
-        header_widget.setStyleSheet(f"""
-            QFrame {{
-                background-color: {theme['bg_tertiary']};
-                border: 1px solid {theme['border']};
-                border-radius: 8px;
-                padding: 8px;
-            }}
-            QLabel {{
-                background-color: transparent;
-            }}
-        """)
-        header_widget.setMaximumHeight(120)  # Limit header height to give more space to description
-        header_layout = QFormLayout(header_widget)
-        header_layout.setContentsMargins(8, 8, 8, 8)
-        header_layout.setSpacing(4)
-        
-        self.mod_name_label = QLabel("(Select a mod from the list)")
-        self.mod_name_label.setStyleSheet(f"font-weight: bold; font-size: 13px; color: {theme['accent']};")
-        header_layout.addRow("Name:", self.mod_name_label)
-        
-        self.mod_author_label = QLabel("")
-        header_layout.addRow("Author:", self.mod_author_label)
-        
-        self.mod_downloads_label = QLabel("")
-        header_layout.addRow("Downloads:", self.mod_downloads_label)
-        
-        self.mod_summary_label = QLabel("")
-        self.mod_summary_label.setWordWrap(True)
-        self.mod_summary_label.setMaximumHeight(40)  # Limit summary height
-        header_layout.addRow("Summary:", self.mod_summary_label)
-        
-        mod_info_layout.addWidget(header_widget)
-        
-        # Scrollable full description area
-        description_header = QLabel("📖 Full Description:")
-        description_header.setStyleSheet("font-weight: bold; margin-top: 8px;")
-        mod_info_layout.addWidget(description_header)
+        # Description header with mod name
+        self.mod_info_header = QLabel("📖 Select a mod to view its description")
+        self.mod_info_header.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {theme['accent']}; padding: 4px 0;")
+        self.mod_info_header.setWordWrap(True)
+        right_layout.addWidget(self.mod_info_header)
         
         # Use RemoteImageTextBrowser for rich HTML content with images (loads remote images)
+        # This now takes up the full area for description
         self.description_browser = RemoteImageTextBrowser()
         self.description_browser.setOpenExternalLinks(True)  # Allow clicking links
-        self.description_browser.setMinimumHeight(150)
+        self.description_browser.setMinimumHeight(200)
         theme = get_current_theme()
         self.description_browser.setStyleSheet(f"""
             QTextBrowser {{
@@ -2007,9 +1999,7 @@ class ModBrowserDialog(QDialog):
                 padding: 8px;
             }}
         """)
-        mod_info_layout.addWidget(self.description_browser, 1)
-        
-        right_layout.addWidget(self.mod_info_group, 1)
+        right_layout.addWidget(self.description_browser, 1)
         
         # Version selection - dropdown instead of list
         version_layout = QHBoxLayout()
@@ -2185,10 +2175,7 @@ class ModBrowserDialog(QDialog):
         self.selected_mod = None
         self.selected_version = None
         self.add_btn.setEnabled(False)
-        self.mod_name_label.setText("(Select a mod from the list)")
-        self.mod_author_label.setText("")
-        self.mod_downloads_label.setText("")
-        self.mod_summary_label.setText("")
+        self.mod_info_header.setText("📖 Select a mod to view its description")
         self.description_browser.setHtml("")
         # Reset infinite scroll
         self.all_search_results = []
@@ -2261,11 +2248,8 @@ class ModBrowserDialog(QDialog):
         self.selected_version = None
         self.add_btn.setEnabled(False)
         
-        # Update mod info
-        self.mod_name_label.setText(mod['name'])
-        self.mod_author_label.setText(mod['author'])
-        self.mod_downloads_label.setText(f"{mod['downloads']:,}")
-        self.mod_summary_label.setText(mod['summary'])
+        # Update mod info header with name, author, downloads info
+        self.mod_info_header.setText(f"📖 {mod['name']} by {mod['author']} • {mod['downloads']:,} downloads")
         self.description_browser.setHtml("<i>Loading full description...</i>")
         
         # Fetch full description
@@ -2578,8 +2562,8 @@ class VersionCard(QFrame):
             header_layout.setContentsMargins(0, 0, 0, 0)
             header_layout.addStretch()
             
-            # Create clickable delete button
-            self.delete_button = QPushButton("✕")
+            # Create clickable delete button with visible X
+            self.delete_button = QPushButton("×")
             self.delete_button.setFixedSize(20, 20)
             self.delete_button.setToolTip("Delete this version")
             self.delete_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -2590,7 +2574,8 @@ class VersionCard(QFrame):
                     border: none;
                     border-radius: 10px;
                     font-weight: bold;
-                    font-size: 12px;
+                    font-size: 16px;
+                    padding: 0 0 2px 0;
                 }}
                 QPushButton:hover {{
                     background-color: {theme['accent_hover']};
@@ -3529,7 +3514,7 @@ class VersionEditorPage(QWidget):
         self.mod_right_container.setStyleSheet(f"""
             QFrame {{
                 background-color: {theme['bg_secondary']};
-                border: 1px solid {theme['border']};
+                border: none;
                 border-radius: 8px;
                 margin: 4px;
             }}
@@ -3609,7 +3594,7 @@ class VersionEditorPage(QWidget):
         self.file_right_container.setStyleSheet(f"""
             QFrame {{
                 background-color: {theme['bg_secondary']};
-                border: 1px solid {theme['border']};
+                border: none;
                 border-radius: 8px;
                 margin: 4px;
             }}
@@ -3687,7 +3672,7 @@ class VersionEditorPage(QWidget):
         self.delete_right_container.setStyleSheet(f"""
             QFrame {{
                 background-color: {theme['bg_secondary']};
-                border: 1px solid {theme['border']};
+                border: none;
                 border-radius: 8px;
                 margin: 4px;
             }}
@@ -4292,7 +4277,7 @@ class VersionEditorPage(QWidget):
         container_style = f"""
             QFrame {{
                 background-color: {theme['bg_secondary']};
-                border: 1px solid {theme['border']};
+                border: none;
                 border-radius: 8px;
                 margin: 4px;
             }}
