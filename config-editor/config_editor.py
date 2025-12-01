@@ -78,6 +78,52 @@ DEFAULT_VERSION = "1.0.0"  # Default version for new mods/files
 
 # Search/pagination settings
 SEARCH_PAGE_SIZE = 50  # Number of mods to load per page
+CURSEFORGE_MAX_PAGES = 200  # CurseForge API limit
+
+# Minecraft version dropdown options (common versions)
+MC_VERSION_OPTIONS = [
+    "",  # Empty for no filter
+    "1.21.4", "1.21.3", "1.21.2", "1.21.1", "1.21",
+    "1.20.6", "1.20.4", "1.20.2", "1.20.1", "1.20",
+    "1.19.4", "1.19.3", "1.19.2", "1.19.1", "1.19",
+    "1.18.2", "1.18.1", "1.18",
+    "1.17.1", "1.17",
+    "1.16.5", "1.16.4", "1.16.3", "1.16.2", "1.16.1", "1.16",
+    "1.15.2", "1.15.1", "1.15",
+    "1.14.4", "1.14.3", "1.14.2", "1.14.1", "1.14",
+    "1.12.2", "1.12.1", "1.12",
+    "1.11.2", "1.11.1", "1.11",
+    "1.10.2", "1.10.1", "1.10",
+    "1.9.4", "1.9",
+    "1.8.9", "1.8.8", "1.8",
+    "1.7.10", "1.7.2",
+]
+
+# Sort options for mod sources
+CURSEFORGE_SORT_OPTIONS = {
+    "Relevance": "1",
+    "Downloads": "2",
+    "Popularity": "6",
+    "Creation Date": "4",
+    "Latest Update": "3",
+}
+
+MODRINTH_SORT_OPTIONS = {
+    "Relevance": "relevance",
+    "Downloads": "downloads",
+    "Followers": "follows",
+    "Date Published": "newest",
+    "Date Updated": "updated",
+}
+
+# Mod loader options
+MOD_LOADER_OPTIONS = {
+    "Both": "",
+    "Forge": "forge",
+    "Fabric": "fabric",
+    "NeoForge": "neoforge",
+    "Quilt": "quilt",
+}
 
 # Image scaling settings
 MAX_DESCRIPTION_IMAGE_WIDTH = 400  # Maximum width for images in mod descriptions
@@ -85,6 +131,10 @@ MAX_DESCRIPTION_IMAGE_WIDTH = 400  # Maximum width for images in mod description
 # Icon loading settings (simplified)
 ICON_MAX_CONCURRENT_LOADS = 4  # Maximum number of concurrent icon downloads
 ICON_LOAD_DEBOUNCE_MS = 100  # Debounce delay for scroll events (ms)
+
+# Preloading settings
+STARTUP_PRELOAD_PAGES = 1  # Number of pages to preload for each source on startup
+NEXT_PAGE_PRELOAD_ICONS = 20  # Number of icons to preload from the next page
 
 # CurseForge API configuration
 # Using the curse.tools proxy for CurseForge API (doesn't require API key)
@@ -1138,6 +1188,94 @@ class VersionConfig:
 
 
 # === Dialogs ===
+class LoadingDialog(QDialog):
+    """Loading dialog shown during startup while preloading icons."""
+    icons_loaded = pyqtSignal()  # Emitted when icons are loaded
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setup_ui()
+        self._check_timer = None
+    
+    def setup_ui(self):
+        self.setWindowTitle("Loading...")
+        self.setFixedSize(300, 120)
+        self.setModal(True)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        
+        theme = get_current_theme()
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {theme['bg_primary']};
+                border: 2px solid {theme['accent']};
+                border-radius: 12px;
+            }}
+        """)
+        
+        layout = QVBoxLayout(self)
+        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
+        
+        # Loading text
+        self.label = QLabel("Loading mod icons...")
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {theme['text_primary']};")
+        layout.addWidget(self.label)
+        
+        # Progress bar
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)  # Indeterminate
+        self.progress.setStyleSheet(f"""
+            QProgressBar {{
+                background-color: {theme['bg_secondary']};
+                border: none;
+                border-radius: 4px;
+                text-align: center;
+                height: 8px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {theme['accent']};
+                border-radius: 4px;
+            }}
+        """)
+        layout.addWidget(self.progress)
+    
+    def start_checking(self):
+        """Start checking if icons are loaded."""
+        self._check_timer = QTimer()
+        self._check_timer.timeout.connect(self._check_loading_complete)
+        self._check_timer.start(100)  # Check every 100ms
+    
+    def _check_loading_complete(self):
+        """Check if preloading is complete."""
+        # Use public method to check loaded icon counts
+        cf_loaded = ModBrowserDialog.get_loaded_icon_count('curseforge')
+        mr_loaded = ModBrowserDialog.get_loaded_icon_count('modrinth')
+        
+        # Consider loaded if we have at least some icons from each source
+        min_icons_per_source = min(5, SEARCH_PAGE_SIZE // 2)
+        
+        if cf_loaded >= min_icons_per_source and mr_loaded >= min_icons_per_source:
+            self._finish_loading()
+        elif cf_loaded + mr_loaded >= min_icons_per_source * 2:
+            # If total is enough even if one source has more
+            self._finish_loading()
+    
+    def _finish_loading(self):
+        """Finish loading and close dialog."""
+        if self._check_timer:
+            self._check_timer.stop()
+        self.icons_loaded.emit()
+        self.accept()
+    
+    def force_close(self):
+        """Force close after timeout."""
+        if self._check_timer:
+            self._check_timer.stop()
+        self.icons_loaded.emit()
+        self.accept()
+
+
 class APITokenGuideDialog(QDialog):
     """Dialog showing how to create a GitHub API token."""
     
@@ -1651,11 +1789,13 @@ class ModSearchThread(QThread):
     search_complete = pyqtSignal(list, int)  # results, total_count
     error_occurred = pyqtSignal(str)
     
-    def __init__(self, source: str, query: str, version_filter: str = ""):
+    def __init__(self, source: str, query: str, version_filter: str = "", sort_by: str = "", loader_filter: str = ""):
         super().__init__()
         self.source = source
         self.query = query
         self.version_filter = version_filter
+        self.sort_by = sort_by  # Sort option (source-specific value)
+        self.loader_filter = loader_filter  # Mod loader filter (forge, fabric, etc.)
         self.offset = 0  # For pagination/infinite scroll
         self._running = True
     
@@ -1675,10 +1815,12 @@ class ModSearchThread(QThread):
     def _search_curseforge(self) -> tuple:
         """Search CurseForge for mods. Returns (results, total_count)."""
         # Use curse.tools proxy API
+        # Default to relevance (sortField 1) if not specified
+        sort_field = self.sort_by if self.sort_by else CURSEFORGE_SORT_OPTIONS.get("Relevance", "1")
         params = {
             'gameId': '432',  # Minecraft
             'classId': '6',   # Mods
-            'sortField': '2',  # Popularity (download count)
+            'sortField': sort_field,
             'sortOrder': 'desc',
             'pageSize': str(SEARCH_PAGE_SIZE),
             'index': str(self.offset)  # For pagination
@@ -1688,6 +1830,13 @@ class ModSearchThread(QThread):
             params['searchFilter'] = self.query
         if self.version_filter:
             params['gameVersion'] = self.version_filter
+        # Add mod loader filter for CurseForge
+        if self.loader_filter:
+            # CurseForge uses modLoaderType: 1=Forge, 4=Fabric, 5=Quilt, 6=NeoForge
+            loader_map = {'forge': '1', 'fabric': '4', 'quilt': '5', 'neoforge': '6'}
+            loader_value = loader_map.get(self.loader_filter.lower())
+            if loader_value:
+                params['modLoaderType'] = loader_value
         
         query_str = urllib.parse.urlencode(params)
         url = f"{CF_PROXY_BASE_URL}/mods/search?{query_str}"
@@ -1719,12 +1868,17 @@ class ModSearchThread(QThread):
         facets = [['project_type:mod']]
         if self.version_filter:
             facets.append([f'versions:{self.version_filter}'])
+        # Add mod loader filter for Modrinth
+        if self.loader_filter:
+            facets.append([f'categories:{self.loader_filter.lower()}'])
         
+        # Default to relevance if not specified
+        sort_index = self.sort_by if self.sort_by else MODRINTH_SORT_OPTIONS.get("Relevance", "relevance")
         params = {
             'facets': json.dumps(facets),
             'limit': str(SEARCH_PAGE_SIZE),
             'offset': str(self.offset),  # For pagination
-            'index': 'downloads'  # Sort by downloads
+            'index': sort_index
         }
         # Only add query if not empty
         if self.query:
@@ -1923,25 +2077,31 @@ class ModBrowserDialog(QDialog):
     
     @classmethod
     def start_startup_preload(cls):
-        """Preload first page icons for both sources at program startup."""
+        """Preload first page(s) icons for both sources at program startup."""
         if cls._startup_preload_started:
             return
         cls._startup_preload_started = True
         
-        # Preload first page for both sources
+        # Preload pages for both sources based on STARTUP_PRELOAD_PAGES setting
         for source in ['curseforge', 'modrinth']:
-            cls._preload_first_page(source)
+            for page in range(STARTUP_PRELOAD_PAGES):
+                cls._preload_page(source, page)
     
     @classmethod
-    def _preload_first_page(cls, source: str):
-        """Fetch and preload icons for the first page of a source."""
+    def _preload_page(cls, source: str, page: int):
+        """Fetch and preload icons for a specific page of a source."""
         thread = ModSearchThread(source, "", "")
-        thread.offset = 0
+        thread.offset = page * SEARCH_PAGE_SIZE
         thread.search_complete.connect(
             lambda results, total, s=source: cls._on_preload_results(results, s))
         thread.finished.connect(thread.deleteLater)
         cls._startup_preload_threads.append(thread)
         thread.start()
+    
+    @classmethod
+    def _preload_first_page(cls, source: str):
+        """Fetch and preload icons for the first page of a source."""
+        cls._preload_page(source, 0)
     
     @classmethod
     def _on_preload_results(cls, results: list, source: str):
@@ -1983,6 +2143,11 @@ class ModBrowserDialog(QDialog):
         """Handle preload completion - remove from tracking set."""
         if source in cls._preloading_icons:
             cls._preloading_icons[source].discard(mod_id)
+    
+    @classmethod
+    def get_loaded_icon_count(cls, source: str) -> int:
+        """Get the number of loaded icons for a source."""
+        return len(cls._icon_cache.get(source, {}))
     
     def __init__(self, existing_ids: List[str], current_version: str = "1.0.0", parent=None):
         super().__init__(parent)
@@ -2075,22 +2240,57 @@ class ModBrowserDialog(QDialog):
         self.search_edit.returnPressed.connect(self.search_mods)
         search_layout.addWidget(self.search_edit, 1)
 
-        version_lbl = QLabel("MC Version:")
-        version_lbl.setStyleSheet("margin:0; padding:0;")
-        search_layout.addWidget(version_lbl)
-
-        self.version_filter = QLineEdit()
-        self.version_filter.setPlaceholderText("e.g., 1.12.2")
-        self.version_filter.setFixedWidth(100)
-        self.version_filter.returnPressed.connect(self.search_mods)
-        search_layout.addWidget(self.version_filter)
-
         search_btn = QPushButton("Search")
         search_btn.setObjectName("primaryButton")
         search_btn.clicked.connect(self.search_mods)
         search_layout.addWidget(search_btn)
 
         layout.addLayout(search_layout)
+
+        # Filter row: MC Version, Sort, Loader
+        filter_layout = QHBoxLayout()
+        filter_layout.setSpacing(8)
+        filter_layout.setContentsMargins(0, 0, 0, 0)
+
+        # MC Version dropdown
+        version_lbl = QLabel("MC Version:")
+        version_lbl.setStyleSheet("margin:0; padding:0;")
+        filter_layout.addWidget(version_lbl)
+
+        self.version_filter = QComboBox()
+        self.version_filter.setEditable(True)  # Allow custom version input
+        self.version_filter.setFixedWidth(100)
+        self.version_filter.setPlaceholderText("Any")
+        for version in MC_VERSION_OPTIONS:
+            self.version_filter.addItem(version if version else "Any")
+        self.version_filter.setCurrentIndex(0)
+        self.version_filter.lineEdit().returnPressed.connect(self.search_mods)
+        filter_layout.addWidget(self.version_filter)
+
+        # Sort dropdown
+        sort_lbl = QLabel("Sort by:")
+        sort_lbl.setStyleSheet("margin:0; padding:0;")
+        filter_layout.addWidget(sort_lbl)
+
+        self.sort_combo = QComboBox()
+        self.sort_combo.setFixedWidth(130)
+        self._update_sort_options()
+        filter_layout.addWidget(self.sort_combo)
+
+        # Loader filter dropdown
+        loader_lbl = QLabel("Loader:")
+        loader_lbl.setStyleSheet("margin:0; padding:0;")
+        filter_layout.addWidget(loader_lbl)
+
+        self.loader_combo = QComboBox()
+        self.loader_combo.setFixedWidth(100)
+        for name in MOD_LOADER_OPTIONS.keys():
+            self.loader_combo.addItem(name)
+        self.loader_combo.setCurrentIndex(0)  # Default to "Both"
+        filter_layout.addWidget(self.loader_combo)
+
+        filter_layout.addStretch()
+        layout.addLayout(filter_layout)
 
         # Splitter for results / description
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -2452,6 +2652,73 @@ class ModBrowserDialog(QDialog):
         self.curseforge_source_btn.setStyleSheet(selected_style if self.curseforge_source_btn.isChecked() else normal_style)
         self.modrinth_source_btn.setStyleSheet(selected_style if self.modrinth_source_btn.isChecked() else normal_style)
 
+    def _update_sort_options(self):
+        """Update sort dropdown options based on current source."""
+        self.sort_combo.blockSignals(True)
+        self.sort_combo.clear()
+        
+        source = self._get_selected_source()
+        if source == 'curseforge':
+            for name in CURSEFORGE_SORT_OPTIONS.keys():
+                self.sort_combo.addItem(name)
+        else:
+            for name in MODRINTH_SORT_OPTIONS.keys():
+                self.sort_combo.addItem(name)
+        
+        # Default to Relevance
+        self.sort_combo.setCurrentIndex(0)
+        self.sort_combo.blockSignals(False)
+
+    def _get_current_sort_value(self) -> str:
+        """Get the current sort value for the API based on source."""
+        source = self._get_selected_source()
+        sort_name = self.sort_combo.currentText()
+        
+        if source == 'curseforge':
+            return CURSEFORGE_SORT_OPTIONS.get(sort_name, CURSEFORGE_SORT_OPTIONS.get("Relevance", "1"))
+        else:
+            return MODRINTH_SORT_OPTIONS.get(sort_name, MODRINTH_SORT_OPTIONS.get("Relevance", "relevance"))
+
+    def _preload_next_page_icons(self, page: int):
+        """Preload icons for the next page in the background."""
+        if self._is_loading_page:
+            return
+        
+        source = self._get_selected_source()
+        query = self.search_edit.text().strip()
+        
+        # Get version filter from combo box
+        version_text = self.version_filter.currentText().strip()
+        version_filter = version_text if version_text and version_text != "Any" else ""
+        
+        # Get sort option based on current source
+        sort_by = self._get_current_sort_value()
+        
+        # Get loader filter
+        loader_name = self.loader_combo.currentText()
+        loader_filter = MOD_LOADER_OPTIONS.get(loader_name, "")
+        
+        # Create a lightweight thread just for fetching the next page data
+        preload_thread = ModSearchThread(source, query, version_filter, sort_by, loader_filter)
+        preload_thread.offset = page * SEARCH_PAGE_SIZE
+        preload_thread.search_complete.connect(
+            lambda results, total, s=source: self._on_preload_page_results(results, s))
+        preload_thread.finished.connect(preload_thread.deleteLater)
+        self.icon_threads.append(preload_thread)
+        preload_thread.start()
+
+    def _on_preload_page_results(self, results: list, source: str):
+        """Handle preloaded page results - start fetching icons up to NEXT_PAGE_PRELOAD_ICONS."""
+        icons_to_preload = min(len(results), NEXT_PAGE_PRELOAD_ICONS)
+        for mod in results[:icons_to_preload]:
+            mod_id = mod.get('id', mod.get('slug', ''))
+            icon_url = mod.get('icon_url', '')
+            # Check both cache and preloading set to prevent duplicate loads
+            if (mod_id and icon_url and 
+                mod_id not in ModBrowserDialog._icon_cache.get(source, {}) and
+                mod_id not in ModBrowserDialog._preloading_icons.get(source, set())):
+                ModBrowserDialog._preload_single_icon(mod_id, icon_url, source)
+
     # Pagination methods
     def _update_pagination_controls(self):
         """Update pagination controls based on current state."""
@@ -2484,14 +2751,18 @@ class ModBrowserDialog(QDialog):
 
     def _estimate_total_pages(self) -> int:
         """Estimate total number of pages based on current data."""
+        source = self._get_selected_source()
+        max_pages = CURSEFORGE_MAX_PAGES if source == 'curseforge' else 9999
+        
         if self.total_results > 0:
-            return (self.total_results + SEARCH_PAGE_SIZE - 1) // SEARCH_PAGE_SIZE
+            calculated_pages = (self.total_results + SEARCH_PAGE_SIZE - 1) // SEARCH_PAGE_SIZE
+            return min(calculated_pages, max_pages)
         elif len(self.all_search_results) > 0:
             # If we have results but no total, estimate from current count
             pages_loaded = self.current_page + 1
             if self.has_more_results:
-                return pages_loaded + 1  # At least one more page
-            return pages_loaded
+                return min(pages_loaded + 1, max_pages)  # At least one more page
+            return min(pages_loaded, max_pages)
         return 1  # Minimum 1 page
 
     def _go_to_first_page(self):
@@ -2552,7 +2823,22 @@ class ModBrowserDialog(QDialog):
 
         source = self._get_selected_source()
         query = self.search_edit.text().strip()
-        version_filter = self.version_filter.text().strip()
+        
+        # Get version filter from combo box
+        version_text = self.version_filter.currentText().strip()
+        version_filter = version_text if version_text and version_text != "Any" else ""
+        
+        # Get sort option based on current source
+        sort_by = self._get_current_sort_value()
+        
+        # Get loader filter
+        loader_name = self.loader_combo.currentText()
+        loader_filter = MOD_LOADER_OPTIONS.get(loader_name, "")
+        
+        # Enforce CurseForge max page limit
+        if source == 'curseforge' and page >= CURSEFORGE_MAX_PAGES:
+            page = CURSEFORGE_MAX_PAGES - 1
+            self.current_page = page
 
         # Clear current results
         self.results_list.clear()
@@ -2575,7 +2861,7 @@ class ModBrowserDialog(QDialog):
             self.search_in_progress = False
 
         # Create search thread with offset for the target page
-        self.search_thread = ModSearchThread(source, query, version_filter)
+        self.search_thread = ModSearchThread(source, query, version_filter, sort_by, loader_filter)
         self.search_thread.offset = page * SEARCH_PAGE_SIZE
         self.search_thread.started.connect(lambda: setattr(self, "search_in_progress", True))
         self.search_thread.search_complete.connect(self._on_page_loaded)
@@ -2583,6 +2869,10 @@ class ModBrowserDialog(QDialog):
         self.search_thread.finished.connect(self._on_search_thread_finished)
         self.search_thread.finished.connect(self.search_thread.deleteLater)
         self.search_thread.start()
+        
+        # Preload next page icons for faster experience
+        if page < (CURSEFORGE_MAX_PAGES - 1 if source == 'curseforge' else 9999):
+            QTimer.singleShot(500, lambda: self._preload_next_page_icons(page + 1))
 
     def _on_page_loaded(self, results: list, total_count: int = 0):
         """Handle page load completion."""
@@ -2628,6 +2918,9 @@ class ModBrowserDialog(QDialog):
     def _display_page_results(self, results: list, source: str):
         """Display page results with cached icons applied immediately."""
         self.results_list.clear()
+        
+        # Create a placeholder icon for items without cached icons
+        placeholder_pixmap = self._create_placeholder_icon()
 
         for mod in results:
             item = QListWidgetItem()
@@ -2639,8 +2932,42 @@ class ModBrowserDialog(QDialog):
             if source in self._icon_cache and mod_id in self._icon_cache[source]:
                 # Apply cached icon immediately
                 self._apply_icon_to_item(item, self._icon_cache[source][mod_id])
+            else:
+                # Set placeholder icon while loading
+                if placeholder_pixmap:
+                    item.setIcon(QIcon(placeholder_pixmap))
 
             self.results_list.addItem(item)
+    
+    def _create_placeholder_icon(self) -> Optional[QPixmap]:
+        """Create a placeholder icon for items without cached icons."""
+        try:
+            theme = get_current_theme()
+            size = 40
+            pixmap = QPixmap(size, size)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            
+            from PyQt6.QtGui import QPainter, QFont, QColor
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            
+            # Draw a rounded rectangle background
+            bg_color = QColor(theme['bg_tertiary'])
+            painter.setBrush(bg_color)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(0, 0, size, size, 6, 6)
+            
+            # Draw the package emoji
+            font = QFont()
+            font.setPixelSize(20)
+            painter.setFont(font)
+            painter.setPen(QColor(theme['text_secondary']))
+            painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "📦")
+            
+            painter.end()
+            return pixmap
+        except Exception:
+            return None
 
     def _cancel_all_icon_loads(self):
         """Cancel all pending icon load threads."""
@@ -2690,6 +3017,9 @@ class ModBrowserDialog(QDialog):
     def on_source_changed(self):
         """Handle source tab change."""
         source = self._get_selected_source()
+        
+        # Update sort options for the new source
+        self._update_sort_options()
         
         # Restore page state for this source
         state = self._source_page_state.get(source, {'page': 0, 'total': 0, 'has_more': True})
@@ -2766,7 +3096,8 @@ class ModBrowserDialog(QDialog):
             self.version_thread.wait()
         self.version_thread = None  # Clear reference after stopping
 
-        game_version = self.version_filter.text().strip()
+        game_version_text = self.version_filter.currentText().strip()
+        game_version = game_version_text if game_version_text and game_version_text != "Any" else ""
         self.version_thread = ModVersionFetchThread(mod['source'], mod['id'], game_version)
         self.version_thread.versions_fetched.connect(self.on_versions_fetched)
         self.version_thread.error_occurred.connect(self.on_versions_error)
@@ -3466,6 +3797,15 @@ class ModEditorPanel(QWidget):
             self.file_id_edit.clear()
             self.url_edit.setText(source.get('url', ''))
 
+        # Hide auto-fill hash button for mods from Find and Add (curseforge/modrinth sources)
+        # because hash is automatically calculated for these mods
+        is_from_api_source = source_type in ['curseforge', 'modrinth']
+        self.auto_hash_btn.setVisible(not is_from_api_source)
+        
+        # Make hash field read-only for API sources (hash is auto-calculated)
+        # For URL sources, hash can still be edited if needed
+        self.hash_edit.setReadOnly(is_from_api_source)
+
         # Load icon preview
         self._update_icon_preview()
 
@@ -3477,7 +3817,7 @@ class ModEditorPanel(QWidget):
 
         # Auto-fill hash if from curseforge/modrinth and no hash is set
         # Use short delay to allow UI to update first before starting the hash calculation
-        if (source_type in ['curseforge', 'modrinth']) and not mod.hash:
+        if is_from_api_source and not mod.hash:
             QTimer.singleShot(100, self.auto_fill_hash)
 
     def _update_icon_preview(self):
@@ -3724,6 +4064,8 @@ class ModEditorPanel(QWidget):
             self.hash_calculator = None
         self.hash_progress.setVisible(False)
         self.auto_hash_btn.setEnabled(True)
+        self.auto_hash_btn.setVisible(True)  # Reset visibility for next mod
+        self.hash_edit.setReadOnly(True)  # Hash is always read-only, calculated via button or auto
         self.current_mod = None
         self.id_edit.clear()
         self.hash_edit.clear()
@@ -3768,9 +4110,24 @@ class FileEditorPanel(QWidget):
         info_group = QGroupBox("File Information")
         info_layout = QFormLayout(info_group)
 
+        # Info Name - saves as display_name in config
+        self.info_name_edit = QLineEdit()
+        self.info_name_edit.setPlaceholderText("Name saved to config (blank by default)")
+        info_layout.addRow("Info Name:", self.info_name_edit)
+        
+        theme = get_current_theme()
+        info_note = QLabel("Saved as 'display_name' in config file")
+        info_note.setStyleSheet(f"font-size: 11px; color: {theme['text_secondary']};")
+        info_layout.addRow("", info_note)
+
+        # Display Name - just for GUI display under cards
         self.display_name_edit = QLineEdit()
-        self.display_name_edit.setPlaceholderText("Display name")
+        self.display_name_edit.setPlaceholderText("Name shown under file card (GUI only)")
         info_layout.addRow("Display Name:", self.display_name_edit)
+        
+        display_note = QLabel("Shown under file card in editor only")
+        display_note.setStyleSheet(f"font-size: 11px; color: {theme['text_secondary']};")
+        info_layout.addRow("", display_note)
 
         self.file_name_edit = QLineEdit()
         self.file_name_edit.setPlaceholderText("Optional: custom filename")
@@ -3838,7 +4195,11 @@ class FileEditorPanel(QWidget):
 
     def load_file(self, file_entry: FileEntry):
         self.current_file = file_entry
-        self.display_name_edit.setText(file_entry.display_name)
+        # Info name saves to display_name in config
+        self.info_name_edit.setText(file_entry.display_name)
+        # Display name is GUI-only display name
+        gui_display_name = getattr(file_entry, '_gui_display_name', '') or file_entry.display_name or file_entry.file_name
+        self.display_name_edit.setText(gui_display_name if gui_display_name != file_entry.display_name else '')
         self.file_name_edit.setText(file_entry.file_name)
         self.url_edit.setText(file_entry.url)
         self.download_path_edit.setText(file_entry.download_path or 'config/')
@@ -3849,7 +4210,10 @@ class FileEditorPanel(QWidget):
     def save_changes(self):
         if not self.current_file:
             return
-        self.current_file.display_name = self.display_name_edit.text().strip()
+        # Info name saves to display_name in config
+        self.current_file.display_name = self.info_name_edit.text().strip()
+        # Store GUI display name separately (not saved to config)
+        self.current_file._gui_display_name = self.display_name_edit.text().strip()
         self.current_file.file_name = self.file_name_edit.text().strip()
         self.current_file.url = self.url_edit.text().strip()
         self.current_file.download_path = self.download_path_edit.text().strip() or 'config/'
@@ -3924,6 +4288,7 @@ class FileEditorPanel(QWidget):
         self.hash_progress.setVisible(False)
         self.auto_hash_btn.setEnabled(True)
         self.current_file = None
+        self.info_name_edit.clear()
         self.display_name_edit.clear()
         self.file_name_edit.clear()
         self.url_edit.clear()
@@ -4107,6 +4472,10 @@ class VersionEditorPage(QWidget):
         self.tabs.addTab(self.settings_tab, "Settings")
 
         main_layout.addWidget(self.tabs)
+        
+        # Refresh panel styles to ensure they match the current theme
+        # This is important because panels are created before theme is fully applied
+        QTimer.singleShot(0, self.refresh_editor_panels_style)
 
     def setup_mods_tab(self):
         layout = QHBoxLayout(self.mods_tab)
@@ -4459,6 +4828,7 @@ class VersionEditorPage(QWidget):
         # File editor controls
         self.file_editor.save_btn.setEnabled(enabled)
         # self.file_editor.delete_btn.setEnabled(enabled)  # Keep enabled for deleting
+        self.file_editor.info_name_edit.setReadOnly(not enabled)
         self.file_editor.display_name_edit.setReadOnly(not enabled)
         self.file_editor.file_name_edit.setReadOnly(not enabled)
         self.file_editor.url_edit.setReadOnly(not enabled)
@@ -4569,7 +4939,9 @@ class VersionEditorPage(QWidget):
 
         # Add file cards
         for i, file in enumerate(self.version_config.files):
-            card = ItemCard(file.display_name or file.file_name, file.icon_path)
+            # Use GUI display name if set, otherwise fall back to display_name or file_name
+            gui_display = getattr(file, '_gui_display_name', '') or file.display_name or file.file_name
+            card = ItemCard(gui_display, file.icon_path)
             card.clicked.connect(lambda idx=i: self.select_file(idx))
             self.files_grid.addWidget(card, row, col)
 
@@ -5544,9 +5916,7 @@ class MainWindow(QMainWindow):
         self.setup_ui()
         self.apply_theme(self.current_theme)
         
-        # Start preloading mod browser icons in background (runs before user opens dialog)
-        # This ensures icons are ready when user opens "Find and Add Mods"
-        QTimer.singleShot(500, ModBrowserDialog.start_startup_preload)
+        # Note: Icon preloading is now done in main() before showing the main window
         
         # Check for first-time setup
         QTimer.singleShot(100, self.check_setup)
@@ -6388,7 +6758,36 @@ def main():
     """Main entry point."""
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    
+    # Apply initial theme for loading dialog
+    set_current_theme("dark")
+    initial_theme = THEMES["dark"]
+    app.setStyleSheet(generate_stylesheet(initial_theme))
 
+    # Start preloading icons immediately
+    ModBrowserDialog.start_startup_preload()
+    
+    # Show loading dialog
+    loading_dialog = LoadingDialog()
+    
+    # Set a maximum timeout for loading (3 seconds)
+    timeout_timer = QTimer()
+    timeout_timer.setSingleShot(True)
+    timeout_timer.timeout.connect(loading_dialog.force_close)
+    timeout_timer.start(3000)
+    
+    loading_dialog.start_checking()
+    loading_dialog.show()
+    
+    # Process events while loading with small delay to reduce CPU usage
+    import time
+    while loading_dialog.isVisible():
+        app.processEvents()
+        time.sleep(0.01)  # 10ms delay to reduce CPU consumption
+    
+    timeout_timer.stop()
+    
+    # Create and show main window
     window = MainWindow()
     window.show()
 
