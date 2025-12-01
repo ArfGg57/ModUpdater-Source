@@ -1248,12 +1248,11 @@ class LoadingDialog(QDialog):
     
     def _check_loading_complete(self):
         """Check if preloading is complete."""
-        # Check if we have any icons loaded for both sources
-        cf_loaded = len(ModBrowserDialog._icon_cache.get('curseforge', {}))
-        mr_loaded = len(ModBrowserDialog._icon_cache.get('modrinth', {}))
+        # Use public method to check loaded icon counts
+        cf_loaded = ModBrowserDialog.get_loaded_icon_count('curseforge')
+        mr_loaded = ModBrowserDialog.get_loaded_icon_count('modrinth')
         
         # Consider loaded if we have at least some icons from each source
-        # or if some time has passed (max 5 seconds)
         min_icons_per_source = min(5, SEARCH_PAGE_SIZE // 2)
         
         if cf_loaded >= min_icons_per_source and mr_loaded >= min_icons_per_source:
@@ -2145,6 +2144,11 @@ class ModBrowserDialog(QDialog):
         if source in cls._preloading_icons:
             cls._preloading_icons[source].discard(mod_id)
     
+    @classmethod
+    def get_loaded_icon_count(cls, source: str) -> int:
+        """Get the number of loaded icons for a source."""
+        return len(cls._icon_cache.get(source, {}))
+    
     def __init__(self, existing_ids: List[str], current_version: str = "1.0.0", parent=None):
         super().__init__(parent)
         self.existing_ids = existing_ids
@@ -2964,8 +2968,6 @@ class ModBrowserDialog(QDialog):
             return pixmap
         except Exception:
             return None
-
-            self.results_list.addItem(item)
 
     def _cancel_all_icon_loads(self):
         """Cancel all pending icon load threads."""
@@ -4063,7 +4065,7 @@ class ModEditorPanel(QWidget):
         self.hash_progress.setVisible(False)
         self.auto_hash_btn.setEnabled(True)
         self.auto_hash_btn.setVisible(True)  # Reset visibility for next mod
-        self.hash_edit.setReadOnly(True)  # Keep read-only by default
+        self.hash_edit.setReadOnly(True)  # Hash is always read-only, calculated via button or auto
         self.current_mod = None
         self.id_edit.clear()
         self.hash_edit.clear()
@@ -6777,9 +6779,11 @@ def main():
     loading_dialog.start_checking()
     loading_dialog.show()
     
-    # Process events while loading
+    # Process events while loading with small delay to reduce CPU usage
+    import time
     while loading_dialog.isVisible():
         app.processEvents()
+        time.sleep(0.01)  # 10ms delay to reduce CPU consumption
     
     timeout_timer.stop()
     
