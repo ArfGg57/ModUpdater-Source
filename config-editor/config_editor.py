@@ -77,8 +77,9 @@ USER_AGENT = "ModUpdater-ConfigEditor"
 DEFAULT_VERSION = "1.0.0"  # Default version for new mods/files
 
 # Search/pagination settings
-SEARCH_PAGE_SIZE = 50  # Number of mods to load per page
-INFINITE_SCROLL_THRESHOLD = 0.9  # Load more when scrolled to 90% of list
+SEARCH_PAGE_SIZE = 100  # Number of mods to load per page
+PAGE_ICON_CACHE_SIZE = 8  # Number of icons to cache per page when navigating away
+MAX_CACHED_PAGES = 5  # Maximum number of pages to keep in cache
 
 # Image scaling settings
 MAX_DESCRIPTION_IMAGE_WIDTH = 400  # Maximum width for images in mod descriptions
@@ -88,6 +89,8 @@ ICON_MAX_CONCURRENT_LOADS = 4  # Maximum number of concurrent icon downloads (re
 ICON_LOAD_DEBOUNCE_MS = 50  # Debounce delay for scroll events (ms)
 ICON_PRELOAD_DELAY_MS = 300  # Delay before starting background preload (ms)
 ICON_CASCADE_THRESHOLD_DIVISOR = 2  # Divisor for max concurrent loads to determine cascade trigger threshold
+ICON_LOAD_RETRY_DELAY_MS = 100  # Delay before retrying icon loads (ms)
+ICON_LOAD_INITIAL_DELAY_MS = 10  # Small delay before starting icon loads (ms)
 
 # Placeholder icon (base64-encoded gray box with package emoji concept)
 # This is a simple 48x48 gray placeholder that indicates "loading"
@@ -1984,14 +1987,22 @@ class ModBrowserDialog(QDialog):
         self.icon_threads: List[QThread] = []  # Track icon loading threads
         self.selected_mod = None
         self.selected_version = None
-        self.all_search_results = []  # Store all results for infinite scroll
-        self.current_offset = 0
-        self.is_loading_more = False
-        self.has_more_results = True
+        self.all_search_results = []  # Store all results for current search
+        
+        # Pagination state
+        self.current_page = 0  # Current page index (0-based)
+        self.total_results = 0  # Total results from API (if available)
+        self.has_more_results = True  # Whether more results exist on the server
+        self._is_loading_page = False  # Whether a page is currently loading
         
         # Simplified icon loading system
         # Global icon cache: source -> {mod_id -> icon_bytes}
         self._icon_cache = {}  # Cache: source -> {mod_id -> icon_bytes}
+        
+        # Page-based icon caching: keeps track of icons loaded per page
+        # Structure: {page_number: [list of mod_ids cached from that page]}
+        self._page_icon_cache = {}  # page -> list of mod_ids for that page's cache
+        self._page_load_order = []  # Order in which pages were loaded (for LRU eviction)
         
         # Loading state tracking (simplified)
         self._loading_mod_ids = set()  # Set of mod_ids currently being loaded
@@ -2008,7 +2019,7 @@ class ModBrowserDialog(QDialog):
         QTimer.singleShot(100, self._load_and_preload_both_tabs)
 
     def setup_ui(self):
-        """Set up the UI for the mod browser dialog with minimal vertical blank space."""
+        """Set up the UI for the mod browser dialog with pagination controls."""
         self.setWindowTitle("Browse Mods - CurseForge / Modrinth")
         self.setMinimumSize(1220, 820)
         self.setModal(True)
@@ -2105,6 +2116,90 @@ class ModBrowserDialog(QDialog):
         self.search_status = QLabel("")
         self.search_status.setStyleSheet(f"font-size:11px; color:{theme['text_secondary']}; margin:0; padding:0;")
         left_layout.addWidget(self.search_status)
+        
+        # Pagination controls
+        pagination_layout = QHBoxLayout()
+        pagination_layout.setSpacing(4)
+        pagination_layout.setContentsMargins(0, 4, 0, 0)
+        
+        # First page button
+        self.first_page_btn = QPushButton("⏮ First")
+        self.first_page_btn.setFixedWidth(70)
+        self.first_page_btn.setToolTip("Go to first page")
+        self.first_page_btn.clicked.connect(self._go_to_first_page)
+        pagination_layout.addWidget(self.first_page_btn)
+        
+        # Previous page button
+        self.prev_page_btn = QPushButton("◀ Prev")
+        self.prev_page_btn.setFixedWidth(70)
+        self.prev_page_btn.setToolTip("Go to previous page")
+        self.prev_page_btn.clicked.connect(self._go_to_prev_page)
+        pagination_layout.addWidget(self.prev_page_btn)
+        
+        pagination_layout.addStretch()
+        
+        # Page indicator/selector
+        page_select_layout = QHBoxLayout()
+        page_select_layout.setSpacing(4)
+        
+        page_label = QLabel("Page:")
+        page_label.setStyleSheet("font-weight: bold;")
+        page_select_layout.addWidget(page_label)
+        
+        self.page_spin = QSpinBox()
+        self.page_spin.setMinimum(1)
+        self.page_spin.setMaximum(1)
+        self.page_spin.setValue(1)
+        self.page_spin.setFixedWidth(60)
+        self.page_spin.valueChanged.connect(self._on_page_spin_changed)
+        page_select_layout.addWidget(self.page_spin)
+        
+        self.page_total_label = QLabel("of 1")
+        self.page_total_label.setStyleSheet(f"color: {theme['text_secondary']};")
+        page_select_layout.addWidget(self.page_total_label)
+        
+        pagination_layout.addLayout(page_select_layout)
+        
+        pagination_layout.addStretch()
+        
+        # Next page button
+        self.next_page_btn = QPushButton("Next ▶")
+        self.next_page_btn.setFixedWidth(70)
+        self.next_page_btn.setToolTip("Go to next page")
+        self.next_page_btn.clicked.connect(self._go_to_next_page)
+        pagination_layout.addWidget(self.next_page_btn)
+        
+        # Last page button
+        self.last_page_btn = QPushButton("Last ⏭")
+        self.last_page_btn.setFixedWidth(70)
+        self.last_page_btn.setToolTip("Go to last page")
+        self.last_page_btn.clicked.connect(self._go_to_last_page)
+        pagination_layout.addWidget(self.last_page_btn)
+        
+        left_layout.addLayout(pagination_layout)
+        
+        # Style pagination buttons
+        pagination_btn_style = f"""
+            QPushButton {{
+                background-color: {theme['bg_tertiary']};
+                border: 1px solid {theme['border']};
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {theme['accent']};
+                color: {theme['bg_primary']};
+            }}
+            QPushButton:disabled {{
+                background-color: {theme['bg_secondary']};
+                color: {theme['text_secondary']};
+            }}
+        """
+        self.first_page_btn.setStyleSheet(pagination_btn_style)
+        self.prev_page_btn.setStyleSheet(pagination_btn_style)
+        self.next_page_btn.setStyleSheet(pagination_btn_style)
+        self.last_page_btn.setStyleSheet(pagination_btn_style)
 
         splitter.addWidget(left_panel)
 
@@ -2176,6 +2271,9 @@ class ModBrowserDialog(QDialog):
         # Update source button styles (after creation)
         self._update_source_button_styles()
         
+        # Initialize pagination state
+        self._update_pagination_controls()
+        
         # Set up debounce timer for scroll events (simplified icon loading)
         self._scroll_debounce_timer = QTimer()
         self._scroll_debounce_timer.setSingleShot(True)
@@ -2183,58 +2281,10 @@ class ModBrowserDialog(QDialog):
         self._scroll_debounce_timer.setInterval(ICON_LOAD_DEBOUNCE_MS)
     
     def _on_scroll(self, value):
-        """Handle scroll event for infinite scrolling and lazy icon loading."""
-        scrollbar = self.results_list.verticalScrollBar()
-        # Load more when near the bottom
-        if scrollbar.maximum() > 0 and value >= scrollbar.maximum() * INFINITE_SCROLL_THRESHOLD:
-            self._load_more_results()
-        
-        # Cancel icon loads for items that are no longer visible
-        # This prevents lag when scrolling quickly
-        self._cancel_nonvisible_icon_loads()
-        
+        """Handle scroll event for lazy icon loading."""
         # Debounce icon loading to avoid excessive processing during fast scrolls
         if self._scroll_debounce_timer:
             self._scroll_debounce_timer.start()
-    
-    def _cancel_nonvisible_icon_loads(self):
-        """Cancel icon loads for items that are no longer visible.
-        
-        This is called during scrolling to prevent lag from loading icons
-        for items the user has scrolled past. Only icons for items within
-        the visible range (plus a small buffer) are kept loading.
-        """
-        if not self.icon_threads:
-            return
-        
-        first_visible, last_visible = self._get_visible_range()
-        
-        # Add buffer zone to avoid cancelling too aggressively
-        visible_count = max(1, last_visible - first_visible + 1)
-        buffer_size = min(visible_count * 2, 10)  # Reasonable buffer
-        keep_start = max(0, first_visible - buffer_size)
-        keep_end = min(self.results_list.count() - 1, last_visible + buffer_size) if self.results_list.count() > 0 else 0
-        
-        # Cancel threads for items outside the keep range
-        threads_to_keep = []
-        for thread in self.icon_threads:
-            if not thread.isRunning():
-                continue
-            
-            # Check if this thread has an associated item index
-            # item_idx is dynamically added, mod_id is part of SimpleIconFetcher class
-            item_idx = getattr(thread, 'item_idx', -1)
-            
-            # If item is outside visible range, cancel the thread
-            if item_idx >= 0 and (item_idx < keep_start or item_idx > keep_end):
-                thread.stop()
-                # mod_id is an attribute of SimpleIconFetcher
-                if hasattr(thread, 'mod_id') and thread.mod_id:
-                    self._loading_mod_ids.discard(thread.mod_id)
-            else:
-                threads_to_keep.append(thread)
-        
-        self.icon_threads = threads_to_keep
     
     def _get_visible_range(self) -> Tuple[int, int]:
         """Get the range of currently visible item indices using efficient indexAt() method."""
@@ -2389,27 +2439,6 @@ class ModBrowserDialog(QDialog):
         """Legacy method - redirects to new implementation."""
         self._load_visible_icons()
     
-    def _load_more_results(self):
-        """Load more results for infinite scrolling."""
-        if self.is_loading_more or not self.has_more_results:
-            return
-        
-        self.is_loading_more = True
-        self.current_offset += SEARCH_PAGE_SIZE
-        
-        source = self._get_selected_source()
-        query = self.search_edit.text().strip()
-        version_filter = self.version_filter.text().strip()
-        
-        self.search_status.setText("Loading more...")
-        
-        # Create a new search thread with offset
-        self.search_thread = ModSearchThread(source, query, version_filter)
-        self.search_thread.offset = self.current_offset
-        self.search_thread.search_complete.connect(self._on_more_results)
-        self.search_thread.error_occurred.connect(self._on_load_more_error)
-        self.search_thread.start()
-    
     def _get_selected_source(self) -> str:
         """Get the currently selected source."""
         return 'curseforge' if self.curseforge_source_btn.isChecked() else 'modrinth'
@@ -2431,18 +2460,197 @@ class ModBrowserDialog(QDialog):
         self.curseforge_source_btn.setStyleSheet(selected_style if self.curseforge_source_btn.isChecked() else normal_style)
         self.modrinth_source_btn.setStyleSheet(selected_style if self.modrinth_source_btn.isChecked() else normal_style)
     
-    def _on_more_results(self, results: list):
-        """Handle additional results from infinite scroll."""
-        self.is_loading_more = False
+    # Pagination methods
+    def _update_pagination_controls(self):
+        """Update pagination controls based on current state."""
+        # Calculate total pages (unknown if we have infinite results from API)
+        # We'll estimate based on whether we have more results
+        total_pages = self._estimate_total_pages()
         
-        if not results:
-            self.has_more_results = False
-            self.search_status.setText(f"Found {self.results_list.count()} mods (no more results)")
+        # Update page spinner
+        self.page_spin.blockSignals(True)
+        self.page_spin.setMinimum(1)
+        self.page_spin.setMaximum(max(1, total_pages))
+        self.page_spin.setValue(self.current_page + 1)  # Display is 1-based
+        self.page_spin.blockSignals(False)
+        
+        # Update total pages label
+        if self.has_more_results and total_pages <= self.current_page + 1:
+            self.page_total_label.setText(f"of {total_pages}+")
+        else:
+            self.page_total_label.setText(f"of {total_pages}")
+        
+        # Enable/disable navigation buttons
+        self.first_page_btn.setEnabled(self.current_page > 0)
+        self.prev_page_btn.setEnabled(self.current_page > 0)
+        self.next_page_btn.setEnabled(self.has_more_results or self.current_page < total_pages - 1)
+        # Last button is only enabled when we know the total pages (has_more_results is False)
+        # because we can't navigate to the last page if we don't know what it is
+        self.last_page_btn.setEnabled(not self.has_more_results and self.current_page < total_pages - 1)
+    
+    def _estimate_total_pages(self) -> int:
+        """Estimate total number of pages based on current data."""
+        if self.total_results > 0:
+            return (self.total_results + SEARCH_PAGE_SIZE - 1) // SEARCH_PAGE_SIZE
+        elif len(self.all_search_results) > 0:
+            # If we have results but no total, estimate from current count
+            pages_loaded = self.current_page + 1
+            if self.has_more_results:
+                return pages_loaded + 1  # At least one more page
+            return pages_loaded
+        return 1  # Minimum 1 page
+    
+    def _go_to_first_page(self):
+        """Navigate to the first page."""
+        if self.current_page != 0:
+            self._navigate_to_page(0)
+    
+    def _go_to_prev_page(self):
+        """Navigate to the previous page."""
+        if self.current_page > 0:
+            self._navigate_to_page(self.current_page - 1)
+    
+    def _go_to_next_page(self):
+        """Navigate to the next page."""
+        self._navigate_to_page(self.current_page + 1)
+    
+    def _go_to_last_page(self):
+        """Navigate to the last known page."""
+        if self.total_results > 0:
+            last_page = (self.total_results - 1) // SEARCH_PAGE_SIZE
+            self._navigate_to_page(last_page)
+    
+    def _on_page_spin_changed(self, value: int):
+        """Handle page spinner value change."""
+        target_page = value - 1  # Convert from 1-based to 0-based
+        if target_page != self.current_page:
+            self._navigate_to_page(target_page)
+    
+    def _navigate_to_page(self, target_page: int):
+        """Navigate to a specific page."""
+        if self._is_loading_page:
             return
         
+        # Save icons from current page to cache before navigating away
+        self._cache_current_page_icons()
+        
+        self.current_page = target_page
+        self._load_page(target_page)
+    
+    def _cache_current_page_icons(self):
+        """Cache top icons from current page before navigating away."""
         source = self._get_selected_source()
         
-        # Add results to the list with cached icons applied immediately
+        # Get the first PAGE_ICON_CACHE_SIZE mod IDs from current page
+        cached_ids = []
+        for i in range(min(PAGE_ICON_CACHE_SIZE, self.results_list.count())):
+            item = self.results_list.item(i)
+            if item:
+                mod = item.data(Qt.ItemDataRole.UserRole)
+                if mod:
+                    mod_id = mod.get('id', mod.get('slug', ''))
+                    if mod_id and source in self._icon_cache and mod_id in self._icon_cache[source]:
+                        cached_ids.append(mod_id)
+        
+        # Store in page cache
+        if cached_ids:
+            self._page_icon_cache[self.current_page] = cached_ids
+            
+            # Update LRU order
+            if self.current_page in self._page_load_order:
+                self._page_load_order.remove(self.current_page)
+            self._page_load_order.append(self.current_page)
+            
+            # Evict oldest pages if we have too many cached
+            while len(self._page_load_order) > MAX_CACHED_PAGES:
+                oldest_page = self._page_load_order.pop(0)
+                if oldest_page in self._page_icon_cache:
+                    # Remove icons for evicted page from cache (except if also in other pages)
+                    evicted_ids = self._page_icon_cache.pop(oldest_page, [])
+                    # Check if icons are used by other cached pages
+                    all_cached_ids = set()
+                    for page_ids in self._page_icon_cache.values():
+                        all_cached_ids.update(page_ids)
+                    
+                    # Remove icons not used by other pages
+                    if source in self._icon_cache:
+                        for evict_id in evicted_ids:
+                            if evict_id not in all_cached_ids:
+                                self._icon_cache[source].pop(evict_id, None)
+    
+    def _load_page(self, page: int):
+        """Load a specific page of results."""
+        if self._is_loading_page:
+            return
+        
+        self._is_loading_page = True
+        
+        # Cancel any pending icon loads
+        self._cancel_all_icon_loads()
+        
+        source = self._get_selected_source()
+        query = self.search_edit.text().strip()
+        version_filter = self.version_filter.text().strip()
+        
+        # Clear current results
+        self.results_list.clear()
+        self.selected_mod = None
+        self.selected_version = None
+        self.versions_combo.clear()
+        self.add_btn.setEnabled(False)
+        
+        self.search_status.setText(f"Loading page {page + 1}...")
+        
+        # Stop any running search thread
+        if self.search_thread and self.search_thread.isRunning():
+            self.search_thread.stop()
+            self.search_thread.wait()
+        
+        # Create search thread with offset for the target page
+        self.search_thread = ModSearchThread(source, query, version_filter)
+        self.search_thread.offset = page * SEARCH_PAGE_SIZE
+        self.search_thread.search_complete.connect(self._on_page_loaded)
+        self.search_thread.error_occurred.connect(self._on_page_load_error)
+        self.search_thread.start()
+    
+    def _on_page_loaded(self, results: list):
+        """Handle page load completion."""
+        self._is_loading_page = False
+        source = self._get_selected_source()
+        
+        # Check if there are more results
+        self.has_more_results = len(results) >= SEARCH_PAGE_SIZE
+        
+        # Store results
+        self.all_search_results = results
+        
+        # Display results with icons
+        self._display_page_results(results, source)
+        
+        # Update pagination
+        self._update_pagination_controls()
+        
+        # Update status
+        page_start = self.current_page * SEARCH_PAGE_SIZE + 1
+        page_end = page_start + len(results) - 1
+        status_text = f"Showing {page_start}-{page_end}"
+        if self.total_results > 0:
+            status_text += f" of {self.total_results}"
+        self.search_status.setText(status_text)
+        
+        # Start loading icons from top to bottom
+        QTimer.singleShot(ICON_LOAD_INITIAL_DELAY_MS, self._load_page_icons_sequential)
+    
+    def _on_page_load_error(self, error: str):
+        """Handle page load error."""
+        self._is_loading_page = False
+        self.search_status.setText(f"Error: {error}")
+        self._update_pagination_controls()
+    
+    def _display_page_results(self, results: list, source: str):
+        """Display page results with cached icons applied immediately."""
+        self.results_list.clear()
+        
         for i, mod in enumerate(results):
             item = QListWidgetItem()
             item.setText(f"{mod['name']}\nby {mod['author']} • {mod['downloads']:,} downloads")
@@ -2458,17 +2666,55 @@ class ModBrowserDialog(QDialog):
                 item.setIcon(get_placeholder_icon())
             
             self.results_list.addItem(item)
-        
-        self.all_search_results.extend(results)
-        self.search_status.setText(f"Found {self.results_list.count()} mods (scroll for more)")
-        
-        # Trigger lazy loading for visible items
-        QTimer.singleShot(10, self._load_visible_icons)
     
-    def _on_load_more_error(self, error: str):
-        """Handle error when loading more results."""
-        self.is_loading_more = False
-        self.search_status.setText(f"Error loading more: {error}")
+    def _load_page_icons_sequential(self):
+        """Load icons for current page from top to bottom."""
+        if self.results_list.count() == 0:
+            return
+        
+        source = self._get_selected_source()
+        
+        # Find the first item without a loaded icon
+        for i in range(self.results_list.count()):
+            item = self.results_list.item(i)
+            if not item:
+                continue
+            
+            mod = item.data(Qt.ItemDataRole.UserRole)
+            if not mod:
+                continue
+            
+            mod_id = mod.get('id', mod.get('slug', ''))
+            icon_url = mod.get('icon_url', '')
+            
+            if not icon_url or not mod_id:
+                continue
+            
+            # Skip if already cached
+            if source in self._icon_cache and mod_id in self._icon_cache[source]:
+                continue
+            
+            # Skip if already loading
+            if mod_id in self._loading_mod_ids:
+                continue
+            
+            # Count active threads
+            active_count = sum(1 for t in self.icon_threads if t.isRunning())
+            if active_count >= self._max_concurrent_loads:
+                # Schedule retry later
+                QTimer.singleShot(ICON_LOAD_RETRY_DELAY_MS, self._load_page_icons_sequential)
+                return
+            
+            # Start loading this icon
+            self._start_icon_load(item, mod_id, icon_url, source, item_idx=i)
+    
+    def _cancel_all_icon_loads(self):
+        """Cancel all pending icon load threads."""
+        for thread in self.icon_threads:
+            if thread.isRunning():
+                thread.stop()
+        self.icon_threads.clear()
+        self._loading_mod_ids.clear()
     
     def _load_mod_icon(self, item: QListWidgetItem, icon_url: str):
         """Queue mod icon for lazy loading (legacy method - redirects to new system)."""
@@ -2590,15 +2836,12 @@ class ModBrowserDialog(QDialog):
         self._icon_cache[source][mod_id] = data
     
     def load_popular_mods(self):
-        """Load popular mods without search query."""
-        source = self._get_selected_source()
-        version_filter = self.version_filter.text().strip()
-        
-        # Reset infinite scroll state
-        self.all_search_results = []
-        self.current_offset = 0
-        self.is_loading_more = False
+        """Load popular mods without search query - using pagination."""
+        # Reset pagination state
+        self.current_page = 0
+        self.total_results = 0
         self.has_more_results = True
+        self.all_search_results = []
         
         # Reset loading state (keep cache)
         self._loading_mod_ids.clear()
@@ -2609,23 +2852,25 @@ class ModBrowserDialog(QDialog):
         self.selected_version = None
         self.add_btn.setEnabled(False)
         self.search_status.setText("Loading mods...")
-        self.results_header.setText(f"Mods:")
+        self.results_header.setText(f"📋 Popular Mods (sorted by downloads):")
+        
+        # Update pagination controls
+        self._update_pagination_controls()
         
         if self.search_thread and self.search_thread.isRunning():
             self.search_thread.stop()
             self.search_thread.wait()
         
+        source = self._get_selected_source()
+        
         # Check if we have preloaded results for this source
         if hasattr(self, '_source_results') and source in self._source_results and self._source_results[source]:
             # Use preloaded results
-            self.on_search_complete(self._source_results[source])
+            self._on_page_loaded(self._source_results[source])
             return
         
-        # Empty query to get popular mods sorted by downloads
-        self.search_thread = ModSearchThread(source, "", version_filter)
-        self.search_thread.search_complete.connect(self.on_search_complete)
-        self.search_thread.error_occurred.connect(self.on_search_error)
-        self.search_thread.start()
+        # Load first page
+        self._load_page(0)
     
     def on_source_changed(self):
         """Handle source tab change with improved icon caching.
@@ -2635,7 +2880,11 @@ class ModBrowserDialog(QDialog):
         - Applies cached icons immediately for better UX
         - Only loads icons that aren't already cached
         """
-        source = self._get_selected_source()
+        # Reset pagination state
+        self.current_page = 0
+        self.total_results = 0
+        self.has_more_results = True
+        self.all_search_results = []
         
         self.results_list.clear()
         self.versions_combo.clear()
@@ -2645,29 +2894,24 @@ class ModBrowserDialog(QDialog):
         self.mod_info_header.setText("Select a mod to view its description")
         self.description_browser.setHtml("")
         
-        # Reset infinite scroll
-        self.all_search_results = []
-        self.current_offset = 0
-        self.has_more_results = True
-        
         # Reset loading state (keep cache)
         self._loading_mod_ids.clear()
+        
+        # Update pagination controls
+        self._update_pagination_controls()
         
         # Reload mods for new source
         self.load_popular_mods()
     
     def search_mods(self):
-        """Search for mods on the selected platform."""
+        """Search for mods on the selected platform using pagination."""
         query = self.search_edit.text().strip()
         
-        source = self._get_selected_source()
-        version_filter = self.version_filter.text().strip()
-        
-        # Reset infinite scroll state
-        self.all_search_results = []
-        self.current_offset = 0
-        self.is_loading_more = False
+        # Reset pagination state
+        self.current_page = 0
+        self.total_results = 0
         self.has_more_results = True
+        self.all_search_results = []
         
         # Reset loading state (keep cache)
         self._loading_mod_ids.clear()
@@ -2683,49 +2927,22 @@ class ModBrowserDialog(QDialog):
             self.results_header.setText(f"🔍 Search Results for '{query}':")
         else:
             self.search_status.setText("Loading mods...")
-            self.results_header.setText(f"Mods:")
+            self.results_header.setText(f"📋 Popular Mods (sorted by downloads):")
+        
+        # Update pagination controls
+        self._update_pagination_controls()
         
         if self.search_thread and self.search_thread.isRunning():
             self.search_thread.stop()
             self.search_thread.wait()
         
-        self.search_thread = ModSearchThread(source, query, version_filter)
-        self.search_thread.search_complete.connect(self.on_search_complete)
-        self.search_thread.error_occurred.connect(self.on_search_error)
-        self.search_thread.start()
+        # Load first page with current query
+        self._load_page(0)
     
     def on_search_complete(self, results: list):
-        """Handle search results with intelligent icon caching."""
-        source = self._get_selected_source()
-        self.results_list.clear()
-        self.all_search_results = results
-        
-        # Store results for this source (for tab switching)
-        if not hasattr(self, '_source_results'):
-            self._source_results = {'curseforge': [], 'modrinth': []}
-        self._source_results[source] = results
-        
-        self.search_status.setText(f"Found {len(results)} mods (scroll for more)")
-        
-        # Add items and apply cached icons immediately
-        for i, mod in enumerate(results):
-            item = QListWidgetItem()
-            item.setText(f"{mod['name']}\nby {mod['author']} • {mod['downloads']:,} downloads")
-            item.setData(Qt.ItemDataRole.UserRole, mod)
-            
-            # Check if icon is already cached
-            mod_id = mod.get('id', mod.get('slug', ''))
-            if source in self._icon_cache and mod_id in self._icon_cache[source]:
-                # Apply cached icon immediately
-                self._apply_icon_to_item(item, self._icon_cache[source][mod_id])
-            else:
-                # Set placeholder icon
-                item.setIcon(get_placeholder_icon())
-            
-            self.results_list.addItem(item)
-        
-        # Trigger lazy loading for visible items that aren't cached
-        QTimer.singleShot(10, self._load_visible_icons)
+        """Handle search results with intelligent icon caching (legacy compatibility)."""
+        # Redirect to page loaded handler
+        self._on_page_loaded(results)
     
     def on_search_error(self, error: str):
         """Handle search error."""
@@ -3915,6 +4132,9 @@ class VersionEditorPage(QWidget):
     back_requested = pyqtSignal()
     create_requested = pyqtSignal(object)  # Emitted with version_config when Create is clicked
     
+    # Number of icons to load immediately when opening a version
+    INITIAL_ICON_LOAD_COUNT = 8
+    
     def __init__(self, parent=None):
         super().__init__(parent)
         self.version_config: Optional[VersionConfig] = None
@@ -3926,6 +4146,10 @@ class VersionEditorPage(QWidget):
         self._pending_mod: Optional[ModEntry] = None
         self._pending_file: Optional[FileEntry] = None
         self._pending_delete: Optional[DeleteEntry] = None
+        # Track which mod icons have been loaded (for lazy loading)
+        self._icons_loaded_count = 0
+        self._icon_load_threads: List[QThread] = []
+        self._remaining_icons_loaded = False  # Whether all remaining icons have been loaded
         self.setup_ui()
     
     def setup_ui(self):
@@ -4264,6 +4488,12 @@ class VersionEditorPage(QWidget):
     def load_version(self, version_config: VersionConfig):
         self.version_config = version_config
         self.version_label.setText(f"Version {version_config.version}")
+        
+        # Reset icon loading state
+        self._icons_loaded_count = 0
+        self._remaining_icons_loaded = False
+        self._cancel_icon_load_threads()
+        
         self.refresh_mods_grid()
         self.refresh_files_grid()
         self.refresh_deletes_list()
@@ -4303,6 +4533,9 @@ class VersionEditorPage(QWidget):
             pixmap = QPixmap(version_config.icon_path)
             if not pixmap.isNull():
                 self.version_icon_preview.setPixmap(pixmap.scaled(60, 60, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        
+        # Start loading the first 8 mod icons
+        QTimer.singleShot(50, self._load_initial_icons)
     
     def _set_editing_enabled(self, enabled: bool):
         """Enable or disable editing controls (for locked versions).
@@ -4543,6 +4776,9 @@ class VersionEditorPage(QWidget):
     
     def _add_mod_browse(self):
         """Add a mod by browsing CurseForge/Modrinth."""
+        # Load remaining icons now that the user is opening the mod browser
+        self._load_remaining_icons()
+        
         existing_ids = [m.id for m in self.version_config.mods]
         dialog = ModBrowserDialog(existing_ids, self.version_config.version, self)
         if dialog.exec():
@@ -4803,6 +5039,127 @@ class VersionEditorPage(QWidget):
             self.file_right_container.setStyleSheet(container_style)
         if hasattr(self, 'delete_right_container'):
             self.delete_right_container.setStyleSheet(container_style)
+    
+    # === Lazy Icon Loading Methods ===
+    
+    def _cancel_icon_load_threads(self):
+        """Cancel all running icon load threads."""
+        for thread in self._icon_load_threads:
+            if thread.isRunning():
+                thread.stop()
+        self._icon_load_threads.clear()
+    
+    def _load_initial_icons(self):
+        """Load the first INITIAL_ICON_LOAD_COUNT icons when a version is opened."""
+        if not self.version_config:
+            return
+        
+        # Get mods that need icon loading
+        mods_to_load = []
+        for i, mod in enumerate(self.version_config.mods[:self.INITIAL_ICON_LOAD_COUNT]):
+            if not getattr(mod, '_icon_data', None):
+                # Check if mod has a source that can provide an icon
+                source = mod.source
+                if source and source.get('type') in ('curseforge', 'modrinth'):
+                    mods_to_load.append((i, mod))
+        
+        # Start loading icons for these mods
+        for idx, mod in mods_to_load:
+            self._start_mod_icon_load(idx, mod)
+        
+        self._icons_loaded_count = min(self.INITIAL_ICON_LOAD_COUNT, len(self.version_config.mods))
+    
+    def _load_remaining_icons(self):
+        """Load icons for mods beyond the initial INITIAL_ICON_LOAD_COUNT.
+        
+        This is called when the ModBrowserDialog is about to open.
+        """
+        if not self.version_config or self._remaining_icons_loaded:
+            return
+        
+        self._remaining_icons_loaded = True
+        
+        # Get remaining mods that need icon loading
+        for i, mod in enumerate(self.version_config.mods[self.INITIAL_ICON_LOAD_COUNT:], start=self.INITIAL_ICON_LOAD_COUNT):
+            if not getattr(mod, '_icon_data', None):
+                # Check if mod has a source that can provide an icon
+                source = mod.source
+                if source and source.get('type') in ('curseforge', 'modrinth'):
+                    self._start_mod_icon_load(i, mod)
+    
+    def _start_mod_icon_load(self, mod_index: int, mod: ModEntry):
+        """Start loading an icon for a specific mod."""
+        source = mod.source
+        source_type = source.get('type', '')
+        
+        if source_type == 'modrinth':
+            project_slug = source.get('projectSlug', '')
+            if project_slug:
+                thread = IconFetcher({'source': source, 'id': mod.id})
+                thread.icon_fetched.connect(lambda mod_id, data, idx=mod_index: self._on_mod_icon_loaded(idx, data))
+                self._icon_load_threads.append(thread)
+                thread.start()
+        elif source_type == 'curseforge':
+            # CurseForge icons require fetching project info first
+            project_id = source.get('projectId', '')
+            if project_id:
+                thread = _CurseForgeIconFetcher(str(project_id), mod.id, mod_index)
+                thread.icon_fetched.connect(self._on_mod_icon_loaded)
+                self._icon_load_threads.append(thread)
+                thread.start()
+    
+    def _on_mod_icon_loaded(self, mod_index: int, icon_data: bytes):
+        """Handle when a mod icon has been loaded."""
+        if not self.version_config or mod_index >= len(self.version_config.mods):
+            return
+        
+        mod = self.version_config.mods[mod_index]
+        mod._icon_data = icon_data
+        
+        # Update the card in the grid if it exists
+        if mod_index < self.mods_grid.count():
+            widget = self.mods_grid.itemAt(mod_index)
+            if widget:
+                card = widget.widget()
+                if isinstance(card, ItemCard):
+                    card.set_icon_from_bytes(icon_data)
+
+
+class _CurseForgeIconFetcher(QThread):
+    """Background thread for fetching CurseForge mod icons."""
+    icon_fetched = pyqtSignal(int, bytes)  # mod_index, icon_bytes
+    
+    def __init__(self, project_id: str, mod_id: str, mod_index: int):
+        super().__init__()
+        self.project_id = project_id
+        self.mod_id = mod_id
+        self.mod_index = mod_index
+        self._running = True
+    
+    def run(self):
+        """Fetch icon from CurseForge API."""
+        if not self._running:
+            return
+        try:
+            # Use curse.tools proxy API
+            url = f"{CF_PROXY_BASE_URL}/mods/{self.project_id}"
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read())
+                mod_data = data.get('data', {})
+                logo = mod_data.get('logo', {})
+                icon_url = logo.get('thumbnailUrl', '') or logo.get('url', '')
+                
+                if icon_url and self._running:
+                    with urllib.request.urlopen(icon_url, timeout=10) as img_response:
+                        icon_data = img_response.read()
+                        if icon_data and self._running:
+                            self.icon_fetched.emit(self.mod_index, icon_data)
+        except Exception:
+            pass  # Silently fail icon loads
+    
+    def stop(self):
+        self._running = False
 
 
 
