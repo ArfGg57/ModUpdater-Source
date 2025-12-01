@@ -77,9 +77,9 @@ USER_AGENT = "ModUpdater-ConfigEditor"
 DEFAULT_VERSION = "1.0.0"  # Default version for new mods/files
 
 # Search/pagination settings
-SEARCH_PAGE_SIZE = 100  # Number of mods to load per page
+SEARCH_PAGE_SIZE = 50  # Number of mods to load per page
 PAGE_ICON_CACHE_SIZE = 8  # Number of icons to cache per page when navigating away
-MAX_CACHED_PAGES = 5  # Maximum number of pages to keep in cache
+MAX_CACHED_PAGES = 10  # Maximum number of pages to keep in cache
 
 # Image scaling settings
 MAX_DESCRIPTION_IMAGE_WIDTH = 400  # Maximum width for images in mod descriptions
