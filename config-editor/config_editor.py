@@ -428,9 +428,21 @@ class GitHubAPI:
         self.branch = "main"
     
     def _parse_repo_url(self, url: str) -> Tuple[str, str]:
-        """Parse owner and repo from GitHub URL."""
-        # Single comprehensive pattern that handles various GitHub URL formats
-        # Supports: https://github.com/owner/repo, git@github.com:owner/repo, etc.
+        """Parse owner and repo from GitHub URL.
+        
+        Supported URL formats:
+        - https://github.com/owner/repo
+        - https://github.com/owner/repo.git
+        - https://github.com/owner/repo/
+        - git@github.com:owner/repo.git
+        """
+        # Pattern breakdown:
+        # - github\.com[:/] - matches "github.com/" or "github.com:"
+        # - ([^/]+) - captures the owner (anything except /)
+        # - / - matches the separator
+        # - ([^/\s]+?) - captures the repo name (non-greedy)
+        # - (?:\.git)? - optionally matches ".git" suffix
+        # - /?$ - optionally matches trailing slash at end
         pattern = r'github\.com[:/]([^/]+)/([^/\s]+?)(?:\.git)?/?$'
         match = re.search(pattern, url)
         if match:
@@ -1548,7 +1560,8 @@ class ModBrowserDialog(QDialog):
     
     def _update_source_button_styles(self):
         """Update source button styles to show selected state."""
-        selected_style = "background-color: rgba(137, 180, 250, 0.3); border: 2px solid #89b4fa; font-weight: bold;"
+        # Use palette-based styling that works with any theme
+        selected_style = "background-color: palette(highlight); border: 2px solid palette(highlight); font-weight: bold;"
         normal_style = ""
         
         self.curseforge_source_btn.setStyleSheet(selected_style if self.curseforge_source_btn.isChecked() else normal_style)
@@ -1688,14 +1701,16 @@ class ModBrowserDialog(QDialog):
                     self.selected_version = version
                     self.add_btn.setEnabled(True)
                     self.selection_status.setText("✓ Ready to add! Click 'Add Mod' to continue")
-                    self.selection_status.setStyleSheet("color: #a6e3a1; font-style: normal; font-weight: bold;")
+                    # Note: Using semantic colors for success/error states
+                    # These are intentionally distinct from theme colors for accessibility
+                    self.selection_status.setStyleSheet("color: green; font-style: normal; font-weight: bold;")
     
     def on_versions_error(self, error: str):
         """Handle version fetch error."""
         self.versions_list.clear()
         self.versions_list.addItem(f"Error: {error}")
         self.selection_status.setText("⚠ Failed to load file versions")
-        self.selection_status.setStyleSheet("color: #f38ba8; font-style: italic;")
+        self.selection_status.setStyleSheet("color: red; font-style: italic;")
     
     def on_version_selected(self, item: QListWidgetItem):
         """Handle version selection."""
@@ -1704,7 +1719,7 @@ class ModBrowserDialog(QDialog):
             self.selected_version = version
             self.add_btn.setEnabled(True)
             self.selection_status.setText("✓ Ready to add! Click 'Add Mod' to continue")
-            self.selection_status.setStyleSheet("color: #a6e3a1; font-style: normal; font-weight: bold;")
+            self.selection_status.setStyleSheet("color: green; font-style: normal; font-weight: bold;")
     
     def add_selected_mod(self):
         """Add the selected mod."""
@@ -2024,7 +2039,8 @@ class ModEditorPanel(QWidget):
     
     def _update_source_button_styles(self):
         """Update source button styles to show selected state with darker tint."""
-        selected_style = "background-color: rgba(137, 180, 250, 0.3); border: 2px solid #89b4fa;"
+        # Use palette-based styling that works with any theme
+        selected_style = "background-color: palette(highlight); border: 2px solid palette(highlight);"
         normal_style = ""
         
         self.curseforge_btn.setStyleSheet(selected_style if self.curseforge_btn.isChecked() else normal_style)
