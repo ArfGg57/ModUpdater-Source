@@ -75,6 +75,10 @@ CACHE_DIR = ".cache"
 USER_AGENT = "ModUpdater-ConfigEditor"
 DEFAULT_VERSION = "1.0.0"  # Default version for new mods/files
 
+# Search/pagination settings
+SEARCH_PAGE_SIZE = 50  # Number of mods to load per page
+INFINITE_SCROLL_THRESHOLD = 0.9  # Load more when scrolled to 90% of list
+
 # CurseForge API configuration
 # Using the curse.tools proxy for CurseForge API (doesn't require API key)
 CF_PROXY_BASE_URL = "https://api.curse.tools/v1/cf"
@@ -696,6 +700,33 @@ class IconFetcher(QThread):
         except:
             pass
         return None
+    
+    def stop(self):
+        self._running = False
+
+
+class ModIconFetcher(QThread):
+    """Background thread for fetching mod icons from URLs (used in mod browser)."""
+    icon_fetched = pyqtSignal(object, bytes)  # QListWidgetItem, icon_bytes
+    
+    def __init__(self, item, icon_url: str):
+        super().__init__()
+        self.item = item
+        self.icon_url = icon_url
+        self._running = True
+    
+    def run(self):
+        """Fetch icon from URL."""
+        if not self._running:
+            return
+        try:
+            req = urllib.request.Request(self.icon_url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=5) as response:
+                data = response.read()
+                if data and self._running:
+                    self.icon_fetched.emit(self.item, data)
+        except:
+            pass
     
     def stop(self):
         self._running = False
@@ -1441,7 +1472,7 @@ class ModSearchThread(QThread):
             'classId': '6',   # Mods
             'sortField': '2',  # Popularity (download count)
             'sortOrder': 'desc',
-            'pageSize': '50',
+            'pageSize': str(SEARCH_PAGE_SIZE),
             'index': str(self.offset)  # For pagination
         }
         # Only add search filter if query is not empty
@@ -1480,7 +1511,7 @@ class ModSearchThread(QThread):
         
         params = {
             'facets': json.dumps(facets),
-            'limit': '50',
+            'limit': str(SEARCH_PAGE_SIZE),
             'offset': str(self.offset),  # For pagination
             'index': 'downloads'  # Sort by downloads
         }
@@ -1597,6 +1628,7 @@ class ModBrowserDialog(QDialog):
         self.current_version = current_version
         self.search_thread: Optional[ModSearchThread] = None
         self.version_thread: Optional[ModVersionFetchThread] = None
+        self.icon_threads: List[ModIconFetcher] = []  # Track icon loading threads
         self.selected_mod = None
         self.selected_version = None
         self.all_search_results = []  # Store all results for infinite scroll
@@ -1784,8 +1816,8 @@ class ModBrowserDialog(QDialog):
     def _on_scroll(self, value):
         """Handle scroll event for infinite scrolling."""
         scrollbar = self.results_list.verticalScrollBar()
-        # Load more when near the bottom (90% scrolled)
-        if scrollbar.maximum() > 0 and value >= scrollbar.maximum() * 0.9:
+        # Load more when near the bottom
+        if scrollbar.maximum() > 0 and value >= scrollbar.maximum() * INFINITE_SCROLL_THRESHOLD:
             self._load_more_results()
     
     def _load_more_results(self):
@@ -1794,7 +1826,7 @@ class ModBrowserDialog(QDialog):
             return
         
         self.is_loading_more = True
-        self.current_offset += 50
+        self.current_offset += SEARCH_PAGE_SIZE
         
         source = self._get_selected_source()
         query = self.search_edit.text().strip()
@@ -1858,29 +1890,22 @@ class ModBrowserDialog(QDialog):
         self.search_status.setText(f"Error loading more: {error}")
     
     def _load_mod_icon(self, item: QListWidgetItem, icon_url: str):
-        """Load mod icon from URL."""
+        """Load mod icon from URL using Qt thread-safe approach."""
         try:
-            def fetch_icon():
-                try:
-                    req = urllib.request.Request(icon_url, headers={"User-Agent": USER_AGENT})
-                    with urllib.request.urlopen(req, timeout=5) as response:
-                        data = response.read()
-                        return data
-                except:
-                    return None
-            
-            # Use a simple thread for icon loading
-            import threading
-            def load():
-                data = fetch_icon()
-                if data:
-                    pixmap = QPixmap()
-                    if pixmap.loadFromData(data):
-                        icon = QIcon(pixmap)
-                        item.setIcon(icon)
-            
-            thread = threading.Thread(target=load, daemon=True)
+            thread = ModIconFetcher(item, icon_url)
+            thread.icon_fetched.connect(self._on_icon_fetched)
+            self.icon_threads.append(thread)
             thread.start()
+        except:
+            pass
+    
+    def _on_icon_fetched(self, item: QListWidgetItem, data: bytes):
+        """Handle icon fetched from background thread - called on main thread."""
+        try:
+            pixmap = QPixmap()
+            if pixmap.loadFromData(data):
+                icon = QIcon(pixmap)
+                item.setIcon(icon)
         except:
             pass
     
@@ -2068,6 +2093,9 @@ class ModBrowserDialog(QDialog):
         mod.file_name = ''
         mod.since = self.current_version
         
+        # Store icon URL for later fetching
+        mod._icon_url = self.selected_mod.get('icon_url', '')
+        
         if self.selected_mod['source'] == 'curseforge':
             try:
                 project_id = int(self.selected_mod['id'])
@@ -2088,6 +2116,30 @@ class ModBrowserDialog(QDialog):
             }
         
         return mod
+    
+    def closeEvent(self, event):
+        """Clean up threads when dialog is closed."""
+        self._cleanup_threads()
+        super().closeEvent(event)
+    
+    def _cleanup_threads(self):
+        """Stop and clean up all running threads."""
+        # Stop search thread
+        if self.search_thread and self.search_thread.isRunning():
+            self.search_thread.stop()
+            self.search_thread.wait(1000)  # Wait up to 1 second
+        
+        # Stop version thread
+        if self.version_thread and self.version_thread.isRunning():
+            self.version_thread.stop()
+            self.version_thread.wait(1000)
+        
+        # Stop icon threads
+        for thread in self.icon_threads:
+            if thread.isRunning():
+                thread.stop()
+                thread.wait(100)  # Brief wait per thread
+        self.icon_threads.clear()
 
 
 
@@ -2107,7 +2159,7 @@ class ItemCard(QFrame):
         self.setup_ui()
     
     def setup_ui(self):
-        self.setFixedSize(100, 100)
+        self.setFixedSize(120, 120)  # Made slightly bigger
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.update_style()
         
@@ -2117,19 +2169,19 @@ class ItemCard(QFrame):
         
         self.icon_label = QLabel()
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.icon_label.setFixedSize(48, 48)
+        self.icon_label.setFixedSize(56, 56)  # Made icon slightly bigger
         
         if self.is_add_button:
             self.icon_label.setText("+")
             # Use a more visible color that works on both light and dark themes
-            self.icon_label.setStyleSheet("font-size: 32px; font-weight: bold;")
+            self.icon_label.setStyleSheet("font-size: 36px; font-weight: bold;")
         elif self._icon_data:
             # Load icon from bytes data
             self._load_icon_from_bytes(self._icon_data)
         elif self.icon_path and os.path.exists(self.icon_path):
             pixmap = QPixmap(self.icon_path)
             if not pixmap.isNull():
-                self.icon_label.setPixmap(pixmap.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                self.icon_label.setPixmap(pixmap.scaled(56, 56, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
             else:
                 self._set_default_icon()
         else:
@@ -2146,14 +2198,14 @@ class ItemCard(QFrame):
     def _set_default_icon(self):
         """Set the default package icon."""
         self.icon_label.setText("📦")
-        self.icon_label.setStyleSheet("font-size: 24px;")
+        self.icon_label.setStyleSheet("font-size: 28px;")  # Slightly bigger icon
     
     def _load_icon_from_bytes(self, data: bytes):
         """Load icon from bytes data."""
         try:
             pixmap = QPixmap()
             if pixmap.loadFromData(data):
-                self.icon_label.setPixmap(pixmap.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                self.icon_label.setPixmap(pixmap.scaled(56, 56, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
             else:
                 self._set_default_icon()
         except Exception:
@@ -2364,7 +2416,6 @@ class ModEditorPanel(QWidget):
         self.hash_edit = QLineEdit()
         self.hash_edit.setPlaceholderText("SHA-256 hash (auto-filled)")
         self.hash_edit.setReadOnly(True)  # Make hash field read-only
-        theme = get_current_theme()
         self.hash_edit.setToolTip("Hash is automatically calculated when you click 'Auto-fill Hash'")
         hash_layout.addWidget(self.hash_edit)
         
@@ -2452,6 +2503,35 @@ class ModEditorPanel(QWidget):
         naming_layout.addRow("", info_note)
         
         scroll_layout.addWidget(naming_group)
+        
+        # Icon Section - for custom icons
+        icon_group = QGroupBox("Icon (Optional)")
+        icon_layout = QHBoxLayout(icon_group)
+        
+        self.icon_preview = QLabel()
+        self.icon_preview.setFixedSize(64, 64)
+        self.icon_preview.setStyleSheet(f"border: 2px dashed {theme['border']}; border-radius: 8px;")
+        self.icon_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.icon_preview.setText("No Icon")
+        icon_layout.addWidget(self.icon_preview)
+        
+        icon_btn_layout = QVBoxLayout()
+        self.select_icon_btn = QPushButton("Select Custom Icon...")
+        self.select_icon_btn.clicked.connect(self.select_custom_icon)
+        icon_btn_layout.addWidget(self.select_icon_btn)
+        
+        self.fetch_icon_btn = QPushButton("Fetch from Source")
+        self.fetch_icon_btn.setToolTip("Fetch icon from CurseForge/Modrinth")
+        self.fetch_icon_btn.clicked.connect(self.fetch_source_icon)
+        icon_btn_layout.addWidget(self.fetch_icon_btn)
+        
+        self.clear_icon_btn = QPushButton("Clear")
+        self.clear_icon_btn.clicked.connect(self.clear_icon)
+        icon_btn_layout.addWidget(self.clear_icon_btn)
+        icon_btn_layout.addStretch()
+        icon_layout.addLayout(icon_btn_layout)
+        icon_layout.addStretch()
+        scroll_layout.addWidget(icon_group)
         
         scroll_layout.addStretch()
         scroll.setWidget(scroll_widget)
@@ -2552,7 +2632,117 @@ class ModEditorPanel(QWidget):
             self.file_id_edit.clear()
             self.url_edit.setText(source.get('url', ''))
         
+        # Load icon preview
+        self._update_icon_preview()
+        
+        # If mod has icon URL but no icon data, try to fetch it
+        if hasattr(mod, '_icon_url') and mod._icon_url and not mod._icon_data:
+            self.fetch_source_icon()
+        
         self.blockSignals(False)
+    
+    def _update_icon_preview(self):
+        """Update the icon preview label."""
+        theme = get_current_theme()
+        if self.current_mod and self.current_mod._icon_data:
+            pixmap = QPixmap()
+            if pixmap.loadFromData(self.current_mod._icon_data):
+                self.icon_preview.setPixmap(pixmap.scaled(60, 60, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                self.icon_preview.setStyleSheet(f"border: 2px solid {theme['accent']}; border-radius: 8px;")
+            else:
+                self._set_no_icon()
+        elif self.current_mod and self.current_mod.icon_path and os.path.exists(self.current_mod.icon_path):
+            pixmap = QPixmap(self.current_mod.icon_path)
+            if not pixmap.isNull():
+                self.icon_preview.setPixmap(pixmap.scaled(60, 60, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                self.icon_preview.setStyleSheet(f"border: 2px solid {theme['accent']}; border-radius: 8px;")
+            else:
+                self._set_no_icon()
+        else:
+            self._set_no_icon()
+    
+    def _set_no_icon(self):
+        """Set the icon preview to show no icon."""
+        theme = get_current_theme()
+        self.icon_preview.clear()
+        self.icon_preview.setText("No Icon")
+        self.icon_preview.setStyleSheet(f"border: 2px dashed {theme['border']}; border-radius: 8px;")
+    
+    def select_custom_icon(self):
+        """Select a custom icon file."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Icon", "", "Images (*.png *.jpg *.jpeg *.gif *.ico)"
+        )
+        if file_path and self.current_mod:
+            self.current_mod.icon_path = file_path
+            self.current_mod._icon_data = None  # Clear any fetched icon data
+            with open(file_path, 'rb') as f:
+                self.current_mod._icon_data = f.read()
+            self._update_icon_preview()
+            self.icon_changed.emit()
+    
+    def fetch_source_icon(self):
+        """Fetch icon from CurseForge or Modrinth source."""
+        if not self.current_mod:
+            return
+        
+        # Check if we have a stored icon URL
+        icon_url = getattr(self.current_mod, '_icon_url', None)
+        
+        if not icon_url:
+            # Try to fetch from source
+            source = self.current_mod.source
+            source_type = source.get('type', '')
+            
+            if source_type == 'curseforge':
+                project_id = source.get('projectId', '')
+                if project_id:
+                    try:
+                        url = f"{CF_PROXY_BASE_URL}/mods/{project_id}"
+                        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+                        with urllib.request.urlopen(req, timeout=10) as response:
+                            data = json.loads(response.read())
+                            mod_data = data.get('data', data)
+                            logo = mod_data.get('logo', {})
+                            icon_url = logo.get('thumbnailUrl', logo.get('url', ''))
+                    except Exception as e:
+                        QMessageBox.warning(self, "Error", f"Failed to fetch icon from CurseForge: {e}")
+                        return
+            elif source_type == 'modrinth':
+                project_slug = source.get('projectSlug', '')
+                if project_slug:
+                    try:
+                        url = f"https://api.modrinth.com/v2/project/{project_slug}"
+                        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+                        with urllib.request.urlopen(req, timeout=10) as response:
+                            data = json.loads(response.read())
+                            icon_url = data.get('icon_url', '')
+                    except Exception as e:
+                        QMessageBox.warning(self, "Error", f"Failed to fetch icon from Modrinth: {e}")
+                        return
+        
+        if not icon_url:
+            QMessageBox.information(self, "No Icon", "No icon URL available for this source.")
+            return
+        
+        # Fetch the icon
+        try:
+            req = urllib.request.Request(icon_url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                self.current_mod._icon_data = response.read()
+                self.current_mod.icon_path = ''  # Clear custom path
+                self._update_icon_preview()
+                self.icon_changed.emit()
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to download icon: {e}")
+    
+    def clear_icon(self):
+        """Clear the current icon."""
+        if self.current_mod:
+            self.current_mod.icon_path = ''
+            self.current_mod._icon_data = None
+            self._update_icon_preview()
+            self.icon_changed.emit()
     
     def save_changes(self):
         if not self.current_mod:
