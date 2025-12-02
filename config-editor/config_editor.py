@@ -602,6 +602,7 @@ QComboBox QAbstractItemView {{
     selection-color: {theme['bg_primary']};
     padding: 2px;
     margin: 0px;
+    max-height: 300px;
 }}
 
 QComboBox QAbstractItemView::item {{
@@ -612,6 +613,22 @@ QComboBox QAbstractItemView::item {{
 
 QComboBox QAbstractItemView::item:hover {{
     background-color: {theme['bg_tertiary']};
+}}
+
+QComboBox QAbstractItemView QScrollBar:vertical {{
+    background-color: {theme['bg_secondary']};
+    width: 10px;
+    border-radius: 5px;
+}}
+
+QComboBox QAbstractItemView QScrollBar::handle:vertical {{
+    background-color: {theme['bg_tertiary']};
+    border-radius: 4px;
+    min-height: 20px;
+}}
+
+QComboBox QAbstractItemView QScrollBar::handle:vertical:hover {{
+    background-color: {theme['accent']};
 }}
 
 QComboBox::drop-down {{
@@ -2730,21 +2747,12 @@ class ModBrowserDialog(QDialog):
         filter_layout.addWidget(version_lbl)
 
         self.version_filter = QComboBox()
-        self.version_filter.setEditable(True)  # Allow custom version input
+        self.version_filter.setEditable(False)  # Use dropdown only, not editable text
         self.version_filter.setMinimumWidth(100)  # Use minimum width instead of fixed
         self.version_filter.setMaximumWidth(120)  # Allow some expansion for dropdown button
-        self.version_filter.setPlaceholderText("Any")
-        # Style to ensure dropdown button is visible
-        self.version_filter.setStyleSheet("""
-            QComboBox::drop-down {
-                width: 24px;
-                border: none;
-            }
-        """)
         for version in MC_VERSION_OPTIONS:
             self.version_filter.addItem(version if version else "Any")
         self.version_filter.setCurrentIndex(0)
-        self.version_filter.lineEdit().returnPressed.connect(self.search_mods)
         self.version_filter.currentIndexChanged.connect(self._on_filter_changed)
         filter_layout.addWidget(self.version_filter)
 
@@ -6873,33 +6881,9 @@ class MainWindow(QMainWindow):
         validate_action.triggered.connect(self.validate_all)
         edit_menu.addAction(validate_action)
         
-        # Theme menu
-        theme_menu = menubar.addMenu("Theme")
-        
-        # Create theme action
-        create_theme_action = QAction("Create Custom Theme...", self)
-        create_theme_action.triggered.connect(self.show_create_theme_dialog)
-        theme_menu.addAction(create_theme_action)
-        
-        # Delete custom theme submenu
-        self.delete_theme_menu = theme_menu.addMenu("Delete Custom Theme")
-        self._update_delete_theme_menu()
-        
-        theme_menu.addSeparator()
-        
-        # Theme selection actions
+        # Theme menu removed - use the Theme page in sidebar instead
+        # Initialize theme_actions as empty dict for compatibility
         self.theme_actions = {}
-        for key, theme in THEMES.items():
-            action = QAction(theme['name'], self)
-            action.setCheckable(True)
-            action.setData(key)
-            action.triggered.connect(lambda checked, k=key: self._on_theme_selected(k))
-            theme_menu.addAction(action)
-            self.theme_actions[key] = action
-        
-        # Check current theme
-        if self.current_theme in self.theme_actions:
-            self.theme_actions[self.current_theme].setChecked(True)
         
         help_menu = menubar.addMenu("Help")
         
@@ -7221,6 +7205,8 @@ class MainWindow(QMainWindow):
     
     def show_version_selection(self):
         """Show the version selection page."""
+        # Refresh the grid to show updated icons and version data
+        self.version_selection_page.refresh_grid()
         self.stack.setCurrentWidget(self.version_selection_page)
         self.nav_list.setCurrentRow(0)
         self.sidebar.setVisible(True)  # Show sidebar when returning to version selection
@@ -7234,8 +7220,8 @@ class MainWindow(QMainWindow):
     
     def on_version_modified(self):
         """Handle version modification."""
-        # Update status or indicator
-        pass
+        # Refresh the version selection page grid to show updated icons immediately
+        self.version_selection_page.refresh_grid()
     
     def on_version_deleted(self, version: str):
         """Handle version deletion - update internal data model."""
@@ -7605,102 +7591,20 @@ class MainWindow(QMainWindow):
         """Show the theme creation dialog."""
         dialog = ThemeCreationDialog(self, self.current_theme)
         if dialog.exec():
-            # Refresh theme menu
-            self._rebuild_theme_menu()
+            # Refresh theme page
+            if hasattr(self, 'theme_page'):
+                self.theme_page.refresh_themes()
             # Apply the new theme
             theme_key = dialog.get_theme_key()
             if theme_key in THEMES:
                 self._on_theme_selected(theme_key)
     
     def _on_theme_selected(self, theme_key: str):
-        """Handle theme selection from menu."""
+        """Handle theme selection."""
         if theme_key in THEMES:
             self.current_theme = theme_key
             self.apply_theme(theme_key)
             self.save_editor_config()
-            # Update checkmarks in menu
-            for key, action in self.theme_actions.items():
-                action.setChecked(key == theme_key)
-    
-    def _update_delete_theme_menu(self):
-        """Update the delete custom theme submenu."""
-        if not hasattr(self, 'delete_theme_menu'):
-            return
-        self.delete_theme_menu.clear()
-        
-        # Add custom themes to delete menu
-        custom_theme_found = False
-        for key, theme in THEMES.items():
-            if not is_builtin_theme(key):
-                custom_theme_found = True
-                action = QAction(theme['name'], self)
-                action.triggered.connect(lambda checked, k=key: self._delete_custom_theme(k))
-                self.delete_theme_menu.addAction(action)
-        
-        if not custom_theme_found:
-            action = QAction("(No custom themes)", self)
-            action.setEnabled(False)
-            self.delete_theme_menu.addAction(action)
-    
-    def _delete_custom_theme(self, theme_key: str):
-        """Delete a custom theme."""
-        theme_name = THEMES.get(theme_key, {}).get('name', theme_key)
-        reply = QMessageBox.question(
-            self, "Delete Theme",
-            f"Are you sure you want to delete the theme '{theme_name}'?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            # If current theme is being deleted, switch to default
-            if self.current_theme == theme_key:
-                self.current_theme = "light"
-                self.apply_theme("light")
-                self.save_editor_config()
-            
-            delete_custom_theme(theme_key)
-            self._rebuild_theme_menu()
-    
-    def _rebuild_theme_menu(self):
-        """Rebuild the theme menu after adding/deleting themes."""
-        # Find the Theme menu in the menubar
-        menubar = self.menuBar()
-        theme_menu = None
-        for action in menubar.actions():
-            if action.text() == "Theme":
-                theme_menu = action.menu()
-                break
-        
-        if not theme_menu:
-            return
-        
-        # Clear and rebuild
-        theme_menu.clear()
-        
-        # Create theme action
-        create_theme_action = QAction("Create Custom Theme...", self)
-        create_theme_action.triggered.connect(self.show_create_theme_dialog)
-        theme_menu.addAction(create_theme_action)
-        
-        # Delete custom theme submenu
-        self.delete_theme_menu = theme_menu.addMenu("Delete Custom Theme")
-        self._update_delete_theme_menu()
-        
-        theme_menu.addSeparator()
-        
-        # Theme selection actions
-        self.theme_actions = {}
-        for key, theme in THEMES.items():
-            action = QAction(theme['name'], self)
-            action.setCheckable(True)
-            action.setData(key)
-            action.triggered.connect(lambda checked, k=key: self._on_theme_selected(k))
-            theme_menu.addAction(action)
-            self.theme_actions[key] = action
-        
-        # Check current theme
-        if self.current_theme in self.theme_actions:
-            self.theme_actions[self.current_theme].setChecked(True)
     
     def _shutdown_threads(self):
         """Gracefully stop all background threads before exit."""
