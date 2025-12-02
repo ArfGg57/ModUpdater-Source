@@ -172,69 +172,6 @@ CF_PROXY_BASE_URL = "https://api.curse.tools/v1/cf"
 CF_API_KEY = "$2a$10$bL4bIL5pUWqfcO7KQtnMReakwtfHbNKh6v1uTpKlzhwoueEJQnPnm"
 
 
-# === Compact Mode Settings ===
-# Set to True to reduce padding/margins/spacings globally for a denser UI
-COMPACT_MODE = True
-COMPACT_SCALE = 0.6  # Scale factor for padding values in compact mode
-
-
-def scale(value: int) -> int:
-    """Scale a size/padding value based on COMPACT_MODE.
-    
-    When COMPACT_MODE is True, returns the value scaled by COMPACT_SCALE.
-    Otherwise returns the original value.
-    """
-    if COMPACT_MODE:
-        return max(1, int(value * COMPACT_SCALE))
-    return value
-
-
-def compactify_layout(widget: 'QWidget'):
-    """Reduce margins and spacings on a widget and all its child layouts.
-    
-    This applies compact scaling to all layout margins and spacings
-    for the widget and its descendants. Only effective when COMPACT_MODE is True.
-    
-    Note: Uses findChildren to get all descendants at once, avoiding manual recursion.
-    Each layout is processed exactly once.
-    """
-    if not COMPACT_MODE:
-        return
-    
-    # Process the widget's own layout
-    layout = widget.layout()
-    if layout:
-        # Scale margins
-        margins = layout.contentsMargins()
-        layout.setContentsMargins(
-            scale(margins.left()),
-            scale(margins.top()),
-            scale(margins.right()),
-            scale(margins.bottom())
-        )
-        # Scale spacing
-        if hasattr(layout, 'spacing'):
-            current_spacing = layout.spacing()
-            if current_spacing > 0:
-                layout.setSpacing(scale(current_spacing))
-    
-    # Process all descendant widgets' layouts in one pass
-    # findChildren returns all descendants, so we don't need recursion
-    for child in widget.findChildren(QWidget):
-        child_layout = child.layout()
-        if child_layout:
-            margins = child_layout.contentsMargins()
-            child_layout.setContentsMargins(
-                scale(margins.left()),
-                scale(margins.top()),
-                scale(margins.right()),
-                scale(margins.bottom())
-            )
-            if hasattr(child_layout, 'spacing'):
-                current_spacing = child_layout.spacing()
-                if current_spacing > 0:
-                    child_layout.setSpacing(scale(current_spacing))
-
 
 # === Custom Exceptions ===
 class GitHubAPIError(Exception):
@@ -561,75 +498,7 @@ def is_builtin_theme(key: str) -> bool:
 
 
 def generate_stylesheet(theme: dict) -> str:
-    """Generate a stylesheet from theme colors.
-    
-    When COMPACT_MODE is enabled, padding, margins, and border radii
-    are scaled down for a denser UI appearance.
-    """
-    # Compute scaled values for compact mode
-    list_pad_v = scale(12)
-    list_pad_h = scale(16)
-    list_margin_v = scale(2)
-    list_margin_h = scale(4)
-    list_radius = scale(6)
-    list_widget_radius = scale(8)
-    list_widget_pad = scale(5)
-    
-    btn_pad_v = scale(10)
-    btn_pad_h = scale(20)
-    btn_radius = scale(6)
-    
-    input_pad_v = scale(6)
-    input_pad_h = scale(10)
-    input_radius = scale(6)
-    
-    combo_item_pad_v = scale(4)
-    combo_item_pad_h = scale(8)
-    combo_view_pad = scale(2)
-    combo_view_radius = scale(6)
-    
-    groupbox_radius = scale(8)
-    groupbox_margin_top = scale(8)
-    groupbox_pad = scale(8)
-    groupbox_pad_top = scale(20)
-    groupbox_title_left = scale(16)
-    groupbox_title_pad_h = scale(8)
-    
-    header_pad_v = scale(16)
-    
-    textedit_radius = scale(8)
-    textedit_pad = scale(10)
-    
-    scrollbar_width = scale(12)
-    scrollbar_radius = scale(6)
-    scrollbar_handle_radius = scale(4)
-    
-    tab_pad_v = scale(10)
-    tab_pad_h = scale(20)
-    tab_margin = scale(4)
-    tab_radius = scale(6)
-    tab_pane_pad = scale(8)
-    tab_pane_radius = scale(8)
-    
-    table_radius = scale(8)
-    table_item_pad = scale(8)
-    table_header_pad = scale(10)
-    
-    checkbox_size = scale(20)
-    checkbox_radius = scale(4)
-    checkbox_spacing = scale(8)
-    
-    tooltip_radius = scale(6)
-    tooltip_pad = scale(8)
-    
-    progress_radius = scale(4)
-    
-    menu_radius = scale(8)
-    menu_pad = scale(4)
-    menu_item_pad_v = scale(8)
-    menu_item_pad_h = scale(24)
-    menu_item_radius = scale(4)
-    
+    """Generate a stylesheet from theme colors."""
     return f"""
 QMainWindow {{
     background-color: {theme['bg_primary']};
@@ -645,17 +514,17 @@ QWidget {{
 QListWidget {{
     background-color: {theme['bg_secondary']};
     border: none;
-    border-radius: {list_widget_radius}px;
-    padding: {list_widget_pad}px;
+    border-radius: 8px;
+    padding: 5px;
     outline: none;
     alternate-background-color: {theme['bg_primary']};
 }}
 
 QListWidget::item {{
     background-color: {theme['bg_secondary']};
-    border-radius: {list_radius}px;
-    padding: {list_pad_v}px {list_pad_h}px;
-    margin: {list_margin_v}px {list_margin_h}px;
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin: 2px 4px;
     color: {theme['text_primary']};
 }}
 
@@ -680,8 +549,8 @@ QListWidget::item:hover:!selected {{
 QPushButton {{
     background-color: {theme['bg_tertiary']};
     border: none;
-    border-radius: {btn_radius}px;
-    padding: {btn_pad_v}px {btn_pad_h}px;
+    border-radius: 6px;
+    padding: 10px 20px;
     color: {theme['text_primary']};
     font-weight: 600;
 }}
@@ -716,8 +585,8 @@ QPushButton#successButton {{
 QLineEdit, QSpinBox, QComboBox {{
     background-color: {theme['bg_secondary']};
     border: 2px solid {theme['bg_tertiary']};
-    border-radius: {input_radius}px;
-    padding: {input_pad_v}px {input_pad_h}px;
+    border-radius: 6px;
+    padding: 8px 12px;
     color: {theme['text_primary']};
 }}
 
@@ -728,38 +597,21 @@ QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{
 QComboBox QAbstractItemView {{
     background-color: {theme['bg_secondary']};
     border: 1px solid {theme['border']};
-    border-radius: {combo_view_radius}px;
+    border-radius: 6px;
     selection-background-color: {theme['accent']};
     selection-color: {theme['bg_primary']};
-    padding: {combo_view_pad}px;
+    padding: 2px;
     margin: 0px;
-    max-height: 300px;
 }}
 
 QComboBox QAbstractItemView::item {{
-    padding: {combo_item_pad_v}px {combo_item_pad_h}px;
+    padding: 4px 8px;
     min-height: 20px;
     margin: 0px;
 }}
 
 QComboBox QAbstractItemView::item:hover {{
     background-color: {theme['bg_tertiary']};
-}}
-
-QComboBox QAbstractItemView QScrollBar:vertical {{
-    background-color: {theme['bg_secondary']};
-    width: 10px;
-    border-radius: 5px;
-}}
-
-QComboBox QAbstractItemView QScrollBar::handle:vertical {{
-    background-color: {theme['bg_tertiary']};
-    border-radius: 4px;
-    min-height: 20px;
-}}
-
-QComboBox QAbstractItemView QScrollBar::handle:vertical:hover {{
-    background-color: {theme['accent']};
 }}
 
 QComboBox::drop-down {{
@@ -775,8 +627,8 @@ QLineEdit:disabled {{
 QTextEdit {{
     background-color: {theme['bg_secondary']};
     border: 2px solid {theme['bg_tertiary']};
-    border-radius: {textedit_radius}px;
-    padding: {textedit_pad}px;
+    border-radius: 8px;
+    padding: 10px;
     color: {theme['text_primary']};
     font-family: "Consolas", "Monaco", monospace;
     font-size: 12px;
@@ -789,17 +641,17 @@ QTextEdit:focus {{
 QGroupBox {{
     background-color: {theme['bg_secondary']};
     border: 1px solid {theme['bg_tertiary']};
-    border-radius: {groupbox_radius}px;
-    margin-top: {groupbox_margin_top}px;
-    padding: {groupbox_pad}px;
-    padding-top: {groupbox_pad_top}px;
+    border-radius: 8px;
+    margin-top: 12px;
+    padding: 16px;
+    padding-top: 24px;
     font-weight: 600;
 }}
 
 QGroupBox::title {{
     subcontrol-origin: margin;
-    left: {groupbox_title_left}px;
-    padding: 0 {groupbox_title_pad_h}px;
+    left: 16px;
+    padding: 0 8px;
     color: {theme['accent']};
 }}
 
@@ -812,7 +664,7 @@ QLabel#headerLabel {{
     font-size: 20px;
     font-weight: 700;
     color: {theme['text_primary']};
-    padding: {header_pad_v}px 0;
+    padding: 16px 0;
 }}
 
 QScrollArea {{
@@ -822,13 +674,13 @@ QScrollArea {{
 
 QScrollBar:vertical {{
     background-color: {theme['bg_secondary']};
-    width: {scrollbar_width}px;
-    border-radius: {scrollbar_radius}px;
+    width: 12px;
+    border-radius: 6px;
 }}
 
 QScrollBar::handle:vertical {{
     background-color: {theme['bg_tertiary']};
-    border-radius: {scrollbar_handle_radius}px;
+    border-radius: 4px;
     min-height: 30px;
 }}
 
@@ -839,17 +691,17 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
 QTabWidget::pane {{
     background-color: {theme['bg_secondary']};
     border: 1px solid {theme['bg_tertiary']};
-    border-radius: {tab_pane_radius}px;
-    padding: {tab_pane_pad}px;
+    border-radius: 8px;
+    padding: 8px;
 }}
 
 QTabBar::tab {{
     background-color: {theme['bg_primary']};
     border: none;
-    padding: {tab_pad_v}px {tab_pad_h}px;
-    margin-right: {tab_margin}px;
-    border-top-left-radius: {tab_radius}px;
-    border-top-right-radius: {tab_radius}px;
+    padding: 10px 20px;
+    margin-right: 4px;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
 }}
 
 QTabBar::tab:selected {{
@@ -864,12 +716,12 @@ QTabBar::tab:hover:!selected {{
 QTableWidget {{
     background-color: {theme['bg_secondary']};
     border: 1px solid {theme['bg_tertiary']};
-    border-radius: {table_radius}px;
+    border-radius: 8px;
     gridline-color: {theme['bg_tertiary']};
 }}
 
 QTableWidget::item {{
-    padding: {table_item_pad}px;
+    padding: 8px;
 }}
 
 QTableWidget::item:selected {{
@@ -879,16 +731,16 @@ QTableWidget::item:selected {{
 QHeaderView::section {{
     background-color: {theme['bg_primary']};
     color: {theme['accent']};
-    padding: {table_header_pad}px;
+    padding: 10px;
     border: none;
     border-bottom: 2px solid {theme['bg_tertiary']};
     font-weight: 600;
 }}
 
 QCheckBox::indicator {{
-    width: {checkbox_size}px;
-    height: {checkbox_size}px;
-    border-radius: {checkbox_radius}px;
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
     border: 2px solid {theme['bg_tertiary']};
     background-color: {theme['bg_secondary']};
 }}
@@ -900,39 +752,39 @@ QCheckBox::indicator:checked {{
 
 QCheckBox {{
     background-color: transparent;
-    spacing: {checkbox_spacing}px;
+    spacing: 8px;
 }}
 
 QToolTip {{
     background-color: {theme['bg_secondary']};
     color: {theme['text_primary']};
     border: 1px solid {theme['bg_tertiary']};
-    border-radius: {tooltip_radius}px;
-    padding: {tooltip_pad}px;
+    border-radius: 6px;
+    padding: 8px;
 }}
 
 QProgressBar {{
     background-color: {theme['bg_secondary']};
     border: none;
-    border-radius: {progress_radius}px;
+    border-radius: 4px;
     text-align: center;
 }}
 
 QProgressBar::chunk {{
     background-color: {theme['accent']};
-    border-radius: {progress_radius}px;
+    border-radius: 4px;
 }}
 
 QMenu {{
     background-color: {theme['bg_secondary']};
     border: 1px solid {theme['bg_tertiary']};
-    border-radius: {menu_radius}px;
-    padding: {menu_pad}px;
+    border-radius: 8px;
+    padding: 4px;
 }}
 
 QMenu::item {{
-    padding: {menu_item_pad_v}px {menu_item_pad_h}px;
-    border-radius: {menu_item_radius}px;
+    padding: 8px 24px;
+    border-radius: 4px;
 }}
 
 QMenu::item:selected {{
@@ -949,17 +801,17 @@ QDialog {{
 # === GitHub API Helper ===
 class GitHubAPI:
     """Helper class for GitHub API operations."""
-    
+
     def __init__(self, repo_url: str, token: str = ""):
         self.token = token
         self.repo_url = repo_url
         self.owner, self.repo = self._parse_repo_url(repo_url)
         self.api_base = "https://api.github.com"
         self.branch = "main"
-    
+
     def _parse_repo_url(self, url: str) -> Tuple[str, str]:
         """Parse owner and repo from GitHub URL.
-        
+
         Supported URL formats:
         - https://github.com/owner/repo
         - https://github.com/owner/repo.git
@@ -978,7 +830,7 @@ class GitHubAPI:
         if match:
             return match.group(1), match.group(2).replace('.git', '')
         raise ValueError(f"Invalid GitHub URL: {url}")
-    
+
     def _request(self, method: str, endpoint: str, data: dict = None) -> dict:
         """Make a request to GitHub API."""
         url = f"{self.api_base}{endpoint}"
@@ -988,13 +840,13 @@ class GitHubAPI:
         }
         if self.token:
             headers["Authorization"] = f"token {self.token}"
-        
+
         if data:
             body = json.dumps(data).encode('utf-8')
             headers["Content-Type"] = "application/json"
         else:
             body = None
-        
+
         req = urllib.request.Request(url, data=body, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=30) as response:
@@ -1002,7 +854,7 @@ class GitHubAPI:
         except urllib.error.HTTPError as e:
             error_body = e.read().decode('utf-8') if e.fp else ""
             raise GitHubAPIError(e.code, error_body)
-    
+
     def get_file(self, path: str) -> Tuple[str, str]:
         """Get file content and SHA from repository."""
         endpoint = f"/repos/{self.owner}/{self.repo}/contents/{path}?ref={self.branch}"
@@ -1014,7 +866,7 @@ class GitHubAPI:
             if "404" in str(e):
                 return None, None
             raise
-    
+
     def list_directory(self, path: str = "") -> List[dict]:
         """List contents of a directory."""
         endpoint = f"/repos/{self.owner}/{self.repo}/contents/{path}?ref={self.branch}"
@@ -1024,7 +876,7 @@ class GitHubAPI:
             if "404" in str(e):
                 return []
             raise
-    
+
     def create_or_update_file(self, path: str, content: str, message: str, sha: str = None) -> dict:
         """Create or update a file in the repository."""
         endpoint = f"/repos/{self.owner}/{self.repo}/contents/{path}"
@@ -1036,7 +888,7 @@ class GitHubAPI:
         if sha:
             data["sha"] = sha
         return self._request("PUT", endpoint, data)
-    
+
     def delete_file(self, path: str, message: str, sha: str) -> dict:
         """Delete a file from the repository."""
         endpoint = f"/repos/{self.owner}/{self.repo}/contents/{path}"
@@ -1046,7 +898,7 @@ class GitHubAPI:
             "branch": self.branch
         }
         return self._request("DELETE", endpoint, data)
-    
+
     def test_connection(self) -> bool:
         """Test if the repository is accessible."""
         try:
@@ -1055,7 +907,7 @@ class GitHubAPI:
             return True
         except:
             return False
-    
+
     def get_branches(self) -> List[str]:
         """Get list of branches."""
         endpoint = f"/repos/{self.owner}/{self.repo}/branches"
@@ -1070,12 +922,12 @@ class GitHubAPI:
 class ImageLoaderThread(QThread):
     """Background thread for loading remote images."""
     image_loaded = pyqtSignal(str, QImage)  # url, image
-    
+
     def __init__(self, url: str):
         super().__init__()
         self.url = url
         self._running = True
-    
+
     def run(self):
         """Fetch image from URL."""
         if not self._running:
@@ -1091,7 +943,7 @@ class ImageLoaderThread(QThread):
                         self.image_loaded.emit(self.url, image)
         except Exception as e:
             print(f"Failed to load image from {self.url}: {e}")
-    
+
     def stop(self):
         self._running = False
 
@@ -1099,13 +951,13 @@ class ImageLoaderThread(QThread):
 # === Custom TextBrowser with Remote Image Support ===
 class RemoteImageTextBrowser(QTextBrowser):
     """QTextBrowser subclass that can load and display remote images."""
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._image_cache = {}  # url -> QImage
         self._pending_loads = {}  # url -> ImageLoaderThread
         self._pending_urls = set()  # URLs that need to be loaded
-    
+
     def setHtml(self, html: str):
         """Override setHtml to preprocess and queue image loading."""
         # Clear previous pending loads and wait for them to finish
@@ -1114,9 +966,9 @@ class RemoteImageTextBrowser(QTextBrowser):
             thread.wait(100)  # Wait up to 100ms for each thread to finish
         self._pending_loads.clear()
         self._pending_urls.clear()
-        
+
         # Scale images to fit within the browser width and ensure proper text flow
-        # Add max-width, height:auto, display:block, and position:relative to prevent 
+        # Add max-width, height:auto, display:block, and position:relative to prevent
         # images from rendering over text
         def add_img_style(match):
             img_tag = match.group(0)
@@ -1137,13 +989,13 @@ class RemoteImageTextBrowser(QTextBrowser):
                 else:
                     img_tag = img_tag.rstrip()[:-1] + f' style="{style_to_add}">'
             return img_tag
-        
+
         html = re.sub(r'<img[^>]*/?>', add_img_style, html, flags=re.IGNORECASE)
-        
+
         # Find all image URLs in the HTML
         img_pattern = r'<img[^>]+src=["\']([^"\']+)["\']'
         urls = re.findall(img_pattern, html, re.IGNORECASE)
-        
+
         # Queue loading for URLs not in cache
         for url in urls:
             if url.startswith(('http://', 'https://')):
@@ -1152,10 +1004,10 @@ class RemoteImageTextBrowser(QTextBrowser):
                     pass
                 elif url not in self._pending_loads:
                     self._pending_urls.add(url)
-        
+
         # Set the HTML first
         super().setHtml(html)
-        
+
         # Start loading pending images
         self._start_image_loading()
 
@@ -1170,7 +1022,7 @@ class RemoteImageTextBrowser(QTextBrowser):
                 thread.finished.connect(thread.deleteLater)
                 self._pending_loads[url] = thread
                 thread.start()
-    
+
     def _on_image_loaded(self, url: str, image: QImage):
         """Handle image loaded from thread."""
         # Scale large images to fit within the browser width
@@ -1188,21 +1040,21 @@ class RemoteImageTextBrowser(QTextBrowser):
         doc = self.document()
         doc.markContentsDirty(0, doc.characterCount())
         self.viewport().update()
-    
+
     def _on_load_finished(self, url: str):
         """Handle load finished."""
         if url in self._pending_loads:
             del self._pending_loads[url]
         # discard() is safe even if url is not in the set
         self._pending_urls.discard(url)
-    
+
     def loadResource(self, type_: int, url: QUrl) -> object:
         """Override to provide cached images."""
         if PYQT_VERSION == 6:
             image_type = QTextDocument.ResourceType.ImageResource.value
         else:
             image_type = QTextDocument.ImageResource
-        
+
         if type_ == image_type:
             url_str = url.toString()
             if url_str in self._image_cache:
@@ -1213,9 +1065,9 @@ class RemoteImageTextBrowser(QTextBrowser):
                     self._pending_urls.add(url_str)
                     self._start_image_loading()
                 return QImage()  # Return empty image while loading
-        
+
         return super().loadResource(type_, url)
-    
+
     def shutdown(self):
         """Stop and wait for all pending image load threads."""
         try:
@@ -1239,32 +1091,32 @@ class IconFetcher(QThread):
     """Background thread for fetching mod icons from source info."""
     icon_fetched = pyqtSignal(str, bytes)  # mod_id, icon_bytes
     fetch_complete = pyqtSignal()
-    
+
     def __init__(self, mod_info: dict):
         super().__init__()
         self.mod_info = mod_info
         self._running = True
-    
+
     def run(self):
         """Fetch icon from CurseForge or Modrinth."""
         source = self.mod_info.get('source', {})
         source_type = source.get('type', '')
         mod_id = self.mod_info.get('id', self.mod_info.get('numberId', ''))
-        
+
         try:
             icon_data = None
             if source_type == 'modrinth':
                 project_slug = source.get('projectSlug')
                 if project_slug:
                     icon_data = self._fetch_modrinth_icon(project_slug)
-            
+
             if icon_data and self._running:
                 self.icon_fetched.emit(mod_id, icon_data)
         except (urllib.error.URLError, urllib.error.HTTPError, OSError):
             pass  # Silently ignore network errors
-        
+
         self.fetch_complete.emit()
-    
+
     def _fetch_modrinth_icon(self, project_slug: str) -> bytes:
         """Fetch icon from Modrinth API."""
         try:
@@ -1279,7 +1131,7 @@ class IconFetcher(QThread):
         except (urllib.error.URLError, urllib.error.HTTPError, OSError):
             pass  # Silently ignore network errors
         return None
-    
+
     def stop(self):
         self._running = False
 
@@ -1288,20 +1140,20 @@ class SimpleIconFetcher(QThread):
     """Simple icon fetcher that downloads an icon from a URL."""
     icon_fetched = pyqtSignal(str, str, bytes)  # mod_id, source, icon_bytes
     finished_loading = pyqtSignal(str)  # mod_id
-    
+
     def __init__(self, mod_id: str, icon_url: str, source: str):
         super().__init__()
         self.mod_id = mod_id
         self.icon_url = icon_url
         self.source = source
         self._running = True
-    
+
     def run(self):
         """Fetch icon from URL."""
         if not self._running or not self.icon_url:
             self.finished_loading.emit(self.mod_id)
             return
-        
+
         try:
             req = urllib.request.Request(self.icon_url, headers={"User-Agent": USER_AGENT})
             with urllib.request.urlopen(req, timeout=8) as response:
@@ -1310,9 +1162,9 @@ class SimpleIconFetcher(QThread):
                     self.icon_fetched.emit(self.mod_id, self.source, data)
         except (urllib.error.URLError, urllib.error.HTTPError, OSError):
             pass  # Silently ignore network errors
-        
+
         self.finished_loading.emit(self.mod_id)
-    
+
     def stop(self):
         self._running = False
 
@@ -1323,12 +1175,12 @@ class HashCalculator(QThread):
     hash_calculated = pyqtSignal(str)
     progress_updated = pyqtSignal(int)
     error_occurred = pyqtSignal(str)
-    
+
     def __init__(self, url: str):
         super().__init__()
         self.url = url
         self._running = True
-    
+
     def run(self):
         """Download file and calculate SHA-256 hash."""
         try:
@@ -1337,7 +1189,7 @@ class HashCalculator(QThread):
                 total_size = int(response.headers.get('content-length', 0))
                 downloaded = 0
                 hasher = hashlib.sha256()
-                
+
                 while self._running:
                     chunk = response.read(8192)
                     if not chunk:
@@ -1347,13 +1199,13 @@ class HashCalculator(QThread):
                     if total_size > 0:
                         progress = int((downloaded / total_size) * 100)
                         self.progress_updated.emit(progress)
-                
+
                 if self._running:
                     self.hash_calculated.emit(hasher.hexdigest())
         except Exception as e:
             if self._running:
                 self.error_occurred.emit(str(e))
-    
+
     def stop(self):
         self._running = False
 
@@ -1376,7 +1228,7 @@ class ModEntry:
         self._is_new = not bool(self.id)
         self._is_from_previous = data.get('_is_from_previous', False)
         self._icon_data = None  # Cached icon bytes
-    
+
     def to_dict(self) -> Dict[str, Any]:
         result = {
             'display_name': self.display_name,
@@ -1389,10 +1241,10 @@ class ModEntry:
         }
         # Don't include icon_path or internal flags in output
         return result
-    
+
     def is_new(self) -> bool:
         return self._is_new
-    
+
     def mark_saved(self):
         self._is_new = False
 
@@ -1412,7 +1264,7 @@ class FileEntry:
         self.since = data.get('since', DEFAULT_VERSION)  # Version this file was introduced
         self.icon_path = data.get('icon_path', '')
         self._is_from_previous = data.get('_is_from_previous', False)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         result = {
             'display_name': self.display_name,
@@ -1439,7 +1291,7 @@ class DeleteEntry:
         self.version = data.get('version', DEFAULT_VERSION)  # Version this deletion applies to
         self.icon_path = data.get('icon_path', '')
         self._is_unremovable = data.get('_is_unremovable', False)  # For auto-added deletes from removed mods/files
-    
+
     def to_dict(self) -> Dict[str, Any]:
         result = {
             'path': self.path,
@@ -1466,7 +1318,7 @@ class ModpackConfig:
         self.backup_keep = data.get('backupKeep', 5)
         self.debug_mode = data.get('debugMode', False)
         self._sha = None
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             'modpackVersion': self.modpack_version,
@@ -1494,22 +1346,22 @@ class VersionConfig:
         self._is_locked = False  # Once saved/created to repo, version is locked
         self._is_new = True  # True if version hasn't been saved to repo yet
         self.safety_mode = True  # Safety mode for deletes - default enabled
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             'mods': [m.to_dict() for m in self.mods],
             'files': [f.to_dict() for f in self.files],
             'deletes': [d.to_dict() for d in self.deletes]
         }
-    
+
     def lock(self):
         """Lock the version after it has been saved to repo"""
         self._is_locked = True
         self._is_new = False
-    
+
     def is_locked(self) -> bool:
         return self._is_locked
-    
+
     def is_new(self) -> bool:
         return self._is_new
 
@@ -1519,12 +1371,12 @@ class VersionConfig:
 class LoadingDialog(QDialog):
     """Loading dialog shown during startup while preloading icons."""
     icons_loaded = pyqtSignal()  # Emitted when icons are loaded
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setup_ui()
         self._check_timer = None
-    
+
     def setup_ui(self):
         self.setWindowTitle("Loading...")
         self.setFixedSize(300, 100)
@@ -1532,23 +1384,23 @@ class LoadingDialog(QDialog):
         # Remove window frame and make background transparent for true rounded corners
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        
+
         # Main container with rounded corners
         self.container = QFrame(self)
         self.container.setGeometry(0, 0, 300, 100)
-        
+
         self._apply_theme()
-        
+
         layout = QVBoxLayout(self.container)
         layout.setSpacing(12)
         layout.setContentsMargins(24, 20, 24, 20)
-        
+
         # Loading text
         self.label = QLabel("Loading...")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label.setObjectName("loadingLabel")
         layout.addWidget(self.label)
-        
+
         # Progress bar - improved styling
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)  # Indeterminate
@@ -1556,7 +1408,7 @@ class LoadingDialog(QDialog):
         self.progress.setTextVisible(False)
         self.progress.setFixedHeight(6)
         layout.addWidget(self.progress)
-    
+
     def _apply_theme(self):
         """Apply the current theme to the loading dialog."""
         theme = get_current_theme()
@@ -1583,35 +1435,35 @@ class LoadingDialog(QDialog):
                 border-radius: 3px;
             }}
         """)
-    
+
     def start_checking(self):
         """Start checking if icons are loaded."""
         self._check_timer = QTimer()
         self._check_timer.timeout.connect(self._check_loading_complete)
         self._check_timer.start(100)  # Check every 100ms
-    
+
     def _check_loading_complete(self):
         """Check if preloading is complete."""
         # Use public method to check loaded icon counts
         cf_loaded = ModBrowserDialog.get_loaded_icon_count('curseforge')
         mr_loaded = ModBrowserDialog.get_loaded_icon_count('modrinth')
-        
+
         # Consider loaded if we have at least some icons from each source
         min_icons_per_source = min(5, SEARCH_PAGE_SIZE // 2)
-        
+
         if cf_loaded >= min_icons_per_source and mr_loaded >= min_icons_per_source:
             self._finish_loading()
         elif cf_loaded + mr_loaded >= min_icons_per_source * 2:
             # If total is enough even if one source has more
             self._finish_loading()
-    
+
     def _finish_loading(self):
         """Finish loading and close dialog."""
         if self._check_timer:
             self._check_timer.stop()
         self.icons_loaded.emit()
         self.accept()
-    
+
     def force_close(self):
         """Force close after timeout."""
         if self._check_timer:
@@ -1622,49 +1474,49 @@ class LoadingDialog(QDialog):
 
 class APITokenGuideDialog(QDialog):
     """Dialog showing how to create a GitHub API token."""
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setup_ui()
-    
+
     def setup_ui(self):
         self.setWindowTitle("How to Create a GitHub API Token")
         self.setMinimumSize(600, 500)
         self.setModal(True)
-        
+
         layout = QVBoxLayout(self)
         layout.setSpacing(16)
         layout.setContentsMargins(24, 24, 24, 24)
-        
+
         header = QLabel("🔑 Creating a GitHub Personal Access Token")
         header.setStyleSheet("font-size: 18px; font-weight: bold;")
         layout.addWidget(header)
-        
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        
+
         content = QWidget()
         content_layout = QVBoxLayout(content)
         content_layout.setSpacing(12)
-        
+
         steps = [
-            ("Step 1: Go to GitHub Settings", 
+            ("Step 1: Go to GitHub Settings",
              "Open GitHub.com and log in. Click your profile picture in the top-right corner, then click 'Settings'."),
-            ("Step 2: Access Developer Settings", 
+            ("Step 2: Access Developer Settings",
              "Scroll down the left sidebar and click 'Developer settings' at the bottom."),
-            ("Step 3: Create a Personal Access Token", 
+            ("Step 3: Create a Personal Access Token",
              "Click 'Personal access tokens' → 'Tokens (classic)' → 'Generate new token' → 'Generate new token (classic)'."),
-            ("Step 4: Configure Token Settings", 
+            ("Step 4: Configure Token Settings",
              "• Give your token a descriptive name (e.g., 'ModUpdater Config Editor')\n"
              "• Set an expiration date (or 'No expiration' for convenience)\n"
              "• Select the 'repo' scope to give full repository access"),
-            ("Step 5: Generate and Copy", 
+            ("Step 5: Generate and Copy",
              "Click 'Generate token' at the bottom. IMPORTANT: Copy the token immediately - you won't be able to see it again!"),
-            ("Step 6: Use the Token", 
+            ("Step 6: Use the Token",
              "Paste the token (starts with 'ghp_') into the API Token field in the setup dialog.")
         ]
-        
+
         for title, description in steps:
             step_group = QGroupBox(title)
             step_layout = QVBoxLayout(step_group)
@@ -1672,18 +1524,18 @@ class APITokenGuideDialog(QDialog):
             desc_label.setWordWrap(True)
             step_layout.addWidget(desc_label)
             content_layout.addWidget(step_group)
-        
+
         # Warning
         warning = QLabel("⚠️ Keep your token secure! Never share it publicly or commit it to repositories.")
         theme = get_current_theme()
         warning.setStyleSheet(f"color: {theme['warning']}; font-weight: bold; padding: 12px; background-color: rgba(249, 226, 175, 0.1); border-radius: 8px;")
         warning.setWordWrap(True)
         content_layout.addWidget(warning)
-        
+
         content_layout.addStretch()
         scroll.setWidget(content)
         layout.addWidget(scroll)
-        
+
         # Close button
         close_btn = QPushButton("Got it!")
         close_btn.setObjectName("primaryButton")
@@ -1693,7 +1545,7 @@ class APITokenGuideDialog(QDialog):
 
 class ThemeCreationDialog(QDialog):
     """Dialog for creating a new custom theme."""
-    
+
     def __init__(self, parent=None, base_theme_key: str = "dark", edit_theme_key: str = None):
         super().__init__(parent)
         self.base_theme_key = base_theme_key
@@ -1703,21 +1555,21 @@ class ThemeCreationDialog(QDialog):
         else:
             self.theme_data = dict(THEMES.get(base_theme_key, THEMES["dark"]))
         self.setup_ui()
-    
+
     def setup_ui(self):
         title = "Edit Custom Theme" if self.edit_theme_key else "Create Custom Theme"
         self.setWindowTitle(title)
         self.setMinimumSize(600, 700)
         self.setModal(True)
-        
+
         layout = QVBoxLayout(self)
         layout.setSpacing(16)
         layout.setContentsMargins(24, 24, 24, 24)
-        
+
         header = QLabel(f"🎨 {title}")
         header.setStyleSheet("font-size: 18px; font-weight: bold;")
         layout.addWidget(header)
-        
+
         # Theme name
         name_layout = QHBoxLayout()
         name_layout.addWidget(QLabel("Theme Name:"))
@@ -1729,7 +1581,7 @@ class ThemeCreationDialog(QDialog):
             self.name_edit.setReadOnly(True)  # Can't change name when editing
         name_layout.addWidget(self.name_edit)
         layout.addLayout(name_layout)
-        
+
         # Base theme selection (only for new themes)
         if not self.edit_theme_key:
             base_layout = QHBoxLayout()
@@ -1743,16 +1595,16 @@ class ThemeCreationDialog(QDialog):
             self.base_combo.currentIndexChanged.connect(self._on_base_changed)
             base_layout.addWidget(self.base_combo)
             layout.addLayout(base_layout)
-        
+
         # Color editors in scroll area
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        
+
         scroll_widget = QWidget()
         scroll_layout = QVBoxLayout(scroll_widget)
         scroll_layout.setSpacing(8)
-        
+
         # Color fields
         self.color_edits = {}
         self.color_buttons = {}
@@ -1770,13 +1622,13 @@ class ThemeCreationDialog(QDialog):
             'warning': 'Warning Color',
             'border': 'Border Color',
         }
-        
+
         for key, label in color_labels.items():
             row = QHBoxLayout()
             lbl = QLabel(f"{label}:")
             lbl.setMinimumWidth(140)
             row.addWidget(lbl)
-            
+
             edit = QLineEdit()
             edit.setPlaceholderText("#000000")
             edit.setText(self.theme_data.get(key, '#000000'))
@@ -1784,7 +1636,7 @@ class ThemeCreationDialog(QDialog):
             edit.textChanged.connect(lambda text, k=key: self._on_color_changed(k, text))
             self.color_edits[key] = edit
             row.addWidget(edit)
-            
+
             # Color picker button
             pick_btn = QPushButton("🎨")
             pick_btn.setFixedSize(28, 28)
@@ -1792,32 +1644,32 @@ class ThemeCreationDialog(QDialog):
             pick_btn.clicked.connect(lambda checked, k=key: self._pick_color(k))
             self.color_buttons[key] = pick_btn
             row.addWidget(pick_btn)
-            
+
             # Color preview
             preview = QLabel()
             preview.setFixedSize(24, 24)
             preview.setStyleSheet(f"background-color: {self.theme_data.get(key, '#000000')}; border: 1px solid #888; border-radius: 4px;")
             preview.setObjectName(f"preview_{key}")
             row.addWidget(preview)
-            
+
             row.addStretch()
             scroll_layout.addLayout(row)
-        
+
         scroll_layout.addStretch()
         scroll.setWidget(scroll_widget)
         layout.addWidget(scroll)
-        
+
         # Preview button
         preview_btn = QPushButton("Preview Theme")
         preview_btn.clicked.connect(self._preview_theme)
         layout.addWidget(preview_btn)
-        
+
         # Error label
         self.error_label = QLabel("")
         theme = get_current_theme()
         self.error_label.setStyleSheet(f"color: {theme['danger']};")
         layout.addWidget(self.error_label)
-        
+
         # Buttons
         btn_layout = QHBoxLayout()
         cancel_btn = QPushButton("Cancel")
@@ -1830,22 +1682,19 @@ class ThemeCreationDialog(QDialog):
         create_btn.clicked.connect(self._create_theme)
         btn_layout.addWidget(create_btn)
         layout.addLayout(btn_layout)
-        
-        # Apply compact mode layout adjustments
-        compactify_layout(self)
-    
+
     def _pick_color(self, key: str):
         """Open a color picker dialog for the specified color key."""
         from PyQt6.QtWidgets import QColorDialog
         from PyQt6.QtGui import QColor
-        
+
         current_color = self.theme_data.get(key, '#000000')
         color = QColorDialog.getColor(QColor(current_color), self, f"Select {key} color")
         if color.isValid():
             hex_color = color.name().upper()
             self.color_edits[key].setText(hex_color)
             self._on_color_changed(key, hex_color)
-    
+
     def _on_base_changed(self):
         """Update colors when base theme changes."""
         if not hasattr(self, 'base_combo'):
@@ -1859,12 +1708,12 @@ class ThemeCreationDialog(QDialog):
                 edit.setText(self.theme_data.get(color_key, '#000000'))
                 edit.blockSignals(False)
                 self._update_preview(color_key)
-    
+
     def _on_color_changed(self, key: str, text: str):
         """Update theme data and preview when color changes."""
         self.theme_data[key] = text
         self._update_preview(key)
-    
+
     def _update_preview(self, key: str):
         """Update the color preview for a specific key."""
         preview = self.findChild(QLabel, f"preview_{key}")
@@ -1875,21 +1724,21 @@ class ThemeCreationDialog(QDialog):
                 preview.setStyleSheet(f"background-color: {color}; border: 1px solid #888; border-radius: 4px;")
             else:
                 preview.setStyleSheet("background-color: #ff0000; border: 1px solid #888; border-radius: 4px;")
-    
+
     def _preview_theme(self):
         """Preview the theme in the application."""
         name = self.name_edit.text().strip() or "Preview Theme"
         self.theme_data['name'] = name
         # Apply theme temporarily
         QApplication.instance().setStyleSheet(generate_stylesheet(self.theme_data))
-    
+
     def _create_theme(self):
         """Create or update the theme and save it."""
         name = self.name_edit.text().strip()
         if not name:
             self.error_label.setText("Please enter a theme name")
             return
-        
+
         # For editing, use the existing key
         if self.edit_theme_key:
             key = self.edit_theme_key
@@ -1901,18 +1750,18 @@ class ThemeCreationDialog(QDialog):
             if key in THEMES:
                 self.error_label.setText("A theme with this name already exists")
                 return
-        
+
         # Validate all colors
         for color_key, edit in self.color_edits.items():
             color = edit.text().strip()
             if not re.match(r'^#[0-9A-Fa-f]{6}$', color):
                 self.error_label.setText(f"Invalid color format for {color_key}: {color}")
                 return
-        
+
         self.theme_data['name'] = name
         add_custom_theme(key, self.theme_data)
         self.accept()
-    
+
     def get_theme_key(self) -> str:
         """Get the key of the created/edited theme."""
         if self.edit_theme_key:
@@ -1923,41 +1772,41 @@ class ThemeCreationDialog(QDialog):
 
 class SetupDialog(QDialog):
     """First-time setup dialog for GitHub configuration."""
-    
+
     def __init__(self, parent=None, existing_config: dict = None):
         super().__init__(parent)
         self.config = existing_config or {}
         self.setup_ui()
-    
+
     def setup_ui(self):
         self.setWindowTitle("GitHub Repository Setup")
         self.setMinimumSize(550, 500)
         self.setModal(True)
-        
+
         layout = QVBoxLayout(self)
         layout.setSpacing(20)
         layout.setContentsMargins(30, 30, 30, 30)
-        
+
         header = QLabel("Welcome to ModUpdater Config Editor")
         header.setStyleSheet("font-size: 20px; font-weight: bold;")
         header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(header)
-        
+
         desc = QLabel("Configure your GitHub repository to store configuration files.\n"
                       "The editor will create and edit configs directly in your GitHub repository.")
         desc.setWordWrap(True)
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(desc)
-        
+
         form_group = QGroupBox("Repository Settings")
         form_layout = QFormLayout(form_group)
         form_layout.setSpacing(15)
-        
+
         self.repo_url_edit = QLineEdit(self.config.get('repo_url', ''))
         self.repo_url_edit.setPlaceholderText("https://github.com/username/repo")
         self.repo_url_edit.returnPressed.connect(self.validate_and_accept)
         form_layout.addRow("Repository URL:", self.repo_url_edit)
-        
+
         # Token with help button
         token_layout = QHBoxLayout()
         self.token_edit = QLineEdit(self.config.get('token', ''))
@@ -1965,34 +1814,34 @@ class SetupDialog(QDialog):
         self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.token_edit.returnPressed.connect(self.validate_and_accept)
         token_layout.addWidget(self.token_edit)
-        
+
         token_help_btn = QPushButton("?")
         token_help_btn.setFixedSize(30, 30)
         token_help_btn.setToolTip("How to create an API token")
         token_help_btn.clicked.connect(self.show_token_guide)
         token_layout.addWidget(token_help_btn)
         form_layout.addRow("API Token*:", token_layout)
-        
+
         token_note = QLabel("API Token is required to edit the repository")
         theme = get_current_theme()
         token_note.setStyleSheet(f"font-size: 11px; color: {theme['warning']};")
         form_layout.addRow("", token_note)
-        
+
         self.branch_edit = QLineEdit(self.config.get('branch', 'main'))
         self.branch_edit.setPlaceholderText("main")
         self.branch_edit.returnPressed.connect(self.validate_and_accept)
         form_layout.addRow("Branch:", self.branch_edit)
-        
+
         # Hidden config_path field for backward compatibility
         self.config_path_edit = QLineEdit(self.config.get('config_path', ''))
         self.config_path_edit.setVisible(False)
-        
+
         layout.addWidget(form_group)
-        
+
         # Theme Selection
         theme_group = QGroupBox("Appearance")
         theme_layout = QFormLayout(theme_group)
-        
+
         self.theme_combo = QComboBox()
         for key, theme_data in THEMES.items():
             self.theme_combo.addItem(theme_data['name'], key)
@@ -2008,19 +1857,19 @@ class SetupDialog(QDialog):
                 self.theme_combo.setCurrentIndex(light_index)
         self.theme_combo.currentIndexChanged.connect(self._on_theme_preview)
         theme_layout.addRow("Theme:", self.theme_combo)
-        
+
         layout.addWidget(theme_group)
-        
+
         test_btn = QPushButton("Test Connection")
         test_btn.clicked.connect(self.test_connection)
         layout.addWidget(test_btn)
-        
+
         self.status_label = QLabel("")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.status_label)
-        
+
         layout.addStretch()
-        
+
         button_layout = QHBoxLayout()
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
@@ -2031,43 +1880,40 @@ class SetupDialog(QDialog):
         save_btn.clicked.connect(self.validate_and_accept)
         button_layout.addWidget(save_btn)
         layout.addLayout(button_layout)
-        
-        # Apply compact mode layout adjustments
-        compactify_layout(self)
-    
+
     def _on_theme_preview(self):
         """Preview theme change in the setup dialog."""
         theme_key = self.theme_combo.currentData()
         if theme_key and theme_key in THEMES:
             set_current_theme(theme_key)
             QApplication.instance().setStyleSheet(generate_stylesheet(THEMES[theme_key]))
-    
+
     def show_token_guide(self):
         """Show the API token creation guide."""
         dialog = APITokenGuideDialog(self)
         dialog.exec()
-    
+
     def test_connection(self):
         repo_url = self.repo_url_edit.text().strip()
         token = self.token_edit.text().strip()
-        
+
         if not repo_url:
             self.status_label.setText("Please enter a repository URL")
             theme = get_current_theme()
             self.status_label.setStyleSheet(f"color: {theme['danger']};")
             return
-        
+
         if not token:
             self.status_label.setText("API Token is required")
             theme = get_current_theme()
             self.status_label.setStyleSheet(f"color: {theme['danger']};")
             return
-        
+
         self.status_label.setText("Testing connection...")
         theme = get_current_theme()
         self.status_label.setStyleSheet(f"color: {theme['warning']};")
         QApplication.processEvents()
-        
+
         try:
             api = GitHubAPI(repo_url, token)
             api.branch = self.branch_edit.text().strip() or "main"
@@ -2083,7 +1929,7 @@ class SetupDialog(QDialog):
             self.status_label.setText(f"Error: {str(e)[:50]}")
             theme = get_current_theme()
             self.status_label.setStyleSheet(f"color: {theme['danger']};")
-    
+
     def validate_and_accept(self):
         """Validate that API token is provided before accepting."""
         theme = get_current_theme()
@@ -2096,7 +1942,7 @@ class SetupDialog(QDialog):
             self.status_label.setStyleSheet(f"color: {theme['danger']};")
             return
         self.accept()
-    
+
     def get_config(self) -> dict:
         return {
             'repo_url': self.repo_url_edit.text().strip(),
@@ -2109,18 +1955,18 @@ class SetupDialog(QDialog):
 
 class AddVersionDialog(QDialog):
     """Dialog for adding a new version."""
-    
+
     def __init__(self, existing_versions: List[str], parent=None):
         super().__init__(parent)
         self.existing_versions = existing_versions
         self.latest_version = self._get_latest_version()
         self.setup_ui()
-    
+
     def _get_latest_version(self) -> Optional[str]:
         """Get the latest version from existing versions."""
         if not self.existing_versions:
             return None
-        
+
         def version_tuple(v: str):
             parts = v.split('.')
             nums = []
@@ -2130,10 +1976,10 @@ class AddVersionDialog(QDialog):
                 except ValueError:
                     nums.append(0)
             return tuple(nums)
-        
+
         sorted_versions = sorted(self.existing_versions, key=version_tuple, reverse=True)
         return sorted_versions[0] if sorted_versions else None
-    
+
     def _compare_versions(self, v1: str, v2: str) -> int:
         """Compare two version strings. Returns positive if v1 > v2, negative if v1 < v2, 0 if equal."""
         def parse(v):
@@ -2145,34 +1991,34 @@ class AddVersionDialog(QDialog):
                 except ValueError:
                     nums.append(0)
             return nums
-        
+
         p1, p2 = parse(v1), parse(v2)
         # Pad with zeros
         while len(p1) < len(p2):
             p1.append(0)
         while len(p2) < len(p1):
             p2.append(0)
-        
+
         for a, b in zip(p1, p2):
             if a > b:
                 return 1
             elif a < b:
                 return -1
         return 0
-    
+
     def setup_ui(self):
         self.setWindowTitle("Add New Version")
         self.setMinimumSize(450, 320)
         self.setModal(True)
-        
+
         layout = QVBoxLayout(self)
         layout.setSpacing(20)
         layout.setContentsMargins(30, 30, 30, 30)
-        
+
         header = QLabel("Add New Version")
         header.setStyleSheet("font-size: 18px; font-weight: bold;")
         layout.addWidget(header)
-        
+
         # Warning message
         theme = get_current_theme()
         warning = QLabel("⚠️ Warning: Once a version is created and saved to the repository,\n"
@@ -2180,7 +2026,7 @@ class AddVersionDialog(QDialog):
         warning.setStyleSheet(f"color: {theme['warning']}; padding: 10px; background-color: rgba(249, 226, 175, 0.1); border-radius: 6px;")
         warning.setWordWrap(True)
         layout.addWidget(warning)
-        
+
         form_layout = QFormLayout()
         form_layout.setSpacing(15)
         self.version_edit = QLineEdit()
@@ -2188,23 +2034,23 @@ class AddVersionDialog(QDialog):
         self.version_edit.returnPressed.connect(self.validate_and_accept)
         form_layout.addRow("Version Number:", self.version_edit)
         layout.addLayout(form_layout)
-        
+
         format_note = QLabel("Version must be in X.Y.Z format (e.g., 1.0.0, 2.1.0)")
         format_note.setStyleSheet(f"font-size: 11px; color: {theme['text_secondary']};")
         layout.addWidget(format_note)
-        
+
         # Show latest version info
         if self.latest_version:
             latest_note = QLabel(f"Current latest version: {self.latest_version} - New version must be higher")
             latest_note.setStyleSheet(f"font-size: 11px; color: {theme['accent']};")
             layout.addWidget(latest_note)
-        
+
         self.error_label = QLabel("")
         self.error_label.setStyleSheet(f"color: {theme['danger']};")
         layout.addWidget(self.error_label)
-        
+
         layout.addStretch()
-        
+
         button_layout = QHBoxLayout()
         cancel_btn = QPushButton("Back")
         cancel_btn.clicked.connect(self.reject)
@@ -2215,10 +2061,7 @@ class AddVersionDialog(QDialog):
         confirm_btn.clicked.connect(self.validate_and_accept)
         button_layout.addWidget(confirm_btn)
         layout.addLayout(button_layout)
-        
-        # Apply compact mode layout adjustments
-        compactify_layout(self)
-    
+
     def validate_and_accept(self):
         version = self.version_edit.text().strip()
         if not version:
@@ -2236,51 +2079,51 @@ class AddVersionDialog(QDialog):
             self.error_label.setText(f"New version must be higher than {self.latest_version}")
             return
         self.accept()
-    
+
     def get_version(self) -> str:
         return self.version_edit.text().strip()
 
 
 class AddModDialog(QDialog):
     """Dialog for adding a new mod."""
-    
+
     def __init__(self, existing_ids: List[str], parent=None):
         super().__init__(parent)
         self.existing_ids = existing_ids
         self.custom_icon_path = ""
         self.setup_ui()
-    
+
     def setup_ui(self):
         self.setWindowTitle("Add New Mod")
         self.setMinimumSize(500, 400)
         self.setModal(True)
-        
+
         layout = QVBoxLayout(self)
         layout.setSpacing(15)
         layout.setContentsMargins(25, 25, 25, 25)
-        
+
         header = QLabel("Add New Mod")
         header.setStyleSheet("font-size: 18px; font-weight: bold;")
         layout.addWidget(header)
-        
+
         form_layout = QFormLayout()
         form_layout.setSpacing(12)
-        
+
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("Display name (e.g., Just Enough Items)")
         self.name_edit.returnPressed.connect(self.validate_and_accept)
         form_layout.addRow("Name:", self.name_edit)
-        
+
         self.id_edit = QLineEdit()
         self.id_edit.setPlaceholderText("Unique ID (e.g., jei)")
         self.id_edit.returnPressed.connect(self.validate_and_accept)
         form_layout.addRow("ID:", self.id_edit)
-        
+
         layout.addLayout(form_layout)
-        
+
         icon_group = QGroupBox("Icon (Optional)")
         icon_layout = QHBoxLayout(icon_group)
-        
+
         self.icon_preview = QLabel()
         self.icon_preview.setFixedSize(64, 64)
         theme = get_current_theme()
@@ -2288,7 +2131,7 @@ class AddModDialog(QDialog):
         self.icon_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.icon_preview.setText("No Icon")
         icon_layout.addWidget(self.icon_preview)
-        
+
         icon_btn_layout = QVBoxLayout()
         select_icon_btn = QPushButton("Select Icon...")
         select_icon_btn.clicked.connect(self.select_icon)
@@ -2300,13 +2143,13 @@ class AddModDialog(QDialog):
         icon_layout.addLayout(icon_btn_layout)
         icon_layout.addStretch()
         layout.addWidget(icon_group)
-        
+
         self.error_label = QLabel("")
         self.error_label.setStyleSheet(f"color: {theme['danger']};")
         layout.addWidget(self.error_label)
-        
+
         layout.addStretch()
-        
+
         button_layout = QHBoxLayout()
         cancel_btn = QPushButton("Back")
         cancel_btn.clicked.connect(self.reject)
@@ -2317,10 +2160,7 @@ class AddModDialog(QDialog):
         confirm_btn.clicked.connect(self.validate_and_accept)
         button_layout.addWidget(confirm_btn)
         layout.addLayout(button_layout)
-        
-        # Apply compact mode layout adjustments
-        compactify_layout(self)
-    
+
     def select_icon(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Select Icon", "", "Images (*.png *.jpg *.jpeg *.gif *.ico)"
@@ -2330,16 +2170,16 @@ class AddModDialog(QDialog):
             pixmap = QPixmap(file_path)
             if not pixmap.isNull():
                 self.icon_preview.setPixmap(pixmap.scaled(60, 60, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-    
+
     def clear_icon(self):
         self.custom_icon_path = ""
         self.icon_preview.clear()
         self.icon_preview.setText("No Icon")
-    
+
     def validate_and_accept(self):
         name = self.name_edit.text().strip()
         mod_id = self.id_edit.text().strip()
-        
+
         if not name:
             self.error_label.setText("Please enter a display name")
             return
@@ -2353,7 +2193,7 @@ class AddModDialog(QDialog):
             self.error_label.setText("This ID already exists")
             return
         self.accept()
-    
+
     def get_mod(self) -> ModEntry:
         mod = ModEntry()
         mod.display_name = self.name_edit.text().strip()
@@ -2364,33 +2204,33 @@ class AddModDialog(QDialog):
 
 class ConfirmDeleteDialog(QDialog):
     """Dialog for confirming deletion."""
-    
+
     def __init__(self, item_name: str, item_type: str = "item", parent=None):
         super().__init__(parent)
         self.item_name = item_name
         self.item_type = item_type
         self.setup_ui()
-    
+
     def setup_ui(self):
         self.setWindowTitle("Confirm Delete")
         self.setMinimumSize(400, 180)
         self.setModal(True)
-        
+
         layout = QVBoxLayout(self)
         layout.setSpacing(20)
         layout.setContentsMargins(30, 30, 30, 30)
-        
+
         header = QLabel("Confirm Delete")
         theme = get_current_theme()
         header.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {theme['danger']};")
         layout.addWidget(header)
-        
+
         message = QLabel(f"Are you sure you want to delete this {self.item_type}?\n\n\"{self.item_name}\"")
         message.setWordWrap(True)
         layout.addWidget(message)
-        
+
         layout.addStretch()
-        
+
         button_layout = QHBoxLayout()
         cancel_btn = QPushButton("Back")
         cancel_btn.clicked.connect(self.reject)
@@ -2401,16 +2241,13 @@ class ConfirmDeleteDialog(QDialog):
         delete_btn.clicked.connect(self.accept)
         button_layout.addWidget(delete_btn)
         layout.addLayout(button_layout)
-        
-        # Apply compact mode layout adjustments
-        compactify_layout(self)
 
 
 class ModSearchThread(QThread):
     """Background thread for searching mods from CurseForge/Modrinth."""
     search_complete = pyqtSignal(list, int)  # results, total_count
     error_occurred = pyqtSignal(str)
-    
+
     def __init__(self, source: str, query: str, version_filter: str = "", sort_by: str = "", loader_filter: str = ""):
         super().__init__()
         self.source = source
@@ -2420,20 +2257,20 @@ class ModSearchThread(QThread):
         self.loader_filter = loader_filter  # Mod loader filter (forge, fabric, etc.)
         self.offset = 0  # For pagination/infinite scroll
         self._running = True
-    
+
     def run(self):
         try:
             if self.source == 'curseforge':
                 results, total_count = self._search_curseforge()
             else:
                 results, total_count = self._search_modrinth()
-            
+
             if self._running:
                 self.search_complete.emit(results, total_count)
         except Exception as e:
             if self._running:
                 self.error_occurred.emit(str(e))
-    
+
     def _search_curseforge(self) -> tuple:
         """Search CurseForge for mods. Returns (results, total_count)."""
         # Use curse.tools proxy API
@@ -2459,10 +2296,10 @@ class ModSearchThread(QThread):
             loader_value = loader_map.get(self.loader_filter.lower())
             if loader_value:
                 params['modLoaderType'] = loader_value
-        
+
         query_str = urllib.parse.urlencode(params)
         url = f"{CF_PROXY_BASE_URL}/mods/search?{query_str}"
-        
+
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req, timeout=30) as response:
             data = json.loads(response.read())
@@ -2470,7 +2307,7 @@ class ModSearchThread(QThread):
             # Get total count from pagination info
             pagination = data.get('pagination', {})
             total_count = pagination.get('totalCount', 0)
-            
+
             results = []
             for mod in mods:
                 results.append({
@@ -2484,7 +2321,7 @@ class ModSearchThread(QThread):
                     'slug': mod.get('slug', '')
                 })
             return results, total_count
-    
+
     def _search_modrinth(self) -> tuple:
         """Search Modrinth for mods. Returns (results, total_count)."""
         facets = [['project_type:mod']]
@@ -2493,7 +2330,7 @@ class ModSearchThread(QThread):
         # Add mod loader filter for Modrinth
         if self.loader_filter:
             facets.append([f'categories:{self.loader_filter.lower()}'])
-        
+
         # Default to downloads if not specified
         sort_index = self.sort_by if self.sort_by else MODRINTH_SORT_OPTIONS.get("Downloads", "downloads")
         params = {
@@ -2505,17 +2342,17 @@ class ModSearchThread(QThread):
         # Only add query if not empty
         if self.query:
             params['query'] = self.query
-        
+
         query_str = urllib.parse.urlencode(params)
         url = f"https://api.modrinth.com/v2/search?{query_str}"
-        
+
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req, timeout=30) as response:
             data = json.loads(response.read())
             hits = data.get('hits', [])
             # Get total count from API response
             total_count = data.get('total_hits', 0)
-            
+
             results = []
             for mod in hits:
                 results.append({
@@ -2529,7 +2366,7 @@ class ModSearchThread(QThread):
                     'slug': mod.get('slug', '')
                 })
             return results, total_count
-    
+
     def stop(self):
         self._running = False
 
@@ -2538,38 +2375,38 @@ class ModVersionFetchThread(QThread):
     """Background thread for fetching mod versions/files."""
     versions_fetched = pyqtSignal(list)
     error_occurred = pyqtSignal(str)
-    
+
     def __init__(self, source: str, project_id: str, game_version: str = ""):
         super().__init__()
         self.source = source
         self.project_id = project_id
         self.game_version = game_version
         self._running = True
-    
+
     def run(self):
         try:
             if self.source == 'curseforge':
                 versions = self._fetch_curseforge_versions()
             else:
                 versions = self._fetch_modrinth_versions()
-            
+
             if self._running:
                 self.versions_fetched.emit(versions)
         except Exception as e:
             if self._running:
                 self.error_occurred.emit(str(e))
-    
+
     def _fetch_curseforge_versions(self) -> list:
         """Fetch versions from CurseForge."""
         url = f"{CF_PROXY_BASE_URL}/mods/{self.project_id}/files"
         if self.game_version:
             url += f"?gameVersion={self.game_version}"
-        
+
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req, timeout=30) as response:
             data = json.loads(response.read())
             files = data.get('data', [])
-            
+
             results = []
             for f in files[:20]:  # Limit to 20 most recent
                 results.append({
@@ -2581,15 +2418,15 @@ class ModVersionFetchThread(QThread):
                     'release_type': ['Release', 'Beta', 'Alpha'][f.get('releaseType', 1) - 1] if f.get('releaseType') else 'Release'
                 })
             return results
-    
+
     def _fetch_modrinth_versions(self) -> list:
         """Fetch versions from Modrinth."""
         url = f"https://api.modrinth.com/v2/project/{self.project_id}/version"
-        
+
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req, timeout=30) as response:
             versions = json.loads(response.read())
-            
+
             results = []
             for v in versions[:20]:  # Limit to 20 most recent
                 files = v.get('files', [])
@@ -2603,7 +2440,7 @@ class ModVersionFetchThread(QThread):
                     'release_type': v.get('version_type', 'release').capitalize()
                 })
             return results
-    
+
     def stop(self):
         self._running = False
 
@@ -2612,26 +2449,26 @@ class ModDescriptionFetchThread(QThread):
     """Background thread for fetching full mod description."""
     description_fetched = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
-    
+
     def __init__(self, source: str, project_id: str):
         super().__init__()
         self.source = source
         self.project_id = project_id
         self._running = True
-    
+
     def run(self):
         try:
             if self.source == 'curseforge':
                 description = self._fetch_curseforge_description()
             else:
                 description = self._fetch_modrinth_description()
-            
+
             if self._running and description is not None:
                 self.description_fetched.emit(description)
         except Exception as e:
             if self._running:
                 self.error_occurred.emit(str(e))
-    
+
     def _fetch_curseforge_description(self) -> str:
         """Fetch full description from CurseForge."""
         url = f"{CF_PROXY_BASE_URL}/mods/{self.project_id}/description"
@@ -2643,7 +2480,7 @@ class ModDescriptionFetchThread(QThread):
             # Allow only safe HTML tags for display
             description = self._sanitize_html(description)
             return description
-    
+
     def _sanitize_html(self, html_content: str) -> str:
         """Sanitize HTML content by removing script tags and event handlers."""
         if not html_content:
@@ -2658,7 +2495,7 @@ class ModDescriptionFetchThread(QThread):
         # Remove javascript: URLs
         html_content = re.sub(r'href\s*=\s*["\']javascript:[^"\']*["\']', '', html_content, flags=re.IGNORECASE)
         return html_content
-    
+
     def _fetch_modrinth_description(self) -> str:
         """Fetch full description from Modrinth."""
         url = f"https://api.modrinth.com/v2/project/{self.project_id}"
@@ -2667,55 +2504,55 @@ class ModDescriptionFetchThread(QThread):
             data = json.loads(response.read())
             # Modrinth returns body (full description) as markdown
             return data.get('body', data.get('description', ''))
-    
+
     def stop(self):
         self._running = False
 
 
 class ModBrowserDialog(QDialog):
     """Dialog for browsing and selecting mods from CurseForge/Modrinth.
-    
+
     Simple icon loading system:
     - Icons are cached per source (curseforge/modrinth)
     - First page icons are preloaded at program startup
     - Icons load on-demand when items become visible
     """
-    
+
     # Class-level icon cache (persists across dialog instances)
     _icon_cache = {
         'curseforge': {},  # mod_id -> icon_bytes
         'modrinth': {}     # mod_id -> icon_bytes
     }
-    
+
     # Track icons being preloaded to prevent duplicate loads
     _preloading_icons = {
         'curseforge': set(),
         'modrinth': set()
     }
-    
+
     # Flag to track if startup preloading has been initiated
     _startup_preload_started = False
     _startup_preload_threads = []
-    
+
     # Class-level session state (persists across dialog instances until program close)
     _session_filters = {
         'curseforge': {'version': '', 'sort': 0, 'loader': 0, 'page': 0},
         'modrinth': {'version': '', 'sort': 0, 'loader': 0, 'page': 0}
     }
     _session_active_source = 'curseforge'  # Track which source tab was last active
-    
+
     @classmethod
     def start_startup_preload(cls):
         """Preload first page(s) icons for both sources at program startup."""
         if cls._startup_preload_started:
             return
         cls._startup_preload_started = True
-        
+
         # Preload pages for both sources based on STARTUP_PRELOAD_PAGES setting
         for source in ['curseforge', 'modrinth']:
             for page in range(STARTUP_PRELOAD_PAGES):
                 cls._preload_page(source, page)
-    
+
     @classmethod
     def _preload_page(cls, source: str, page: int):
         """Fetch and preload icons for a specific page of a source."""
@@ -2726,12 +2563,12 @@ class ModBrowserDialog(QDialog):
         thread.finished.connect(thread.deleteLater)
         cls._startup_preload_threads.append(thread)
         thread.start()
-    
+
     @classmethod
     def _preload_first_page(cls, source: str):
         """Fetch and preload icons for the first page of a source."""
         cls._preload_page(source, 0)
-    
+
     @classmethod
     def _on_preload_results(cls, results: list, source: str):
         """Handle preloaded search results - start fetching icons."""
@@ -2739,11 +2576,11 @@ class ModBrowserDialog(QDialog):
             mod_id = mod.get('id', mod.get('slug', ''))
             icon_url = mod.get('icon_url', '')
             # Check both cache and preloading set to prevent duplicate loads
-            if (mod_id and icon_url and 
+            if (mod_id and icon_url and
                 mod_id not in cls._icon_cache.get(source, {}) and
                 mod_id not in cls._preloading_icons.get(source, set())):
                 cls._preload_single_icon(mod_id, icon_url, source)
-    
+
     @classmethod
     def _preload_single_icon(cls, mod_id: str, icon_url: str, source: str):
         """Preload a single icon in the background."""
@@ -2751,7 +2588,7 @@ class ModBrowserDialog(QDialog):
         if source not in cls._preloading_icons:
             cls._preloading_icons[source] = set()
         cls._preloading_icons[source].add(mod_id)
-        
+
         thread = SimpleIconFetcher(mod_id, icon_url, source)
         thread.icon_fetched.connect(cls._on_preload_icon_fetched)
         thread.finished_loading.connect(
@@ -2759,25 +2596,25 @@ class ModBrowserDialog(QDialog):
         thread.finished.connect(thread.deleteLater)
         cls._startup_preload_threads.append(thread)
         thread.start()
-    
+
     @classmethod
     def _on_preload_icon_fetched(cls, mod_id: str, source: str, data: bytes):
         """Handle preloaded icon data."""
         if source not in cls._icon_cache:
             cls._icon_cache[source] = {}
         cls._icon_cache[source][mod_id] = data
-    
+
     @classmethod
     def _on_preload_complete(cls, mod_id: str, source: str):
         """Handle preload completion - remove from tracking set."""
         if source in cls._preloading_icons:
             cls._preloading_icons[source].discard(mod_id)
-    
+
     @classmethod
     def get_loaded_icon_count(cls, source: str) -> int:
         """Get the number of loaded icons for a source."""
         return len(cls._icon_cache.get(source, {}))
-    
+
     def __init__(self, existing_ids: List[str], current_version: str = "1.0.0", parent=None):
         super().__init__(parent)
         self.existing_ids = existing_ids
@@ -2789,35 +2626,35 @@ class ModBrowserDialog(QDialog):
         self.selected_mod = None
         self.selected_version = None
         self.all_search_results = []
-        
+
         # Pagination state
         self.current_page = 0
         self.total_results = 0
         self.has_more_results = True
         self._is_loading_page = False
-        
+
         # Track page state per source
         self._source_page_state = {
             'curseforge': {'page': 0, 'total': 0, 'has_more': True},
             'modrinth': {'page': 0, 'total': 0, 'has_more': True}
         }
-        
+
         # Track which mod_ids are currently loading
         self._loading_mod_ids = set()
-        
+
         # Debounce timer for scroll events
         self._scroll_debounce_timer = None
-        
+
         # Debounce timer for search text changes (auto-search while typing)
         self._search_debounce_timer = None
-        
+
         self.search_in_progress = False
-        
+
         self.setup_ui()
-        
+
         # Restore session state (source tab and filters)
         self._restore_session_state()
-        
+
         # Load popular mods on startup
         QTimer.singleShot(100, self.load_popular_mods)
 
@@ -2893,18 +2730,21 @@ class ModBrowserDialog(QDialog):
         filter_layout.addWidget(version_lbl)
 
         self.version_filter = QComboBox()
-        self.version_filter.setEditable(False)  # Use dropdown only, not editable text
-        self.version_filter.setMinimumWidth(140)  # Wider minimum for readability
-        self.version_filter.setMaximumWidth(280)  # Allow more expansion
-        # Ensure popup width adjusts to content (PyQt5/6 compatible)
-        if PYQT_VERSION == 6:
-            self.version_filter.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        else:
-            self.version_filter.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-        self.version_filter.view().setMinimumWidth(180)  # Minimum popup width
+        self.version_filter.setEditable(True)  # Allow custom version input
+        self.version_filter.setMinimumWidth(100)  # Use minimum width instead of fixed
+        self.version_filter.setMaximumWidth(120)  # Allow some expansion for dropdown button
+        self.version_filter.setPlaceholderText("Any")
+        # Style to ensure dropdown button is visible
+        self.version_filter.setStyleSheet("""
+            QComboBox::drop-down {
+                width: 24px;
+                border: none;
+            }
+        """)
         for version in MC_VERSION_OPTIONS:
             self.version_filter.addItem(version if version else "Any")
         self.version_filter.setCurrentIndex(0)
+        self.version_filter.lineEdit().returnPressed.connect(self.search_mods)
         self.version_filter.currentIndexChanged.connect(self._on_filter_changed)
         filter_layout.addWidget(self.version_filter)
 
@@ -2914,13 +2754,7 @@ class ModBrowserDialog(QDialog):
         filter_layout.addWidget(sort_lbl)
 
         self.sort_combo = QComboBox()
-        self.sort_combo.setMinimumWidth(130)
-        self.sort_combo.setMaximumWidth(200)
-        if PYQT_VERSION == 6:
-            self.sort_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        else:
-            self.sort_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-        self.sort_combo.view().setMinimumWidth(150)
+        self.sort_combo.setFixedWidth(130)
         self._update_sort_options()
         self.sort_combo.currentIndexChanged.connect(self._on_filter_changed)
         filter_layout.addWidget(self.sort_combo)
@@ -2931,13 +2765,7 @@ class ModBrowserDialog(QDialog):
         filter_layout.addWidget(loader_lbl)
 
         self.loader_combo = QComboBox()
-        self.loader_combo.setMinimumWidth(100)
-        self.loader_combo.setMaximumWidth(180)
-        if PYQT_VERSION == 6:
-            self.loader_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        else:
-            self.loader_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-        self.loader_combo.view().setMinimumWidth(120)
+        self.loader_combo.setFixedWidth(100)
         for name in MOD_LOADER_OPTIONS.keys():
             self.loader_combo.addItem(name)
         self.loader_combo.setCurrentIndex(0)  # Default to "Both"
@@ -3169,21 +2997,18 @@ class ModBrowserDialog(QDialog):
         self._scroll_debounce_timer.setSingleShot(True)
         self._scroll_debounce_timer.timeout.connect(self._load_visible_icons)
         self._scroll_debounce_timer.setInterval(ICON_LOAD_DEBOUNCE_MS)
-        
+
         # Set up debounce timer for search text changes
         self._search_debounce_timer = QTimer()
         self._search_debounce_timer.setSingleShot(True)
         self._search_debounce_timer.timeout.connect(self.search_mods)
         self._search_debounce_timer.setInterval(400)  # 400ms debounce for typing
-        
-        # Apply compact mode layout adjustments
-        compactify_layout(self)
 
     def _on_search_text_changed(self, text: str):
         """Handle search text changes - debounce and auto-search while typing."""
         if self._search_debounce_timer:
             self._search_debounce_timer.start()
-    
+
     def _on_filter_changed(self):
         """Handle filter dropdown changes - refresh the mod list immediately."""
         # Save current filter state for this source to class-level session storage
@@ -3191,7 +3016,7 @@ class ModBrowserDialog(QDialog):
         ModBrowserDialog._session_filters[source]['version'] = self.version_filter.currentText()
         ModBrowserDialog._session_filters[source]['sort'] = self.sort_combo.currentIndex()
         ModBrowserDialog._session_filters[source]['loader'] = self.loader_combo.currentIndex()
-        
+
         # Trigger search with new filters
         self.search_mods()
 
@@ -3323,7 +3148,7 @@ class ModBrowserDialog(QDialog):
         self.modrinth_source_btn.setChecked(source == 'modrinth')
         self._update_source_button_styles()
         self.on_source_changed()
-    
+
     def _restore_session_state(self):
         """Restore session state (source tab and filters) from class-level storage."""
         # Restore active source tab
@@ -3331,17 +3156,17 @@ class ModBrowserDialog(QDialog):
         self.curseforge_source_btn.setChecked(source == 'curseforge')
         self.modrinth_source_btn.setChecked(source == 'modrinth')
         self._update_source_button_styles()
-        
+
         # Update sort options for the current source
         self._update_sort_options()
-        
+
         # Restore filters for the current source
         saved_filters = ModBrowserDialog._session_filters.get(source, {})
-        
+
         self.version_filter.blockSignals(True)
         self.sort_combo.blockSignals(True)
         self.loader_combo.blockSignals(True)
-        
+
         if saved_filters.get('version'):
             idx = self.version_filter.findText(saved_filters['version'])
             if idx >= 0:
@@ -3350,16 +3175,16 @@ class ModBrowserDialog(QDialog):
                 self.version_filter.setCurrentIndex(0)
         else:
             self.version_filter.setCurrentIndex(0)
-            
+
         if saved_filters.get('sort', 0) < self.sort_combo.count():
             self.sort_combo.setCurrentIndex(saved_filters.get('sort', 0))
         if saved_filters.get('loader', 0) < self.loader_combo.count():
             self.loader_combo.setCurrentIndex(saved_filters.get('loader', 0))
-        
+
         # Restore page state
         if saved_filters.get('page', 0) > 0:
             self.current_page = saved_filters.get('page', 0)
-        
+
         self.version_filter.blockSignals(False)
         self.sort_combo.blockSignals(False)
         self.loader_combo.blockSignals(False)
@@ -3378,7 +3203,7 @@ class ModBrowserDialog(QDialog):
         """Update sort dropdown options based on current source."""
         self.sort_combo.blockSignals(True)
         self.sort_combo.clear()
-        
+
         source = self._get_selected_source()
         if source == 'curseforge':
             for name in CURSEFORGE_SORT_OPTIONS.keys():
@@ -3386,7 +3211,7 @@ class ModBrowserDialog(QDialog):
         else:
             for name in MODRINTH_SORT_OPTIONS.keys():
                 self.sort_combo.addItem(name)
-        
+
         # Default to Downloads (first item)
         self.sort_combo.setCurrentIndex(0)
         self.sort_combo.blockSignals(False)
@@ -3395,7 +3220,7 @@ class ModBrowserDialog(QDialog):
         """Get the current sort value for the API based on source."""
         source = self._get_selected_source()
         sort_name = self.sort_combo.currentText()
-        
+
         if source == 'curseforge':
             return CURSEFORGE_SORT_OPTIONS.get(sort_name, CURSEFORGE_SORT_OPTIONS.get("Downloads", "6"))
         else:
@@ -3405,21 +3230,21 @@ class ModBrowserDialog(QDialog):
         """Preload icons for the next page in the background."""
         if self._is_loading_page:
             return
-        
+
         source = self._get_selected_source()
         query = self.search_edit.text().strip()
-        
+
         # Get version filter from combo box
         version_text = self.version_filter.currentText().strip()
         version_filter = version_text if version_text and version_text != "Any" else ""
-        
+
         # Get sort option based on current source
         sort_by = self._get_current_sort_value()
-        
+
         # Get loader filter
         loader_name = self.loader_combo.currentText()
         loader_filter = MOD_LOADER_OPTIONS.get(loader_name, "")
-        
+
         # Create a lightweight thread just for fetching the next page data
         preload_thread = ModSearchThread(source, query, version_filter, sort_by, loader_filter)
         preload_thread.offset = page * SEARCH_PAGE_SIZE
@@ -3436,7 +3261,7 @@ class ModBrowserDialog(QDialog):
             mod_id = mod.get('id', mod.get('slug', ''))
             icon_url = mod.get('icon_url', '')
             # Check both cache and preloading set to prevent duplicate loads
-            if (mod_id and icon_url and 
+            if (mod_id and icon_url and
                 mod_id not in ModBrowserDialog._icon_cache.get(source, {}) and
                 mod_id not in ModBrowserDialog._preloading_icons.get(source, set())):
                 ModBrowserDialog._preload_single_icon(mod_id, icon_url, source)
@@ -3466,12 +3291,12 @@ class ModBrowserDialog(QDialog):
         # Enable/disable navigation buttons
         self.first_page_btn.setEnabled(self.current_page > 0)
         self.prev_page_btn.setEnabled(self.current_page > 0)
-        
+
         # For CurseForge, disable next button on page 200 (index 199, max page limit)
         at_curseforge_limit = source == 'curseforge' and self.current_page >= CURSEFORGE_MAX_PAGES - 1
         can_go_next = (self.has_more_results or self.current_page < total_pages - 1) and not at_curseforge_limit
         self.next_page_btn.setEnabled(can_go_next)
-        
+
         # Last button is enabled when we know the total results from API
         # This allows navigation to the last page even when we haven't loaded all pages
         has_known_total = self.total_results > 0
@@ -3481,7 +3306,7 @@ class ModBrowserDialog(QDialog):
         """Estimate total number of pages based on current data."""
         source = self._get_selected_source()
         max_pages = CURSEFORGE_MAX_PAGES if source == 'curseforge' else 9999
-        
+
         if self.total_results > 0:
             calculated_pages = (self.total_results + SEARCH_PAGE_SIZE - 1) // SEARCH_PAGE_SIZE
             return min(calculated_pages, max_pages)
@@ -3526,19 +3351,19 @@ class ModBrowserDialog(QDialog):
             return
 
         source = self._get_selected_source()
-        
+
         # Save source page state
         self._source_page_state[source] = {
             'page': target_page,
             'total': self.total_results,
             'has_more': self.has_more_results
         }
-        
+
         # Also save page to class-level session filters
         ModBrowserDialog._session_filters[source]['page'] = target_page
 
         self.current_page = target_page
-        
+
         # Load the page
         self._load_page(target_page)
 
@@ -3554,18 +3379,18 @@ class ModBrowserDialog(QDialog):
 
         source = self._get_selected_source()
         query = self.search_edit.text().strip()
-        
+
         # Get version filter from combo box
         version_text = self.version_filter.currentText().strip()
         version_filter = version_text if version_text and version_text != "Any" else ""
-        
+
         # Get sort option based on current source
         sort_by = self._get_current_sort_value()
-        
+
         # Get loader filter
         loader_name = self.loader_combo.currentText()
         loader_filter = MOD_LOADER_OPTIONS.get(loader_name, "")
-        
+
         # Enforce CurseForge max page limit
         if source == 'curseforge' and page >= CURSEFORGE_MAX_PAGES:
             page = CURSEFORGE_MAX_PAGES - 1
@@ -3600,7 +3425,7 @@ class ModBrowserDialog(QDialog):
         self.search_thread.finished.connect(self._on_search_thread_finished)
         self.search_thread.finished.connect(self.search_thread.deleteLater)
         self.search_thread.start()
-        
+
         # Preload next page icons for faster experience
         if page < (CURSEFORGE_MAX_PAGES - 1 if source == 'curseforge' else 9999):
             QTimer.singleShot(500, lambda: self._preload_next_page_icons(page + 1))
@@ -3619,7 +3444,7 @@ class ModBrowserDialog(QDialog):
 
         # Check if there are more results
         self.has_more_results = len(results) >= SEARCH_PAGE_SIZE
-        
+
         # Store results locally
         self.all_search_results = results
 
@@ -3652,7 +3477,7 @@ class ModBrowserDialog(QDialog):
     def _display_page_results(self, results: list, source: str):
         """Display page results with cached icons applied immediately."""
         self.results_list.clear()
-        
+
         # Show "No results" message if empty
         if len(results) == 0:
             theme = get_current_theme()
@@ -3661,7 +3486,7 @@ class ModBrowserDialog(QDialog):
             no_results_item.setForeground(QColor(theme['text_secondary']))
             self.results_list.addItem(no_results_item)
             return
-        
+
         # Create a placeholder icon for items without cached icons
         placeholder_pixmap = self._create_placeholder_icon()
 
@@ -3681,7 +3506,7 @@ class ModBrowserDialog(QDialog):
                     item.setIcon(QIcon(placeholder_pixmap))
 
             self.results_list.addItem(item)
-    
+
     def _create_placeholder_icon(self) -> Optional[QPixmap]:
         """Create a placeholder icon for items without cached icons."""
         try:
@@ -3689,24 +3514,24 @@ class ModBrowserDialog(QDialog):
             size = 40
             pixmap = QPixmap(size, size)
             pixmap.fill(Qt.GlobalColor.transparent)
-            
+
             from PyQt6.QtGui import QPainter, QFont, QColor
             painter = QPainter(pixmap)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            
+
             # Draw a rounded rectangle background
             bg_color = QColor(theme['bg_tertiary'])
             painter.setBrush(bg_color)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRoundedRect(0, 0, size, size, 6, 6)
-            
+
             # Draw the package emoji
             font = QFont()
             font.setPixelSize(20)
             painter.setFont(font)
             painter.setPen(QColor(theme['text_secondary']))
             painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "📦")
-            
+
             painter.end()
             return pixmap
         except Exception:
@@ -3760,15 +3585,15 @@ class ModBrowserDialog(QDialog):
     def on_source_changed(self):
         """Handle source tab change."""
         source = self._get_selected_source()
-        
+
         # Update sort options for the new source
         self._update_sort_options()
-        
+
         # Restore session filter state for this source from class-level storage
         self.version_filter.blockSignals(True)
         self.sort_combo.blockSignals(True)
         self.loader_combo.blockSignals(True)
-        
+
         saved_filters = ModBrowserDialog._session_filters.get(source, {})
         if saved_filters.get('version'):
             idx = self.version_filter.findText(saved_filters['version'])
@@ -3778,16 +3603,16 @@ class ModBrowserDialog(QDialog):
                 self.version_filter.setCurrentIndex(0)
         else:
             self.version_filter.setCurrentIndex(0)
-            
+
         if saved_filters.get('sort', 0) < self.sort_combo.count():
             self.sort_combo.setCurrentIndex(saved_filters.get('sort', 0))
         if saved_filters.get('loader', 0) < self.loader_combo.count():
             self.loader_combo.setCurrentIndex(saved_filters.get('loader', 0))
-        
+
         self.version_filter.blockSignals(False)
         self.sort_combo.blockSignals(False)
         self.loader_combo.blockSignals(False)
-        
+
         # Restore page state for this source
         state = self._source_page_state.get(source, {'page': 0, 'total': 0, 'has_more': True})
         self.current_page = state.get('page', 0)
@@ -4568,7 +4393,7 @@ class ModEditorPanel(QWidget):
         # because hash is automatically calculated for these mods
         is_from_api_source = source_type in ['curseforge', 'modrinth']
         self.auto_hash_btn.setVisible(not is_from_api_source)
-        
+
         # Make hash field read-only for API sources (hash is auto-calculated)
         # For URL sources, hash can still be edited if needed
         self.hash_edit.setReadOnly(is_from_api_source)
@@ -4881,7 +4706,7 @@ class FileEditorPanel(QWidget):
         self.info_name_edit = QLineEdit()
         self.info_name_edit.setPlaceholderText("Name saved to config (blank by default)")
         info_layout.addRow("Info Name:", self.info_name_edit)
-        
+
         theme = get_current_theme()
         info_note = QLabel("Saved as 'display_name' in config file")
         info_note.setStyleSheet(f"font-size: 11px; color: {theme['text_secondary']};")
@@ -4891,7 +4716,7 @@ class FileEditorPanel(QWidget):
         self.display_name_edit = QLineEdit()
         self.display_name_edit.setPlaceholderText("Name shown under file card (GUI only)")
         info_layout.addRow("Display Name:", self.display_name_edit)
-        
+
         display_note = QLabel("Shown under file card in editor only")
         display_note.setStyleSheet(f"font-size: 11px; color: {theme['text_secondary']};")
         info_layout.addRow("", display_note)
@@ -4995,7 +4820,7 @@ class FileEditorPanel(QWidget):
         if not url:
             QMessageBox.warning(self, "No URL", "Please enter a URL first.")
             return
-        
+
         # Validate URL format using urlparse for proper validation
         try:
             parsed = urllib.parse.urlparse(url)
@@ -5239,13 +5064,10 @@ class VersionEditorPage(QWidget):
         self.tabs.addTab(self.settings_tab, "Settings")
 
         main_layout.addWidget(self.tabs)
-        
+
         # Refresh panel styles to ensure they match the current theme
         # This is important because panels are created before theme is fully applied
         QTimer.singleShot(0, self.refresh_editor_panels_style)
-        
-        # Apply compact mode layout adjustments
-        compactify_layout(self)
 
     def setup_mods_tab(self):
         layout = QHBoxLayout(self.mods_tab)
@@ -5494,11 +5316,11 @@ class VersionEditorPage(QWidget):
         layout.addWidget(header)
 
         theme = get_current_theme()
-        
+
         # Safety Mode section
         safety_group = QGroupBox("Safety")
         safety_layout = QVBoxLayout(safety_group)
-        
+
         self.safety_mode_check = QCheckBox("Safety Mode")
         self.safety_mode_check.setChecked(True)  # Default to enabled
         self.safety_mode_check.setToolTip("When enabled, deletes will only remove files from the specified install location.\n"
@@ -5506,17 +5328,17 @@ class VersionEditorPage(QWidget):
         self.safety_mode_check.setStyleSheet(f"font-weight: bold; color: {theme['success']};")
         self.safety_mode_check.stateChanged.connect(self._on_safety_mode_changed)
         safety_layout.addWidget(self.safety_mode_check)
-        
+
         safety_note = QLabel("Safety mode prevents accidental deletion of important files")
         safety_note.setStyleSheet(f"font-size: 11px; color: {theme['text_secondary']};")
         safety_layout.addWidget(safety_note)
-        
+
         layout.addWidget(safety_group)
 
         # Version icon - improved layout with icon and buttons in a row
         icon_group = QGroupBox("Version Icon (Optional)")
         icon_main_layout = QVBoxLayout(icon_group)
-        
+
         icon_row = QHBoxLayout()
         icon_row.setSpacing(16)
 
@@ -5537,7 +5359,7 @@ class VersionEditorPage(QWidget):
         icon_btn_layout.addWidget(clear_icon_btn)
         icon_row.addLayout(icon_btn_layout)
         icon_row.addStretch()
-        
+
         icon_main_layout.addLayout(icon_row)
 
         layout.addWidget(icon_group)
@@ -5567,7 +5389,7 @@ class VersionEditorPage(QWidget):
         self.selected_mod_index = -1
         self.selected_file_index = -1
         self.selected_delete_index = -1
-        
+
         # Set safety mode checkbox state
         if hasattr(self, 'safety_mode_check'):
             self.safety_mode_check.blockSignals(True)
@@ -6114,14 +5936,14 @@ class VersionEditorPage(QWidget):
             }}
         """
         placeholder_style = f"color: {theme['text_secondary']}; font-size: 16px; font-style: italic; background-color: transparent; padding: 16px;"
-        
+
         if hasattr(self, 'mod_right_container'):
             self.mod_right_container.setStyleSheet(container_style)
         if hasattr(self, 'file_right_container'):
             self.file_right_container.setStyleSheet(container_style)
         if hasattr(self, 'delete_right_container'):
             self.delete_right_container.setStyleSheet(container_style)
-        
+
         # Update placeholder label styles
         if hasattr(self, 'mod_placeholder'):
             for label in self.mod_placeholder.findChildren(QLabel):
@@ -6309,31 +6131,28 @@ class VersionSelectionPage(QWidget):
         self.scroll.setWidget(self.grid_widget)
 
         layout.addWidget(self.scroll)
-        
-        # Apply compact mode layout adjustments
-        compactify_layout(self)
 
     def set_versions(self, versions: Dict[str, VersionConfig]):
         self.versions = versions
         self.refresh_grid()
-    
+
     def refresh_grid(self):
         # Clear grid
         while self.grid.count():
             item = self.grid.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        
+
         row, col = 0, 0
         max_cols = 5
-        
+
         def version_sort_key(v: str):
             """Sort key for semantic versions like 1.0.0, 1.0.0-beta, etc."""
             # Split into base version and pre-release tag
             parts = v.split('-', 1)
             base = parts[0]
             tag = parts[1] if len(parts) > 1 else ''
-            
+
             # Parse base version numbers
             nums = []
             for x in base.split('.'):
@@ -6341,16 +6160,16 @@ class VersionSelectionPage(QWidget):
                     nums.append(int(x))
                 except ValueError:
                     nums.append(0)
-            
+
             # Pre-release versions sort before release (empty tag = release)
             # Release versions have higher priority (1), pre-release have lower (0)
             tag_priority = 0 if tag else 1
-            
+
             return (nums, tag_priority, tag)
-        
+
         # Sort versions (newest first)
         sorted_versions = sorted(self.versions.keys(), key=version_sort_key, reverse=True)
-        
+
         # Update latest version label
         if sorted_versions:
             latest = sorted_versions[0]
@@ -6359,25 +6178,25 @@ class VersionSelectionPage(QWidget):
             self.latest_version_label.setStyleSheet(f"color: {theme['accent']}; font-weight: bold; font-size: 14px; padding: 8px 0;")
         else:
             self.latest_version_label.setText("")
-        
+
         # Add version cards
         for i, version in enumerate(sorted_versions):
             config = self.versions[version]
             icon_path = config.icon_path if hasattr(config, 'icon_path') else ""
             is_latest = (i == 0)
             is_new = config.is_new() if hasattr(config, 'is_new') else True
-            
+
             # Use VersionCard for versions (with delete button for non-new ones)
             card = VersionCard(version, is_latest=is_latest, is_new=is_new, icon_path=icon_path)
             card.clicked.connect(lambda v=version: self.version_selected.emit(v))
             card.delete_clicked.connect(self.on_delete_version)
             self.grid.addWidget(card, row, col)
-            
+
             col += 1
             if col >= max_cols:
                 col = 0
                 row += 1
-        
+
         # Add "Add" button
         add_card = VersionCard("", is_add_button=True)
         add_card.clicked.connect(lambda v="": self.add_version())
@@ -6393,13 +6212,13 @@ class VersionSelectionPage(QWidget):
             if version in self.versions:
                 config = self.versions[version]
                 version_is_saved = not config.is_new() if hasattr(config, 'is_new') else False
-            
+
             # Remove version from local storage
             if version in self.versions:
                 del self.versions[version]
                 self.refresh_grid()
                 self.version_deleted.emit(version)
-                
+
                 # Only show the save reminder if the version was saved to the repo
                 if version_is_saved:
                     # Process events to ensure grid is fully updated before showing message
@@ -6409,20 +6228,20 @@ class VersionSelectionPage(QWidget):
                         f"Version '{version}' has been deleted locally.\n\n"
                         "Click 'Save All' in the sidebar to permanently remove it from the repository."
                     )
-    
+
     def add_version(self):
         existing = list(self.versions.keys())
         dialog = AddVersionDialog(existing, self)
         if dialog.exec():
             version = dialog.get_version()
             new_config = VersionConfig(version)
-            
+
             # Copy mods and files from the most recent version (if any)
             if self.versions:
                 # Find the most recent version
                 def version_sort_key(v: str):
                     """Sort key for semantic versions."""
-                    parts = v.split('.') 
+                    parts = v.split('.')
                     nums = []
                     for x in parts:
                         try:
@@ -6430,27 +6249,27 @@ class VersionSelectionPage(QWidget):
                         except ValueError:
                             nums.append(0)
                     return nums
-                
+
                 sorted_versions = sorted(self.versions.keys(), key=version_sort_key, reverse=True)
                 if sorted_versions:
                     latest_version = sorted_versions[0]
                     latest_config = self.versions[latest_version]
-                    
+
                     # Copy mods, marking them as from previous version
                     for mod in latest_config.mods:
                         new_mod_data = mod.to_dict()
                         new_mod_data['_is_from_previous'] = True
                         new_config.mods.append(ModEntry(new_mod_data))
-                    
+
                     # Copy files, marking them as from previous version
                     for file in latest_config.files:
                         new_file_data = file.to_dict()
                         new_file_data['_is_from_previous'] = True
                         new_config.files.append(FileEntry(new_file_data))
-                    
+
                     # Clear deletes for new version
                     new_config.deletes = []
-            
+
             new_config._is_new = True  # Mark as new version
             self.versions[version] = new_config
             self.refresh_grid()
@@ -6461,7 +6280,7 @@ class VersionSelectionPage(QWidget):
 class ConfigurationPage(QWidget):
     """Page for editing the main config.json file."""
     config_changed = pyqtSignal()
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.modpack_config: Optional[ModpackConfig] = None
@@ -6469,101 +6288,98 @@ class ConfigurationPage(QWidget):
         self._config_path = ""
         self._branch = "main"
         self.setup_ui()
-    
+
     def setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
-        
+
         header = QLabel("Modpack Configuration")
         header.setObjectName("headerLabel")
         layout.addWidget(header)
-        
+
         desc = QLabel("Edit the main config.json that controls how ModUpdater fetches updates.\n"
                       "This file is stored in the repository and downloaded by clients.")
         desc.setWordWrap(True)
         layout.addWidget(desc)
-        
+
         layout.addSpacing(16)
-        
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        
+
         scroll_widget = QWidget()
         scroll_layout = QVBoxLayout(scroll_widget)
         scroll_layout.setSpacing(16)
-        
+
         # Hidden fields for internal use (not visible to user)
         self.modpack_version_edit = QLineEdit()
         self.modpack_version_edit.setVisible(False)
-        
+
         self.configs_base_url_edit = QLineEdit()
         self.configs_base_url_edit.setVisible(False)
-        
+
         self.mods_json_edit = QLineEdit()
         self.mods_json_edit.setText("mods.json")
         self.mods_json_edit.setVisible(False)
-        
+
         self.files_json_edit = QLineEdit()
         self.files_json_edit.setText("files.json")
         self.files_json_edit.setVisible(False)
-        
+
         self.deletes_json_edit = QLineEdit()
         self.deletes_json_edit.setText("deletes.json")
         self.deletes_json_edit.setVisible(False)
-        
+
         # Advanced Options
         advanced_group = QGroupBox("Advanced Options")
         advanced_layout = QFormLayout(advanced_group)
-        
+
         self.check_current_version_check = QCheckBox()
         self.check_current_version_check.setChecked(True)
         self.check_current_version_check.stateChanged.connect(self.on_field_changed)
         advanced_layout.addRow("Check Current Version:", self.check_current_version_check)
-        
+
         self.max_retries_spin = QSpinBox()
         self.max_retries_spin.setRange(1, 10)
         self.max_retries_spin.setValue(3)
         self.max_retries_spin.valueChanged.connect(self.on_field_changed)
         advanced_layout.addRow("Max Retries:", self.max_retries_spin)
-        
+
         self.backup_keep_spin = QSpinBox()
         self.backup_keep_spin.setRange(1, 20)
         self.backup_keep_spin.setValue(5)
         self.backup_keep_spin.valueChanged.connect(self.on_field_changed)
         advanced_layout.addRow("Backups to Keep:", self.backup_keep_spin)
-        
+
         self.debug_mode_check = QCheckBox()
         self.debug_mode_check.stateChanged.connect(self.on_field_changed)
         advanced_layout.addRow("Debug Mode:", self.debug_mode_check)
-        
+
         scroll_layout.addWidget(advanced_group)
         scroll_layout.addStretch()
-        
+
         scroll.setWidget(scroll_widget)
         layout.addWidget(scroll)
 
         # Save button at bottom
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
-        
+
         self.save_btn = QPushButton("Save Configuration")
         self.save_btn.setObjectName("successButton")
         self.save_btn.clicked.connect(self.save_config)
         btn_layout.addWidget(self.save_btn)
-        
+
         layout.addLayout(btn_layout)
-        
-        # Apply compact mode layout adjustments
-        compactify_layout(self)
-    
+
     def set_repository_info(self, repo_url: str, config_path: str, branch: str):
         """Set repository information for automatic URL generation."""
         self._repo_url = repo_url
         self._config_path = config_path
         self._branch = branch
         self._update_automatic_url()
-    
+
     def _update_automatic_url(self):
         """Update the automatic base URL from repository info."""
         if self._repo_url:
@@ -6578,14 +6394,14 @@ class ConfigurationPage(QWidget):
                 if self._config_path:
                     base_url += f"{self._config_path}/"
                 self.configs_base_url_edit.setText(base_url)
-    
+
     def load_config(self, config: ModpackConfig):
         """Load a ModpackConfig into the form."""
         self.modpack_config = config
-        
+
         # Block signals during load
         self.blockSignals(True)
-        
+
         self.modpack_version_edit.setText(config.modpack_version)
         # Only set URL if not already set automatically
         if not self.configs_base_url_edit.text():
@@ -6597,20 +6413,20 @@ class ConfigurationPage(QWidget):
         self.max_retries_spin.setValue(config.max_retries)
         self.backup_keep_spin.setValue(config.backup_keep)
         self.debug_mode_check.setChecked(config.debug_mode)
-        
+
         self.blockSignals(False)
-    
+
     def update_version(self, version: str):
         """Update the modpack version (called when a new version is created)."""
         self.modpack_version_edit.setText(version)
         if self.modpack_config:
             self.modpack_config.modpack_version = version
-    
+
     def save_config(self):
         """Save the form values to the ModpackConfig."""
         if not self.modpack_config:
             self.modpack_config = ModpackConfig()
-        
+
         self.modpack_config.modpack_version = self.modpack_version_edit.text().strip()
         self.modpack_config.configs_base_url = self.configs_base_url_edit.text().strip()
         self.modpack_config.mods_json = self.mods_json_edit.text().strip() or 'mods.json'
@@ -6620,13 +6436,13 @@ class ConfigurationPage(QWidget):
         self.modpack_config.max_retries = self.max_retries_spin.value()
         self.modpack_config.backup_keep = self.backup_keep_spin.value()
         self.modpack_config.debug_mode = self.debug_mode_check.isChecked()
-        
+
         self.config_changed.emit()
-    
+
     def get_config(self) -> Optional[ModpackConfig]:
         """Get the current ModpackConfig."""
         return self.modpack_config
-    
+
     def on_field_changed(self):
         """Handle field changes - mark as modified."""
         pass  # Could add unsaved indicator
@@ -6636,81 +6452,81 @@ class ConfigurationPage(QWidget):
 class ThemePage(QWidget):
     """Theme page for managing application themes."""
     theme_changed = pyqtSignal(str)  # Emits the new theme key
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setup_ui()
-    
+
     def setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
-        
+
         header = QLabel("🎨 Theme")
         header.setObjectName("headerLabel")
         layout.addWidget(header)
-        
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        
+
         scroll_widget = QWidget()
         scroll_layout = QVBoxLayout(scroll_widget)
         scroll_layout.setSpacing(20)
-        
+
         # Theme Selection
         theme_group = QGroupBox("Select Theme")
         theme_layout = QVBoxLayout(theme_group)
-        
+
         self.theme_combo = QComboBox()
         self._populate_theme_combo()
         self.theme_combo.currentIndexChanged.connect(self.on_theme_changed)
         theme_layout.addWidget(self.theme_combo)
-        
+
         scroll_layout.addWidget(theme_group)
-        
+
         # Custom Theme Management
         custom_group = QGroupBox("Custom Themes")
         custom_layout = QVBoxLayout(custom_group)
-        
+
         create_btn = QPushButton("✨ Create New Custom Theme...")
         create_btn.setObjectName("primaryButton")
         create_btn.clicked.connect(self._create_custom_theme)
         custom_layout.addWidget(create_btn)
-        
+
         # List of custom themes for editing/deleting
         self.custom_themes_list = QListWidget()
         self.custom_themes_list.setMaximumHeight(150)
         self._populate_custom_themes_list()
         custom_layout.addWidget(self.custom_themes_list)
-        
+
         btn_layout = QHBoxLayout()
         self.edit_theme_btn = QPushButton("✏️ Edit Selected")
         self.edit_theme_btn.clicked.connect(self._edit_custom_theme)
         self.edit_theme_btn.setEnabled(False)
         btn_layout.addWidget(self.edit_theme_btn)
-        
+
         self.delete_theme_btn = QPushButton("🗑️ Delete Selected")
         self.delete_theme_btn.setObjectName("dangerButton")
         self.delete_theme_btn.clicked.connect(self._delete_custom_theme)
         self.delete_theme_btn.setEnabled(False)
         btn_layout.addWidget(self.delete_theme_btn)
-        
+
         btn_layout.addStretch()
         custom_layout.addLayout(btn_layout)
-        
+
         self.custom_themes_list.currentRowChanged.connect(self._on_custom_theme_selected)
-        
+
         scroll_layout.addWidget(custom_group)
-        
+
         # Theme preview info
         preview_group = QGroupBox("Current Theme Preview")
         preview_layout = QVBoxLayout(preview_group)
-        
+
         theme = get_current_theme()
         self.preview_container = QWidget()
         preview_inner = QHBoxLayout(self.preview_container)
         preview_inner.setSpacing(8)
-        
+
         # Color swatches
         for color_key in ['bg_primary', 'bg_secondary', 'accent', 'text_primary', 'success', 'danger']:
             swatch = QLabel()
@@ -6718,19 +6534,16 @@ class ThemePage(QWidget):
             swatch.setStyleSheet(f"background-color: {theme.get(color_key, '#000')}; border: 1px solid #888; border-radius: 4px;")
             swatch.setToolTip(color_key)
             preview_inner.addWidget(swatch)
-        
+
         preview_inner.addStretch()
         preview_layout.addWidget(self.preview_container)
-        
+
         scroll_layout.addWidget(preview_group)
         scroll_layout.addStretch()
-        
+
         scroll.setWidget(scroll_widget)
         layout.addWidget(scroll)
-        
-        # Apply compact mode layout adjustments
-        compactify_layout(self)
-    
+
     def _populate_theme_combo(self):
         """Populate the theme combo box with all themes."""
         self.theme_combo.blockSignals(True)
@@ -6738,7 +6551,7 @@ class ThemePage(QWidget):
         for key, theme in THEMES.items():
             self.theme_combo.addItem(theme['name'], key)
         self.theme_combo.blockSignals(False)
-    
+
     def _populate_custom_themes_list(self):
         """Populate the list of custom themes."""
         self.custom_themes_list.clear()
@@ -6746,13 +6559,13 @@ class ThemePage(QWidget):
             if key.startswith('custom_'):
                 self.custom_themes_list.addItem(theme['name'])
                 self.custom_themes_list.item(self.custom_themes_list.count() - 1).setData(Qt.ItemDataRole.UserRole, key)
-    
+
     def _on_custom_theme_selected(self, row: int):
         """Enable/disable edit and delete buttons based on selection."""
         has_selection = row >= 0
         self.edit_theme_btn.setEnabled(has_selection)
         self.delete_theme_btn.setEnabled(has_selection)
-    
+
     def _create_custom_theme(self):
         """Open dialog to create a new custom theme."""
         current_key = self.get_theme()
@@ -6765,7 +6578,7 @@ class ThemePage(QWidget):
             idx = self.theme_combo.findData(new_key)
             if idx >= 0:
                 self.theme_combo.setCurrentIndex(idx)
-    
+
     def _edit_custom_theme(self):
         """Open dialog to edit the selected custom theme."""
         item = self.custom_themes_list.currentItem()
@@ -6774,7 +6587,7 @@ class ThemePage(QWidget):
         theme_key = item.data(Qt.ItemDataRole.UserRole)
         if not theme_key:
             return
-        
+
         dialog = ThemeCreationDialog(self, edit_theme_key=theme_key)
         if dialog.exec():
             self._populate_theme_combo()
@@ -6782,7 +6595,7 @@ class ThemePage(QWidget):
             # Refresh theme if editing the current theme
             if self.get_theme() == theme_key:
                 self.theme_changed.emit(theme_key)
-    
+
     def _delete_custom_theme(self):
         """Delete the selected custom theme."""
         item = self.custom_themes_list.currentItem()
@@ -6791,7 +6604,7 @@ class ThemePage(QWidget):
         theme_key = item.data(Qt.ItemDataRole.UserRole)
         if not theme_key:
             return
-        
+
         # Confirm deletion
         reply = QMessageBox.question(
             self, "Delete Theme",
@@ -6799,23 +6612,23 @@ class ThemePage(QWidget):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
-        
+
         if reply == QMessageBox.StandardButton.Yes:
             # Switch to default theme if deleting current
             if self.get_theme() == theme_key:
                 self.set_theme('light')
                 self.theme_changed.emit('light')
-            
+
             # Remove from THEMES dict
             if theme_key in THEMES:
                 del THEMES[theme_key]
-            
+
             # Remove from custom themes file
             save_custom_themes()
-            
+
             self._populate_theme_combo()
             self._populate_custom_themes_list()
-    
+
     def set_theme(self, theme_key: str):
         """Set the current theme in the combo box."""
         idx = self.theme_combo.findData(theme_key)
@@ -6824,17 +6637,17 @@ class ThemePage(QWidget):
             self.theme_combo.setCurrentIndex(idx)
             self.theme_combo.blockSignals(False)
             self._update_preview()
-    
+
     def get_theme(self) -> str:
         """Get the currently selected theme key."""
         return self.theme_combo.currentData() or 'light'
-    
+
     def on_theme_changed(self):
         """Handle theme selection change."""
         theme_key = self.get_theme()
         self._update_preview()
         self.theme_changed.emit(theme_key)
-    
+
     def _update_preview(self):
         """Update the theme preview swatches."""
         theme = get_current_theme()
@@ -6842,7 +6655,7 @@ class ThemePage(QWidget):
         color_keys = ['bg_primary', 'bg_secondary', 'accent', 'text_primary', 'success', 'danger']
         for swatch, color_key in zip(swatches, color_keys):
             swatch.setStyleSheet(f"background-color: {theme.get(color_key, '#000')}; border: 1px solid #888; border-radius: 4px;")
-    
+
     def refresh_themes(self):
         """Refresh the theme lists (call after theme changes)."""
         self._populate_theme_combo()
@@ -6854,44 +6667,44 @@ class SettingsPage(QWidget):
     """Settings page for app configuration."""
     settings_changed = pyqtSignal()
     reconfigure_requested = pyqtSignal()  # Signal for reconfigure button
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setup_ui()
-    
+
     def setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
-        
+
         header = QLabel("Settings")
         header.setObjectName("headerLabel")
         layout.addWidget(header)
-        
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        
+
         scroll_widget = QWidget()
         scroll_layout = QVBoxLayout(scroll_widget)
         scroll_layout.setSpacing(20)
-        
+
         # GitHub Settings
         github_group = QGroupBox("GitHub Repository")
         github_layout = QFormLayout(github_group)
-        
+
         self.repo_url_label = QLabel("Not configured")
         github_layout.addRow("Repository:", self.repo_url_label)
-        
+
         self.reconfigure_btn = QPushButton("Reconfigure...")
         self.reconfigure_btn.clicked.connect(self.reconfigure_github)
         github_layout.addRow("", self.reconfigure_btn)
-        
+
         scroll_layout.addWidget(github_group)
-        
+
         # About
         about_group = QGroupBox("About")
         about_layout = QVBoxLayout(about_group)
-        
+
         about_label = QLabel(f"""
 <h3>{APP_NAME}</h3>
 <p>Version {APP_VERSION}</p>
@@ -6900,19 +6713,16 @@ class SettingsPage(QWidget):
         """)
         about_label.setWordWrap(True)
         about_layout.addWidget(about_label)
-        
+
         scroll_layout.addWidget(about_group)
         scroll_layout.addStretch()
-        
+
         scroll.setWidget(scroll_widget)
         layout.addWidget(scroll)
-        
-        # Apply compact mode layout adjustments
-        compactify_layout(self)
-    
+
     def set_repo_url(self, url: str):
         self.repo_url_label.setText(url if url else "Not configured")
-    
+
     def reconfigure_github(self):
         self.reconfigure_requested.emit()  # Emit specific signal for reconfigure
 
@@ -6921,7 +6731,7 @@ class SettingsPage(QWidget):
 # === Main Window ===
 class MainWindow(QMainWindow):
     """Main application window."""
-    
+
     def __init__(self):
         super().__init__()
         self.github_api: Optional[GitHubAPI] = None
@@ -6930,34 +6740,34 @@ class MainWindow(QMainWindow):
         self.current_theme = "dark"
         self.pending_changes: List[Tuple[str, str, str]] = []  # (path, content, sha)
         self._has_unsaved_deletions = False  # Track if any versions/mods/files were deleted
-        
+
         # New data model: single files for all versions
         self.all_mods: List[ModEntry] = []
         self.all_files: List[FileEntry] = []
         self.all_deletes: Dict[str, List[DeleteEntry]] = {}  # version -> list of deletes
         self.modpack_config: Optional[ModpackConfig] = None
         self.file_shas: Dict[str, str] = {}  # filename -> sha for GitHub updates
-        
+
         self.load_editor_config()
         self.setup_ui()
         self.apply_theme(self.current_theme)
-        
+
         # Note: Icon preloading is now done in main() before showing the main window
-        
+
         # Check for first-time setup
         QTimer.singleShot(100, self.check_setup)
-    
+
     def setup_ui(self):
         self.setWindowTitle(APP_NAME)
         self.setMinimumSize(1200, 800)
-        
+
         central = QWidget()
         self.setCentralWidget(central)
-        
+
         main_layout = QHBoxLayout(central)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        
+
         # Sidebar
         self.sidebar = QWidget()
         self.sidebar.setFixedWidth(220)
@@ -6965,12 +6775,12 @@ class MainWindow(QMainWindow):
         sidebar_layout = QVBoxLayout(self.sidebar)
         sidebar_layout.setContentsMargins(12, 16, 12, 16)
         sidebar_layout.setSpacing(8)
-        
+
         # Logo
         logo_label = QLabel("ModUpdater")
         logo_label.setStyleSheet("font-size: 18px; font-weight: 700; padding: 8px; padding-bottom: 16px;")
         sidebar_layout.addWidget(logo_label)
-        
+
         # Navigation
         self.nav_list = QListWidget()
         self.nav_list.addItem("📦 Versions")
@@ -6980,102 +6790,123 @@ class MainWindow(QMainWindow):
         self.nav_list.setCurrentRow(0)
         self.nav_list.currentRowChanged.connect(self.on_nav_changed)
         sidebar_layout.addWidget(self.nav_list)
-        
+
         sidebar_layout.addStretch()
-        
+
         # Status indicator
         self.status_label = QLabel("● Disconnected")
         theme = get_current_theme()
         self.status_label.setStyleSheet(f"color: {theme['danger']}; padding: 8px;")
         sidebar_layout.addWidget(self.status_label)
-        
+
         # Save button
         save_btn = QPushButton("💾 Save All")
         save_btn.setObjectName("successButton")
         save_btn.clicked.connect(self.save_all)
         sidebar_layout.addWidget(save_btn)
-        
+
         main_layout.addWidget(self.sidebar)
-        
+
         # Content stack
         self.stack = QStackedWidget()
-        
+
         # Version Selection Page
         self.version_selection_page = VersionSelectionPage()
         self.version_selection_page.version_selected.connect(self.open_version)
         self.version_selection_page.version_deleted.connect(self.on_version_deleted)
         self.stack.addWidget(self.version_selection_page)
-        
+
         # Version Editor Page
         self.version_editor_page = VersionEditorPage()
         self.version_editor_page.version_modified.connect(self.on_version_modified)
         self.version_editor_page.back_requested.connect(self.show_version_selection)
         self.version_editor_page.create_requested.connect(self.on_create_version)
         self.stack.addWidget(self.version_editor_page)
-        
+
         # Configuration Page (for main config.json)
         self.config_page = ConfigurationPage()
         self.config_page.config_changed.connect(self.on_config_changed)
         self.stack.addWidget(self.config_page)
-        
+
         # Theme Page
         self.theme_page = ThemePage()
         self.theme_page.theme_changed.connect(self.on_theme_changed)
         self.stack.addWidget(self.theme_page)
-        
+
         # Settings Page
         self.settings_page = SettingsPage()
         self.settings_page.reconfigure_requested.connect(self.reconfigure_github)
         self.stack.addWidget(self.settings_page)
-        
+
         main_layout.addWidget(self.stack)
-        
+
         # Menu bar
         self.setup_menu()
-        
-        # Apply compact mode layout adjustments
-        compactify_layout(self)
-    
+
     def setup_menu(self):
         menubar = self.menuBar()
-        
+
         file_menu = menubar.addMenu("File")
-        
+
         refresh_action = QAction("Refresh from GitHub", self)
         refresh_action.setShortcut("Ctrl+R")
         refresh_action.triggered.connect(self.refresh_from_github)
         file_menu.addAction(refresh_action)
-        
+
         file_menu.addSeparator()
-        
+
         save_action = QAction("Save All", self)
         save_action.setShortcut("Ctrl+S")
         save_action.triggered.connect(self.save_all)
         file_menu.addAction(save_action)
-        
+
         file_menu.addSeparator()
-        
+
         exit_action = QAction("Exit", self)
         exit_action.setShortcut("Ctrl+Q")
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
-        
+
         edit_menu = menubar.addMenu("Edit")
-        
+
         validate_action = QAction("Validate All", self)
         validate_action.triggered.connect(self.validate_all)
         edit_menu.addAction(validate_action)
-        
-        # Theme menu removed - use the Theme page in sidebar instead
-        # Initialize theme_actions as empty dict for compatibility
+
+        # Theme menu
+        theme_menu = menubar.addMenu("Theme")
+
+        # Create theme action
+        create_theme_action = QAction("Create Custom Theme...", self)
+        create_theme_action.triggered.connect(self.show_create_theme_dialog)
+        theme_menu.addAction(create_theme_action)
+
+        # Delete custom theme submenu
+        self.delete_theme_menu = theme_menu.addMenu("Delete Custom Theme")
+        self._update_delete_theme_menu()
+
+        theme_menu.addSeparator()
+
+        # Theme selection actions
         self.theme_actions = {}
-        
+        for key, theme in THEMES.items():
+            action = QAction(theme['name'], self)
+            action.setCheckable(True)
+            action.setData(key)
+            action.triggered.connect(lambda checked, k=key: self._on_theme_selected(k))
+            theme_menu.addAction(action)
+            self.theme_actions[key] = action
+
+        # Check current theme
+        if self.current_theme in self.theme_actions:
+            self.theme_actions[self.current_theme].setChecked(True)
+
         help_menu = menubar.addMenu("Help")
-        
+
         about_action = QAction("About", self)
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
-    
+
     def load_editor_config(self):
         """Load editor configuration from file."""
         config_path = Path.home() / ".modupdater" / CONFIG_FILE
@@ -7086,28 +6917,28 @@ class MainWindow(QMainWindow):
                     self.current_theme = self.editor_config.get('theme', 'light')
             except:
                 pass
-    
+
     def save_editor_config(self):
         """Save editor configuration to file."""
         config_dir = Path.home() / ".modupdater"
         config_dir.mkdir(parents=True, exist_ok=True)
         config_path = config_dir / CONFIG_FILE
-        
+
         self.editor_config['theme'] = self.current_theme
-        
+
         try:
             with open(config_path, 'w') as f:
                 json.dump(self.editor_config, f, indent=2)
         except Exception as e:
             print(f"Failed to save config: {e}")
-    
+
     def check_setup(self):
         """Check if first-time setup is needed."""
         if not self.editor_config.get('repo_url'):
             self.show_setup_dialog()
         else:
             self.connect_to_github()
-    
+
     def show_setup_dialog(self, existing_config: dict = None):
         """Show the setup dialog."""
         config = existing_config or self.editor_config.get('github', {})
@@ -7127,11 +6958,11 @@ class MainWindow(QMainWindow):
             self.connect_to_github()
         elif not self.editor_config.get('repo_url'):
             # User cancelled first-time setup
-            QMessageBox.warning(self, "Setup Required", 
+            QMessageBox.warning(self, "Setup Required",
                 "GitHub repository setup is required to use this editor.\n"
                 "The application will close.")
             QTimer.singleShot(100, self.close)
-    
+
     def _update_connection_status(self, status: str):
         """Update the connection status indicator."""
         theme = get_current_theme()
@@ -7147,7 +6978,7 @@ class MainWindow(QMainWindow):
         else:
             self.status_label.setText("● Error")
             self.status_label.setStyleSheet(f"color: {theme['danger']};")
-    
+
     def connect_to_github(self):
         """Connect to GitHub and fetch configs."""
         github_config = self.editor_config.get('github', {})
@@ -7155,15 +6986,15 @@ class MainWindow(QMainWindow):
         token = github_config.get('token', '')
         branch = github_config.get('branch', 'main')
         config_path = github_config.get('config_path', '')
-        
+
         if not repo_url:
             self._update_connection_status("not_configured")
             return
-        
+
         try:
             self.github_api = GitHubAPI(repo_url, token)
             self.github_api.branch = branch
-            
+
             if self.github_api.test_connection():
                 self._update_connection_status("connected")
                 self.settings_page.set_repo_url(repo_url)
@@ -7175,14 +7006,14 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self._update_connection_status("error")
             QMessageBox.warning(self, "Connection Error", f"Failed to connect to GitHub:\n{str(e)}")
-    
+
     def fetch_configs(self):
         """Fetch config files from GitHub (single files, not per-version folders)."""
         if not self.github_api:
             return
-        
+
         config_path = self.editor_config.get('github', {}).get('config_path', '')
-        
+
         try:
             # Reset data
             self.all_mods = []
@@ -7192,7 +7023,7 @@ class MainWindow(QMainWindow):
             self.file_shas = {}
             self.versions = {}
             self._has_unsaved_deletions = False  # Reset deletion flag
-            
+
             # Fetch config.json (main config file)
             config_file = f"{config_path}/config.json" if config_path else "config.json"
             try:
@@ -7207,7 +7038,7 @@ class MainWindow(QMainWindow):
                 print(f"No config.json found, creating default: {e}")
                 self.modpack_config = ModpackConfig()
                 self.config_page.load_config(self.modpack_config)
-            
+
             # Fetch mods.json
             mods_file = f"{config_path}/mods.json" if config_path else "mods.json"
             try:
@@ -7219,7 +7050,7 @@ class MainWindow(QMainWindow):
                     self.file_shas['mods.json'] = sha
             except Exception as e:
                 print(f"No mods.json found: {e}")
-            
+
             # Fetch files.json
             files_file = f"{config_path}/files.json" if config_path else "files.json"
             try:
@@ -7232,7 +7063,7 @@ class MainWindow(QMainWindow):
                     self.file_shas['files.json'] = sha
             except Exception as e:
                 print(f"No files.json found: {e}")
-            
+
             # Fetch deletes.json (new format with version groups)
             deletes_file = f"{config_path}/deletes.json" if config_path else "deletes.json"
             try:
@@ -7249,43 +7080,43 @@ class MainWindow(QMainWindow):
                     self.file_shas['deletes.json'] = sha
             except Exception as e:
                 print(f"No deletes.json found: {e}")
-            
+
             # Build versions based on unique "since" values from mods and files
             self._build_versions_from_data()
-            
+
             self.version_selection_page.set_versions(self.versions)
-            
+
         except Exception as e:
             QMessageBox.warning(self, "Fetch Error", f"Failed to fetch configs:\n{str(e)}")
-    
+
     def _build_versions_from_data(self):
         """Build version configs from loaded mods, files, and deletes."""
         # Collect all unique versions
         all_versions = set()
-        
+
         # From modpack config
         if self.modpack_config and self.modpack_config.modpack_version:
             all_versions.add(self.modpack_config.modpack_version)
-        
+
         # From mods
         for mod in self.all_mods:
             if mod.since:
                 all_versions.add(mod.since)
-        
+
         # From files
         for f in self.all_files:
             if f.since:
                 all_versions.add(f.since)
-        
+
         # From deletes
         for version in self.all_deletes.keys():
             all_versions.add(version)
-        
+
         # Create VersionConfig for each version
         self.versions = {}
         for version in all_versions:
             version_config = VersionConfig(version)
-            
+
             # Add mods that were introduced at or before this version
             for mod in self.all_mods:
                 if self._compare_versions(mod.since, version) <= 0:
@@ -7293,24 +7124,24 @@ class MainWindow(QMainWindow):
                     mod_copy = ModEntry(mod.to_dict())
                     mod_copy.since = mod.since
                     version_config.mods.append(mod_copy)
-            
+
             # Add files that were introduced at or before this version
             for f in self.all_files:
                 if self._compare_versions(f.since, version) <= 0:
                     file_copy = FileEntry(f.to_dict())
                     file_copy.since = f.since
                     version_config.files.append(file_copy)
-            
+
             # Add deletes for this specific version
             if version in self.all_deletes:
                 version_config.deletes = list(self.all_deletes[version])
-            
+
             # Mark existing versions as locked
             version_config._is_locked = True
             version_config._is_new = False
-            
+
             self.versions[version] = version_config
-    
+
     def _compare_versions(self, v1: str, v2: str) -> int:
         """Compare two version strings. Returns positive if v1 > v2, negative if v1 < v2, 0 if equal."""
         def parse(v):
@@ -7328,55 +7159,55 @@ class MainWindow(QMainWindow):
                 except ValueError:
                     nums.append(0)
             return nums if nums else [0]
-        
+
         p1, p2 = parse(v1), parse(v2)
         # Pad with zeros
         while len(p1) < len(p2):
             p1.append(0)
         while len(p2) < len(p1):
             p2.append(0)
-        
+
         for a, b in zip(p1, p2):
             if a > b:
                 return 1
             elif a < b:
                 return -1
         return 0
-    
+
     def apply_theme(self, theme_key: str):
         """Apply a theme to the application."""
         if theme_key not in THEMES:
             theme_key = "dark"
-        
+
         self.current_theme = theme_key
         theme = THEMES[theme_key]
-        
+
         # Update global theme for widget access
         set_current_theme(theme_key)
-        
+
         # Generate and apply stylesheet
         stylesheet = generate_stylesheet(theme)
-        
+
         # Add sidebar-specific styling
         stylesheet += f"""
         QWidget#sidebar {{
             background-color: {theme['bg_sidebar']};
         }}
         """
-        
+
         QApplication.instance().setStyleSheet(stylesheet)
-        
+
         # Update theme page if it exists
         if hasattr(self, 'theme_page'):
             self.theme_page.set_theme(theme_key)
-        
+
         # Refresh any visible grids to update their styling
         self.version_selection_page.refresh_grid()
         if hasattr(self.version_editor_page, 'version_config') and self.version_editor_page.version_config:
             self.version_editor_page.refresh_mods_grid()
             self.version_editor_page.refresh_files_grid()
             self.version_editor_page.refresh_editor_panels_style()
-    
+
     def on_nav_changed(self, index: int):
         """Handle navigation list selection change."""
         if index == 0:
@@ -7387,49 +7218,47 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentWidget(self.theme_page)
         elif index == 3:
             self.stack.setCurrentWidget(self.settings_page)
-    
+
     def show_version_selection(self):
         """Show the version selection page."""
-        # Refresh the grid to show updated icons and version data
-        self.version_selection_page.refresh_grid()
         self.stack.setCurrentWidget(self.version_selection_page)
         self.nav_list.setCurrentRow(0)
         self.sidebar.setVisible(True)  # Show sidebar when returning to version selection
-    
+
     def open_version(self, version: str):
         """Open a version for editing."""
         if version in self.versions:
             self.version_editor_page.load_version(self.versions[version])
             self.stack.setCurrentWidget(self.version_editor_page)
             self.sidebar.setVisible(False)  # Hide sidebar when editing version
-    
+
     def on_version_modified(self):
         """Handle version modification."""
-        # Refresh the version selection page grid to show updated icons immediately
-        self.version_selection_page.refresh_grid()
-    
+        # Update status or indicator
+        pass
+
     def on_version_deleted(self, version: str):
         """Handle version deletion - update internal data model."""
         # Remove from versions dict
         if version in self.versions:
             del self.versions[version]
-        
+
         # Mark that we have unsaved deletions
         self._has_unsaved_deletions = True
-        
+
         # Note: We don't delete from GitHub here - that would be done in save_all or a separate operation
         # For now, just remove from local state and let the user save changes
-        
+
         # Update all_mods to remove mods that were first introduced in this version
         self.all_mods = [m for m in self.all_mods if m.since != version]
-        
+
         # Update all_files similarly
         self.all_files = [f for f in self.all_files if f.since != version]
-        
+
         # Remove deletes for this version
         if version in self.all_deletes:
             del self.all_deletes[version]
-        
+
         # If the deleted version was the modpack_version in config.json, update it
         if self.modpack_config and self.modpack_config.modpack_version == version:
             # Find the new latest version from remaining versions
@@ -7452,21 +7281,21 @@ class MainWindow(QMainWindow):
                 self.modpack_config.modpack_version = ""
             # Reload the config page to reflect the change
             self.config_page.load_config(self.modpack_config)
-    
+
     def on_config_changed(self):
         """Handle configuration page changes."""
         # Configuration was saved, mark as needing to be pushed to GitHub
         pass
-    
+
     def on_create_version(self, version_config: VersionConfig):
         """Handle Create Version button - save version to repo using single-file format."""
         if not self.github_api:
             QMessageBox.warning(self, "Not Connected", "Please configure GitHub connection first.")
             return
-        
+
         version = version_config.version
         config_path = self.editor_config.get('github', {}).get('config_path', '')
-        
+
         # Add new mods to all_mods with their since field
         for mod in version_config.mods:
             # Check if mod already exists
@@ -7474,7 +7303,7 @@ class MainWindow(QMainWindow):
             if not existing:
                 mod.since = version
                 self.all_mods.append(mod)
-        
+
         # Add new files to all_files
         for f in version_config.files:
             # Check if file already exists (by URL or name)
@@ -7482,34 +7311,34 @@ class MainWindow(QMainWindow):
             if not existing:
                 f.since = version
                 self.all_files.append(f)
-        
+
         # Add deletes for this version
         if version_config.deletes:
             self.all_deletes[version] = version_config.deletes
-        
+
         # Update modpack config version
         if not self.modpack_config:
             self.modpack_config = ModpackConfig()
         self.modpack_config.modpack_version = version
-        
+
         # Prepare single files
         changes = []
-        
+
         # Prepare config.json
         config_file = f"{config_path}/config.json" if config_path else "config.json"
         config_content = json.dumps(self.modpack_config.to_dict(), indent=2)
         changes.append((config_file, config_content, self.file_shas.get('config.json')))
-        
+
         # Prepare mods.json (all mods)
         mods_file = f"{config_path}/mods.json" if config_path else "mods.json"
         mods_content = json.dumps([m.to_dict() for m in self.all_mods], indent=2)
         changes.append((mods_file, mods_content, self.file_shas.get('mods.json')))
-        
+
         # Prepare files.json (all files)
         files_file = f"{config_path}/files.json" if config_path else "files.json"
         files_content = json.dumps({'files': [f.to_dict() for f in self.all_files]}, indent=2)
         changes.append((files_file, files_content, self.file_shas.get('files.json')))
-        
+
         # Prepare deletes.json (all versions' deletes in new format)
         deletes_file = f"{config_path}/deletes.json" if config_path else "deletes.json"
         deletions_list = []
@@ -7525,20 +7354,20 @@ class MainWindow(QMainWindow):
         }
         deletes_content = json.dumps(deletes_obj, indent=2)
         changes.append((deletes_file, deletes_content, self.file_shas.get('deletes.json')))
-        
+
         # Show progress (without cancel button - disable close)
         progress = QProgressDialog(f"Creating version {version}...", None, 0, len(changes), self)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
         progress.setCancelButton(None)  # Remove cancel button
         progress.setWindowFlags(progress.windowFlags() & ~Qt.WindowType.WindowCloseButtonHint)
-        
+
         errors = []
-        
+
         for i, (path, content, sha) in enumerate(changes):
             progress.setValue(i)
             QApplication.processEvents()
-            
+
             try:
                 result = self.github_api.create_or_update_file(
                     path=path,
@@ -7553,36 +7382,36 @@ class MainWindow(QMainWindow):
                     self.file_shas[filename] = new_sha
             except Exception as e:
                 errors.append(f"{path}: {str(e)}")
-        
+
         progress.setValue(len(changes))
-        
+
         if errors:
             QMessageBox.warning(self, "Errors", "Some files failed to save:\n\n" + "\n".join(errors))
         else:
             # Lock the version so it can't be edited
             version_config.lock()
             version_config.modified = False
-            
+
             # Update versions dict
             self.versions[version] = version_config
-            
+
             # Refresh config page and update version
             self.config_page.update_version(version)
             self.config_page.load_config(self.modpack_config)
-            
+
             QMessageBox.information(self, "Success", f"Version {version} created successfully!\n\nThis version is now locked and cannot be edited.")
-            
+
             # Refresh the editor to show locked state
             self.version_editor_page.load_version(version_config)
-    
+
     def save_version_locally(self, version_config: VersionConfig):
         """Save version config locally in versions folder."""
         try:
             versions_dir = Path("versions")
             versions_dir.mkdir(exist_ok=True)
-            
+
             version_file = versions_dir / f"{version_config.version}.json"
-            
+
             data = {
                 'version': version_config.version,
                 'mods': [m.to_dict() for m in version_config.mods],
@@ -7590,18 +7419,18 @@ class MainWindow(QMainWindow):
                 'deletes': [d.to_dict() for d in version_config.deletes],
                 'locked': version_config.is_locked()
             }
-            
+
             with open(version_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
         except Exception as e:
             print(f"Failed to save version locally: {e}")
-    
+
     def on_theme_changed(self, theme_key: str):
         """Handle theme change from theme page."""
         if theme_key != self.current_theme:
             self.apply_theme(theme_key)
             self.save_editor_config()
-    
+
     def reconfigure_github(self):
         """Open the setup dialog to reconfigure GitHub connection."""
         existing_config = self.editor_config.get('github', {})
@@ -7620,7 +7449,7 @@ class MainWindow(QMainWindow):
                 self._update_connection_status("failed")
             self.settings_page.set_repo_url(new_config.get('repo_url', ''))
             self.fetch_configs()
-    
+
     def refresh_from_github(self):
         """Refresh all data from GitHub."""
         reply = QMessageBox.question(
@@ -7631,34 +7460,34 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.StandardButton.Yes:
             self.fetch_configs()
             self.show_version_selection()
-    
+
     def save_all(self):
         """Save all changes to GitHub using single-file format."""
         if not self.github_api:
             QMessageBox.warning(self, "Not Connected", "Please configure GitHub connection first.")
             return
-        
+
         config_path = self.editor_config.get('github', {}).get('config_path', '')
-        
+
         # Prepare all files
         changes = []
-        
+
         # Save config.json if modified
         if self.modpack_config:
             config_file = f"{config_path}/config.json" if config_path else "config.json"
             config_content = json.dumps(self.modpack_config.to_dict(), indent=2)
             changes.append((config_file, config_content, self.file_shas.get('config.json')))
-        
+
         # Save mods.json (all mods)
         mods_file = f"{config_path}/mods.json" if config_path else "mods.json"
         mods_content = json.dumps([m.to_dict() for m in self.all_mods], indent=2)
         changes.append((mods_file, mods_content, self.file_shas.get('mods.json')))
-        
+
         # Save files.json (all files)
         files_file = f"{config_path}/files.json" if config_path else "files.json"
         files_content = json.dumps({'files': [f.to_dict() for f in self.all_files]}, indent=2)
         changes.append((files_file, files_content, self.file_shas.get('files.json')))
-        
+
         # Save deletes.json (all versions' deletes)
         deletes_file = f"{config_path}/deletes.json" if config_path else "deletes.json"
         deletions_list = []
@@ -7674,25 +7503,25 @@ class MainWindow(QMainWindow):
         }
         deletes_content = json.dumps(deletes_obj, indent=2)
         changes.append((deletes_file, deletes_content, self.file_shas.get('deletes.json')))
-        
+
         if not changes:
             QMessageBox.information(self, "No Changes", "No changes to save.")
             return
-        
+
         # Show progress (without cancel button - disable close)
         progress = QProgressDialog("Saving to GitHub...", None, 0, len(changes), self)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
         progress.setCancelButton(None)  # Remove cancel button
         progress.setWindowFlags(progress.windowFlags() & ~Qt.WindowType.WindowCloseButtonHint)
-        
+
         errors = []
-        
+
         for i, (path, content, sha) in enumerate(changes):
             progress.setValue(i)
             progress.setLabelText(f"Saving {path}...")
             QApplication.processEvents()
-            
+
             try:
                 result = self.github_api.create_or_update_file(
                     path, content, f"Update {path} via Config Editor", sha
@@ -7702,14 +7531,14 @@ class MainWindow(QMainWindow):
                 if new_sha:
                     filename = path.split('/')[-1]
                     self.file_shas[filename] = new_sha
-                    
+
             except Exception as e:
                 errors.append(f"{path}: {str(e)}")
-        
+
         progress.setValue(len(changes))
-        
+
         if errors:
-            QMessageBox.warning(self, "Save Errors", 
+            QMessageBox.warning(self, "Save Errors",
                 f"Some files failed to save:\n\n" + "\n".join(errors))
         else:
             # Mark all versions as not modified
@@ -7718,11 +7547,11 @@ class MainWindow(QMainWindow):
             # Clear the unsaved deletions flag
             self._has_unsaved_deletions = False
             QMessageBox.information(self, "Saved", "All changes saved to GitHub successfully!")
-    
+
     def validate_all(self):
         """Validate all configurations."""
         errors = []
-        
+
         for version, config in self.versions.items():
             # Check mods
             ids_seen = set()
@@ -7733,29 +7562,29 @@ class MainWindow(QMainWindow):
                     errors.append(f"[{version}] Mod {i+1}: Duplicate ID '{mod.id}'")
                 else:
                     ids_seen.add(mod.id)
-                
+
                 if not mod.display_name:
                     errors.append(f"[{version}] Mod {i+1}: Missing display name")
-            
+
             # Check files
             for i, f in enumerate(config.files):
                 if not f.url:
                     errors.append(f"[{version}] File {i+1}: Missing URL")
-            
+
             # Check deletes
             for i, d in enumerate(config.deletes):
                 if not d.path:
                     errors.append(f"[{version}] Delete {i+1}: Missing path")
-        
+
         if errors:
             QMessageBox.warning(self, "Validation Errors",
                 "The following issues were found:\n\n" + "\n".join(errors[:20]))
             if len(errors) > 20:
-                QMessageBox.warning(self, "More Errors", 
+                QMessageBox.warning(self, "More Errors",
                     f"...and {len(errors) - 20} more errors.")
         else:
             QMessageBox.information(self, "Valid", "All configurations are valid!")
-    
+
     def show_about(self):
         """Show about dialog."""
         QMessageBox.about(self, f"About {APP_NAME}",
@@ -7771,25 +7600,107 @@ class MainWindow(QMainWindow):
                 <li>Mod icon fetching</li>
             </ul>
             """)
-    
+
     def show_create_theme_dialog(self):
         """Show the theme creation dialog."""
         dialog = ThemeCreationDialog(self, self.current_theme)
         if dialog.exec():
-            # Refresh theme page
-            if hasattr(self, 'theme_page'):
-                self.theme_page.refresh_themes()
+            # Refresh theme menu
+            self._rebuild_theme_menu()
             # Apply the new theme
             theme_key = dialog.get_theme_key()
             if theme_key in THEMES:
                 self._on_theme_selected(theme_key)
-    
+
     def _on_theme_selected(self, theme_key: str):
-        """Handle theme selection."""
+        """Handle theme selection from menu."""
         if theme_key in THEMES:
             self.current_theme = theme_key
             self.apply_theme(theme_key)
             self.save_editor_config()
+            # Update checkmarks in menu
+            for key, action in self.theme_actions.items():
+                action.setChecked(key == theme_key)
+
+    def _update_delete_theme_menu(self):
+        """Update the delete custom theme submenu."""
+        if not hasattr(self, 'delete_theme_menu'):
+            return
+        self.delete_theme_menu.clear()
+
+        # Add custom themes to delete menu
+        custom_theme_found = False
+        for key, theme in THEMES.items():
+            if not is_builtin_theme(key):
+                custom_theme_found = True
+                action = QAction(theme['name'], self)
+                action.triggered.connect(lambda checked, k=key: self._delete_custom_theme(k))
+                self.delete_theme_menu.addAction(action)
+
+        if not custom_theme_found:
+            action = QAction("(No custom themes)", self)
+            action.setEnabled(False)
+            self.delete_theme_menu.addAction(action)
+
+    def _delete_custom_theme(self, theme_key: str):
+        """Delete a custom theme."""
+        theme_name = THEMES.get(theme_key, {}).get('name', theme_key)
+        reply = QMessageBox.question(
+            self, "Delete Theme",
+            f"Are you sure you want to delete the theme '{theme_name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            # If current theme is being deleted, switch to default
+            if self.current_theme == theme_key:
+                self.current_theme = "light"
+                self.apply_theme("light")
+                self.save_editor_config()
+
+            delete_custom_theme(theme_key)
+            self._rebuild_theme_menu()
+
+    def _rebuild_theme_menu(self):
+        """Rebuild the theme menu after adding/deleting themes."""
+        # Find the Theme menu in the menubar
+        menubar = self.menuBar()
+        theme_menu = None
+        for action in menubar.actions():
+            if action.text() == "Theme":
+                theme_menu = action.menu()
+                break
+
+        if not theme_menu:
+            return
+
+        # Clear and rebuild
+        theme_menu.clear()
+
+        # Create theme action
+        create_theme_action = QAction("Create Custom Theme...", self)
+        create_theme_action.triggered.connect(self.show_create_theme_dialog)
+        theme_menu.addAction(create_theme_action)
+
+        # Delete custom theme submenu
+        self.delete_theme_menu = theme_menu.addMenu("Delete Custom Theme")
+        self._update_delete_theme_menu()
+
+        theme_menu.addSeparator()
+
+        # Theme selection actions
+        self.theme_actions = {}
+        for key, theme in THEMES.items():
+            action = QAction(theme['name'], self)
+            action.setCheckable(True)
+            action.setData(key)
+            action.triggered.connect(lambda checked, k=key: self._on_theme_selected(k))
+            theme_menu.addAction(action)
+            self.theme_actions[key] = action
+
+        # Check current theme
+        if self.current_theme in self.theme_actions:
+            self.theme_actions[self.current_theme].setChecked(True)
     
     def _shutdown_threads(self):
         """Gracefully stop all background threads before exit."""
