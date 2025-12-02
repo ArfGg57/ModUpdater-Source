@@ -84,7 +84,7 @@ CURSEFORGE_MAX_PAGES = 200  # CurseForge API limit
 MC_VERSION_OPTIONS = [
     "",  # Empty for no filter
     # 1.21.x
-    "1.21.4", "1.21.3", "1.21.2", "1.21.1", "1.21",
+    "1.21.10", "1.21.9", "1.21.8", "1.21.7", "1.21.6", "1.21.5", "1.21.4", "1.21.3", "1.21.2", "1.21.1", "1.21",
     # 1.20.x
     "1.20.6", "1.20.5", "1.20.4", "1.20.3", "1.20.2", "1.20.1", "1.20",
     # 1.19.x
@@ -163,7 +163,7 @@ ICON_LOAD_DEBOUNCE_MS = 100  # Debounce delay for scroll events (ms)
 
 # Preloading settings
 STARTUP_PRELOAD_PAGES = 1  # Number of pages to preload for each source on startup
-NEXT_PAGE_PRELOAD_ICONS = 20  # Number of icons to preload from the next page
+NEXT_PAGE_PRELOAD_ICONS = 8  # Number of icons to preload from the next page
 
 # CurseForge API configuration
 # Using the curse.tools proxy for CurseForge API (doesn't require API key)
@@ -2709,7 +2709,7 @@ class ModBrowserDialog(QDialog):
         search_layout.setContentsMargins(0, 0, 0, 0)
 
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("🔍 Search mods... (leave empty for most popular)")
+        self.search_edit.setPlaceholderText("Search mods...")
         self.search_edit.returnPressed.connect(self.search_mods)
         self.search_edit.textChanged.connect(self._on_search_text_changed)
         search_layout.addWidget(self.search_edit, 1)
@@ -2784,7 +2784,7 @@ class ModBrowserDialog(QDialog):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(4)
 
-        self.results_header = QLabel("📋 Popular Mods (sorted by downloads):")
+        self.results_header = QLabel("Mods:")
         self.results_header.setStyleSheet("font-weight: bold; margin:0; padding:0;")
         left_layout.addWidget(self.results_header)
 
@@ -3575,7 +3575,7 @@ class ModBrowserDialog(QDialog):
         self.selected_version = None
         self.add_btn.setEnabled(False)
         self.search_status.setText("Loading mods...")
-        self.results_header.setText("📋 Popular Mods (sorted by downloads):")
+        self.results_header.setText("Mods:")
 
         self._update_pagination_controls()
 
@@ -3654,7 +3654,7 @@ class ModBrowserDialog(QDialog):
             self.results_header.setText(f"🔍 Search Results for '{query}':")
         else:
             self.search_status.setText("Loading mods...")
-            self.results_header.setText("📋 Popular Mods (sorted by downloads):")
+            self.results_header.setText("Popular Mods:")
 
         self._update_pagination_controls()
 
