@@ -586,7 +586,7 @@ QLineEdit, QSpinBox, QComboBox {{
     background-color: {theme['bg_secondary']};
     border: 2px solid {theme['bg_tertiary']};
     border-radius: 6px;
-    padding: 8px 12px;
+    padding: 6px 10px;
     color: {theme['text_primary']};
 }}
 
@@ -659,9 +659,9 @@ QGroupBox {{
     background-color: {theme['bg_secondary']};
     border: 1px solid {theme['bg_tertiary']};
     border-radius: 8px;
-    margin-top: 12px;
-    padding: 16px;
-    padding-top: 24px;
+    margin-top: 8px;
+    padding: 8px;
+    padding-top: 20px;
     font-weight: 600;
 }}
 
