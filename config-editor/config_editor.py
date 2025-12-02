@@ -189,11 +189,14 @@ def scale(value: int) -> int:
     return value
 
 
-def compactify_layout(widget):
-    """Recursively reduce margins and spacings on a widget's layouts.
+def compactify_layout(widget: 'QWidget'):
+    """Reduce margins and spacings on a widget and all its child layouts.
     
     This applies compact scaling to all layout margins and spacings
-    for the widget and its children. Only effective when COMPACT_MODE is True.
+    for the widget and its descendants. Only effective when COMPACT_MODE is True.
+    
+    Note: Uses findChildren to get all descendants at once, avoiding manual recursion.
+    Each layout is processed exactly once.
     """
     if not COMPACT_MODE:
         return
@@ -215,7 +218,8 @@ def compactify_layout(widget):
             if current_spacing > 0:
                 layout.setSpacing(scale(current_spacing))
     
-    # Recursively process child widgets
+    # Process all descendant widgets' layouts in one pass
+    # findChildren returns all descendants, so we don't need recursion
     for child in widget.findChildren(QWidget):
         child_layout = child.layout()
         if child_layout:
@@ -2892,8 +2896,11 @@ class ModBrowserDialog(QDialog):
         self.version_filter.setEditable(False)  # Use dropdown only, not editable text
         self.version_filter.setMinimumWidth(140)  # Wider minimum for readability
         self.version_filter.setMaximumWidth(280)  # Allow more expansion
-        # Ensure popup width adjusts to content
-        self.version_filter.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        # Ensure popup width adjusts to content (PyQt5/6 compatible)
+        if PYQT_VERSION == 6:
+            self.version_filter.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        else:
+            self.version_filter.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.version_filter.view().setMinimumWidth(180)  # Minimum popup width
         for version in MC_VERSION_OPTIONS:
             self.version_filter.addItem(version if version else "Any")
@@ -2909,7 +2916,10 @@ class ModBrowserDialog(QDialog):
         self.sort_combo = QComboBox()
         self.sort_combo.setMinimumWidth(130)
         self.sort_combo.setMaximumWidth(200)
-        self.sort_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        if PYQT_VERSION == 6:
+            self.sort_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        else:
+            self.sort_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.sort_combo.view().setMinimumWidth(150)
         self._update_sort_options()
         self.sort_combo.currentIndexChanged.connect(self._on_filter_changed)
@@ -2923,7 +2933,10 @@ class ModBrowserDialog(QDialog):
         self.loader_combo = QComboBox()
         self.loader_combo.setMinimumWidth(100)
         self.loader_combo.setMaximumWidth(180)
-        self.loader_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        if PYQT_VERSION == 6:
+            self.loader_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        else:
+            self.loader_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.loader_combo.view().setMinimumWidth(120)
         for name in MOD_LOADER_OPTIONS.keys():
             self.loader_combo.addItem(name)
