@@ -172,6 +172,65 @@ CF_PROXY_BASE_URL = "https://api.curse.tools/v1/cf"
 CF_API_KEY = "$2a$10$bL4bIL5pUWqfcO7KQtnMReakwtfHbNKh6v1uTpKlzhwoueEJQnPnm"
 
 
+# === Compact Mode Settings ===
+# Set to True to reduce padding/margins/spacings globally for a denser UI
+COMPACT_MODE = True
+COMPACT_SCALE = 0.6  # Scale factor for padding values in compact mode
+
+
+def scale(value: int) -> int:
+    """Scale a size/padding value based on COMPACT_MODE.
+    
+    When COMPACT_MODE is True, returns the value scaled by COMPACT_SCALE.
+    Otherwise returns the original value.
+    """
+    if COMPACT_MODE:
+        return max(1, int(value * COMPACT_SCALE))
+    return value
+
+
+def compactify_layout(widget):
+    """Recursively reduce margins and spacings on a widget's layouts.
+    
+    This applies compact scaling to all layout margins and spacings
+    for the widget and its children. Only effective when COMPACT_MODE is True.
+    """
+    if not COMPACT_MODE:
+        return
+    
+    # Process the widget's own layout
+    layout = widget.layout()
+    if layout:
+        # Scale margins
+        margins = layout.contentsMargins()
+        layout.setContentsMargins(
+            scale(margins.left()),
+            scale(margins.top()),
+            scale(margins.right()),
+            scale(margins.bottom())
+        )
+        # Scale spacing
+        if hasattr(layout, 'spacing'):
+            current_spacing = layout.spacing()
+            if current_spacing > 0:
+                layout.setSpacing(scale(current_spacing))
+    
+    # Recursively process child widgets
+    for child in widget.findChildren(QWidget):
+        child_layout = child.layout()
+        if child_layout:
+            margins = child_layout.contentsMargins()
+            child_layout.setContentsMargins(
+                scale(margins.left()),
+                scale(margins.top()),
+                scale(margins.right()),
+                scale(margins.bottom())
+            )
+            if hasattr(child_layout, 'spacing'):
+                current_spacing = child_layout.spacing()
+                if current_spacing > 0:
+                    child_layout.setSpacing(scale(current_spacing))
+
 
 # === Custom Exceptions ===
 class GitHubAPIError(Exception):
@@ -498,7 +557,75 @@ def is_builtin_theme(key: str) -> bool:
 
 
 def generate_stylesheet(theme: dict) -> str:
-    """Generate a stylesheet from theme colors."""
+    """Generate a stylesheet from theme colors.
+    
+    When COMPACT_MODE is enabled, padding, margins, and border radii
+    are scaled down for a denser UI appearance.
+    """
+    # Compute scaled values for compact mode
+    list_pad_v = scale(12)
+    list_pad_h = scale(16)
+    list_margin_v = scale(2)
+    list_margin_h = scale(4)
+    list_radius = scale(6)
+    list_widget_radius = scale(8)
+    list_widget_pad = scale(5)
+    
+    btn_pad_v = scale(10)
+    btn_pad_h = scale(20)
+    btn_radius = scale(6)
+    
+    input_pad_v = scale(6)
+    input_pad_h = scale(10)
+    input_radius = scale(6)
+    
+    combo_item_pad_v = scale(4)
+    combo_item_pad_h = scale(8)
+    combo_view_pad = scale(2)
+    combo_view_radius = scale(6)
+    
+    groupbox_radius = scale(8)
+    groupbox_margin_top = scale(8)
+    groupbox_pad = scale(8)
+    groupbox_pad_top = scale(20)
+    groupbox_title_left = scale(16)
+    groupbox_title_pad_h = scale(8)
+    
+    header_pad_v = scale(16)
+    
+    textedit_radius = scale(8)
+    textedit_pad = scale(10)
+    
+    scrollbar_width = scale(12)
+    scrollbar_radius = scale(6)
+    scrollbar_handle_radius = scale(4)
+    
+    tab_pad_v = scale(10)
+    tab_pad_h = scale(20)
+    tab_margin = scale(4)
+    tab_radius = scale(6)
+    tab_pane_pad = scale(8)
+    tab_pane_radius = scale(8)
+    
+    table_radius = scale(8)
+    table_item_pad = scale(8)
+    table_header_pad = scale(10)
+    
+    checkbox_size = scale(20)
+    checkbox_radius = scale(4)
+    checkbox_spacing = scale(8)
+    
+    tooltip_radius = scale(6)
+    tooltip_pad = scale(8)
+    
+    progress_radius = scale(4)
+    
+    menu_radius = scale(8)
+    menu_pad = scale(4)
+    menu_item_pad_v = scale(8)
+    menu_item_pad_h = scale(24)
+    menu_item_radius = scale(4)
+    
     return f"""
 QMainWindow {{
     background-color: {theme['bg_primary']};
@@ -514,17 +641,17 @@ QWidget {{
 QListWidget {{
     background-color: {theme['bg_secondary']};
     border: none;
-    border-radius: 8px;
-    padding: 5px;
+    border-radius: {list_widget_radius}px;
+    padding: {list_widget_pad}px;
     outline: none;
     alternate-background-color: {theme['bg_primary']};
 }}
 
 QListWidget::item {{
     background-color: {theme['bg_secondary']};
-    border-radius: 6px;
-    padding: 12px 16px;
-    margin: 2px 4px;
+    border-radius: {list_radius}px;
+    padding: {list_pad_v}px {list_pad_h}px;
+    margin: {list_margin_v}px {list_margin_h}px;
     color: {theme['text_primary']};
 }}
 
@@ -549,8 +676,8 @@ QListWidget::item:hover:!selected {{
 QPushButton {{
     background-color: {theme['bg_tertiary']};
     border: none;
-    border-radius: 6px;
-    padding: 10px 20px;
+    border-radius: {btn_radius}px;
+    padding: {btn_pad_v}px {btn_pad_h}px;
     color: {theme['text_primary']};
     font-weight: 600;
 }}
@@ -585,8 +712,8 @@ QPushButton#successButton {{
 QLineEdit, QSpinBox, QComboBox {{
     background-color: {theme['bg_secondary']};
     border: 2px solid {theme['bg_tertiary']};
-    border-radius: 6px;
-    padding: 6px 10px;
+    border-radius: {input_radius}px;
+    padding: {input_pad_v}px {input_pad_h}px;
     color: {theme['text_primary']};
 }}
 
@@ -597,16 +724,16 @@ QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{
 QComboBox QAbstractItemView {{
     background-color: {theme['bg_secondary']};
     border: 1px solid {theme['border']};
-    border-radius: 6px;
+    border-radius: {combo_view_radius}px;
     selection-background-color: {theme['accent']};
     selection-color: {theme['bg_primary']};
-    padding: 2px;
+    padding: {combo_view_pad}px;
     margin: 0px;
     max-height: 300px;
 }}
 
 QComboBox QAbstractItemView::item {{
-    padding: 4px 8px;
+    padding: {combo_item_pad_v}px {combo_item_pad_h}px;
     min-height: 20px;
     margin: 0px;
 }}
@@ -644,8 +771,8 @@ QLineEdit:disabled {{
 QTextEdit {{
     background-color: {theme['bg_secondary']};
     border: 2px solid {theme['bg_tertiary']};
-    border-radius: 8px;
-    padding: 10px;
+    border-radius: {textedit_radius}px;
+    padding: {textedit_pad}px;
     color: {theme['text_primary']};
     font-family: "Consolas", "Monaco", monospace;
     font-size: 12px;
@@ -658,17 +785,17 @@ QTextEdit:focus {{
 QGroupBox {{
     background-color: {theme['bg_secondary']};
     border: 1px solid {theme['bg_tertiary']};
-    border-radius: 8px;
-    margin-top: 8px;
-    padding: 8px;
-    padding-top: 20px;
+    border-radius: {groupbox_radius}px;
+    margin-top: {groupbox_margin_top}px;
+    padding: {groupbox_pad}px;
+    padding-top: {groupbox_pad_top}px;
     font-weight: 600;
 }}
 
 QGroupBox::title {{
     subcontrol-origin: margin;
-    left: 16px;
-    padding: 0 8px;
+    left: {groupbox_title_left}px;
+    padding: 0 {groupbox_title_pad_h}px;
     color: {theme['accent']};
 }}
 
@@ -681,7 +808,7 @@ QLabel#headerLabel {{
     font-size: 20px;
     font-weight: 700;
     color: {theme['text_primary']};
-    padding: 16px 0;
+    padding: {header_pad_v}px 0;
 }}
 
 QScrollArea {{
@@ -691,13 +818,13 @@ QScrollArea {{
 
 QScrollBar:vertical {{
     background-color: {theme['bg_secondary']};
-    width: 12px;
-    border-radius: 6px;
+    width: {scrollbar_width}px;
+    border-radius: {scrollbar_radius}px;
 }}
 
 QScrollBar::handle:vertical {{
     background-color: {theme['bg_tertiary']};
-    border-radius: 4px;
+    border-radius: {scrollbar_handle_radius}px;
     min-height: 30px;
 }}
 
@@ -708,17 +835,17 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
 QTabWidget::pane {{
     background-color: {theme['bg_secondary']};
     border: 1px solid {theme['bg_tertiary']};
-    border-radius: 8px;
-    padding: 8px;
+    border-radius: {tab_pane_radius}px;
+    padding: {tab_pane_pad}px;
 }}
 
 QTabBar::tab {{
     background-color: {theme['bg_primary']};
     border: none;
-    padding: 10px 20px;
-    margin-right: 4px;
-    border-top-left-radius: 6px;
-    border-top-right-radius: 6px;
+    padding: {tab_pad_v}px {tab_pad_h}px;
+    margin-right: {tab_margin}px;
+    border-top-left-radius: {tab_radius}px;
+    border-top-right-radius: {tab_radius}px;
 }}
 
 QTabBar::tab:selected {{
@@ -733,12 +860,12 @@ QTabBar::tab:hover:!selected {{
 QTableWidget {{
     background-color: {theme['bg_secondary']};
     border: 1px solid {theme['bg_tertiary']};
-    border-radius: 8px;
+    border-radius: {table_radius}px;
     gridline-color: {theme['bg_tertiary']};
 }}
 
 QTableWidget::item {{
-    padding: 8px;
+    padding: {table_item_pad}px;
 }}
 
 QTableWidget::item:selected {{
@@ -748,16 +875,16 @@ QTableWidget::item:selected {{
 QHeaderView::section {{
     background-color: {theme['bg_primary']};
     color: {theme['accent']};
-    padding: 10px;
+    padding: {table_header_pad}px;
     border: none;
     border-bottom: 2px solid {theme['bg_tertiary']};
     font-weight: 600;
 }}
 
 QCheckBox::indicator {{
-    width: 20px;
-    height: 20px;
-    border-radius: 4px;
+    width: {checkbox_size}px;
+    height: {checkbox_size}px;
+    border-radius: {checkbox_radius}px;
     border: 2px solid {theme['bg_tertiary']};
     background-color: {theme['bg_secondary']};
 }}
@@ -769,39 +896,39 @@ QCheckBox::indicator:checked {{
 
 QCheckBox {{
     background-color: transparent;
-    spacing: 8px;
+    spacing: {checkbox_spacing}px;
 }}
 
 QToolTip {{
     background-color: {theme['bg_secondary']};
     color: {theme['text_primary']};
     border: 1px solid {theme['bg_tertiary']};
-    border-radius: 6px;
-    padding: 8px;
+    border-radius: {tooltip_radius}px;
+    padding: {tooltip_pad}px;
 }}
 
 QProgressBar {{
     background-color: {theme['bg_secondary']};
     border: none;
-    border-radius: 4px;
+    border-radius: {progress_radius}px;
     text-align: center;
 }}
 
 QProgressBar::chunk {{
     background-color: {theme['accent']};
-    border-radius: 4px;
+    border-radius: {progress_radius}px;
 }}
 
 QMenu {{
     background-color: {theme['bg_secondary']};
     border: 1px solid {theme['bg_tertiary']};
-    border-radius: 8px;
-    padding: 4px;
+    border-radius: {menu_radius}px;
+    padding: {menu_pad}px;
 }}
 
 QMenu::item {{
-    padding: 8px 24px;
-    border-radius: 4px;
+    padding: {menu_item_pad_v}px {menu_item_pad_h}px;
+    border-radius: {menu_item_radius}px;
 }}
 
 QMenu::item:selected {{
@@ -1699,6 +1826,9 @@ class ThemeCreationDialog(QDialog):
         create_btn.clicked.connect(self._create_theme)
         btn_layout.addWidget(create_btn)
         layout.addLayout(btn_layout)
+        
+        # Apply compact mode layout adjustments
+        compactify_layout(self)
     
     def _pick_color(self, key: str):
         """Open a color picker dialog for the specified color key."""
@@ -1897,6 +2027,9 @@ class SetupDialog(QDialog):
         save_btn.clicked.connect(self.validate_and_accept)
         button_layout.addWidget(save_btn)
         layout.addLayout(button_layout)
+        
+        # Apply compact mode layout adjustments
+        compactify_layout(self)
     
     def _on_theme_preview(self):
         """Preview theme change in the setup dialog."""
@@ -2078,6 +2211,9 @@ class AddVersionDialog(QDialog):
         confirm_btn.clicked.connect(self.validate_and_accept)
         button_layout.addWidget(confirm_btn)
         layout.addLayout(button_layout)
+        
+        # Apply compact mode layout adjustments
+        compactify_layout(self)
     
     def validate_and_accept(self):
         version = self.version_edit.text().strip()
@@ -2177,6 +2313,9 @@ class AddModDialog(QDialog):
         confirm_btn.clicked.connect(self.validate_and_accept)
         button_layout.addWidget(confirm_btn)
         layout.addLayout(button_layout)
+        
+        # Apply compact mode layout adjustments
+        compactify_layout(self)
     
     def select_icon(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -2258,6 +2397,9 @@ class ConfirmDeleteDialog(QDialog):
         delete_btn.clicked.connect(self.accept)
         button_layout.addWidget(delete_btn)
         layout.addLayout(button_layout)
+        
+        # Apply compact mode layout adjustments
+        compactify_layout(self)
 
 
 class ModSearchThread(QThread):
@@ -2748,8 +2890,11 @@ class ModBrowserDialog(QDialog):
 
         self.version_filter = QComboBox()
         self.version_filter.setEditable(False)  # Use dropdown only, not editable text
-        self.version_filter.setMinimumWidth(100)  # Use minimum width instead of fixed
-        self.version_filter.setMaximumWidth(120)  # Allow some expansion for dropdown button
+        self.version_filter.setMinimumWidth(140)  # Wider minimum for readability
+        self.version_filter.setMaximumWidth(280)  # Allow more expansion
+        # Ensure popup width adjusts to content
+        self.version_filter.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.version_filter.view().setMinimumWidth(180)  # Minimum popup width
         for version in MC_VERSION_OPTIONS:
             self.version_filter.addItem(version if version else "Any")
         self.version_filter.setCurrentIndex(0)
@@ -2762,7 +2907,10 @@ class ModBrowserDialog(QDialog):
         filter_layout.addWidget(sort_lbl)
 
         self.sort_combo = QComboBox()
-        self.sort_combo.setFixedWidth(130)
+        self.sort_combo.setMinimumWidth(130)
+        self.sort_combo.setMaximumWidth(200)
+        self.sort_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.sort_combo.view().setMinimumWidth(150)
         self._update_sort_options()
         self.sort_combo.currentIndexChanged.connect(self._on_filter_changed)
         filter_layout.addWidget(self.sort_combo)
@@ -2773,7 +2921,10 @@ class ModBrowserDialog(QDialog):
         filter_layout.addWidget(loader_lbl)
 
         self.loader_combo = QComboBox()
-        self.loader_combo.setFixedWidth(100)
+        self.loader_combo.setMinimumWidth(100)
+        self.loader_combo.setMaximumWidth(180)
+        self.loader_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.loader_combo.view().setMinimumWidth(120)
         for name in MOD_LOADER_OPTIONS.keys():
             self.loader_combo.addItem(name)
         self.loader_combo.setCurrentIndex(0)  # Default to "Both"
@@ -3011,6 +3162,9 @@ class ModBrowserDialog(QDialog):
         self._search_debounce_timer.setSingleShot(True)
         self._search_debounce_timer.timeout.connect(self.search_mods)
         self._search_debounce_timer.setInterval(400)  # 400ms debounce for typing
+        
+        # Apply compact mode layout adjustments
+        compactify_layout(self)
 
     def _on_search_text_changed(self, text: str):
         """Handle search text changes - debounce and auto-search while typing."""
@@ -5076,6 +5230,9 @@ class VersionEditorPage(QWidget):
         # Refresh panel styles to ensure they match the current theme
         # This is important because panels are created before theme is fully applied
         QTimer.singleShot(0, self.refresh_editor_panels_style)
+        
+        # Apply compact mode layout adjustments
+        compactify_layout(self)
 
     def setup_mods_tab(self):
         layout = QHBoxLayout(self.mods_tab)
@@ -6139,6 +6296,9 @@ class VersionSelectionPage(QWidget):
         self.scroll.setWidget(self.grid_widget)
 
         layout.addWidget(self.scroll)
+        
+        # Apply compact mode layout adjustments
+        compactify_layout(self)
 
     def set_versions(self, versions: Dict[str, VersionConfig]):
         self.versions = versions
@@ -6380,6 +6540,9 @@ class ConfigurationPage(QWidget):
         btn_layout.addWidget(self.save_btn)
         
         layout.addLayout(btn_layout)
+        
+        # Apply compact mode layout adjustments
+        compactify_layout(self)
     
     def set_repository_info(self, repo_url: str, config_path: str, branch: str):
         """Set repository information for automatic URL generation."""
@@ -6551,6 +6714,9 @@ class ThemePage(QWidget):
         
         scroll.setWidget(scroll_widget)
         layout.addWidget(scroll)
+        
+        # Apply compact mode layout adjustments
+        compactify_layout(self)
     
     def _populate_theme_combo(self):
         """Populate the theme combo box with all themes."""
@@ -6727,6 +6893,9 @@ class SettingsPage(QWidget):
         
         scroll.setWidget(scroll_widget)
         layout.addWidget(scroll)
+        
+        # Apply compact mode layout adjustments
+        compactify_layout(self)
     
     def set_repo_url(self, url: str):
         self.repo_url_label.setText(url if url else "Not configured")
@@ -6850,6 +7019,9 @@ class MainWindow(QMainWindow):
         
         # Menu bar
         self.setup_menu()
+        
+        # Apply compact mode layout adjustments
+        compactify_layout(self)
     
     def setup_menu(self):
         menubar = self.menuBar()
